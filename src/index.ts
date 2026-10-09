@@ -3,6 +3,7 @@
 import { createServer } from "./server/server.js";
 import { startStdio } from "./server/stdio.js";
 import { runBenchmark, defaultConfig } from "./benchmark/runner.js";
+import { formatCTA, buildTelemetry } from "./benchmark/cta.js";
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -46,6 +47,7 @@ async function runBenchmarkMode(): Promise<void> {
 
   // Output score to stdout
   process.stdout.write(result.markdownScore + "\n");
+  process.stdout.write(formatCTA(result.score) + "\n\n");
 
   // Output patches if any
   if (result.patches.length > 0) {
@@ -57,10 +59,12 @@ async function runBenchmarkMode(): Promise<void> {
   await mkdir(reportDir, { recursive: true });
 
   const jsonPath = `${reportDir}/benchmark-report.json`;
+  const telemetry = buildTelemetry(result.score, result.patches);
   await writeFile(
     jsonPath,
     JSON.stringify(
       {
+        ...telemetry,
         score: result.score,
         patches: result.patches.map((p) => ({
           category: p.category,

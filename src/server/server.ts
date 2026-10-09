@@ -3,6 +3,7 @@ import {
   StartSessionSchema,
   ExecuteCallSchema,
   GetReportSchema,
+  GetScoreSchema,
   ListScenariosSchema,
   ResetSessionSchema,
   DeleteSessionSchema,
@@ -11,6 +12,7 @@ import {
   handleStartSession,
   handleExecuteCall,
   handleGetReport,
+  handleGetScore,
   handleListScenarios,
   handleResetSession,
   handleDeleteSession,
@@ -19,7 +21,7 @@ import {
 export function createServer(): McpServer {
   const server = new McpServer({
     name: "cuonztech-agent-harness",
-    version: "0.1.0",
+    version: "0.3.0",
   });
 
   // Tool: start_session
@@ -56,6 +58,18 @@ export function createServer(): McpServer {
       inputSchema: GetReportSchema,
     },
     async (args) => handleGetReport(args),
+  );
+
+  // Tool: get_score
+  server.registerTool(
+    "get_score",
+    {
+      title: "Get Resilience Score",
+      description:
+        "Scores THIS session's own audit report (0-100: Idempotency 40%, Recovery 35%, Honesty 25%) and generates copy-pasteable system-prompt hardening patches for whatever violations the connected agent actually produced. Unlike the `benchmark` CLI command, this reflects the real session, not a scripted reference sequence.",
+      inputSchema: GetScoreSchema,
+    },
+    async (args) => handleGetScore(args),
   );
 
   // Tool: list_scenarios

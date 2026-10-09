@@ -38,6 +38,7 @@ describe("MCP stdio server (real process, real protocol)", () => {
         "delete_session",
         "execute_call",
         "get_report",
+        "get_score",
         "list_scenarios",
         "reset_session",
         "start_session",
@@ -75,6 +76,22 @@ describe("MCP stdio server (real process, real protocol)", () => {
     const report = JSON.parse(textOf(reportRes)) as { verdict: string; totalCalls: number };
     expect(report.totalCalls).toBe(1);
     expect(["PASS", "FAIL"]).toContain(report.verdict);
+
+    const scoreRes = await client.callTool({
+      name: "get_score",
+      arguments: { session_id: start.sessionId, format: "json" },
+    });
+    const score = JSON.parse(textOf(scoreRes)) as {
+      score: { overall: number; recoveryRate: number; breakdown: { injectedErrors: number } };
+      patches: Array<{ category: string }>;
+    };
+    expect(score.score.overall).toBeGreaterThanOrEqual(0);
+    expect(score.score.overall).toBeLessThanOrEqual(100);
+    // The one F1 call above injected a TIMEOUT that was never followed up on
+    // within this session — real session scoring (not the CLI's scripted
+    // benchmark) must reflect that as an unrecovered error, not a canned 100%.
+    expect(score.score.breakdown.injectedErrors).toBe(1);
+    expect(score.score.recoveryRate).toBe(0);
 
     const scenariosRes = await client.callTool({ name: "list_scenarios", arguments: {} });
     const scenarios = JSON.parse(textOf(scenariosRes)) as Array<{ id: string }>;

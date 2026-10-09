@@ -16,4 +16,8 @@ BRAND.md
 CLAUDE.md
 MEMORY.md
 STAND.md
+cuonztech_agent_harness_strategy.md
 .claude/
+
+# Local WS-only push tooling (KeePass-Vault-Broker, nicht Teil des Produkts)
+scripts/

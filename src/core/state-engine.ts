@@ -8,6 +8,7 @@ export {
   deleteSession,
   listSessions,
   isReadTool,
+  isWriteTool,
   markGhostCommitted,
   type KeyState,
   type KeyTracking,

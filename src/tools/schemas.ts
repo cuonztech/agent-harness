@@ -42,6 +42,15 @@ export const GetReportSchema = {
     .describe("Output format: markdown (default) or json."),
 };
 
+export const GetScoreSchema = {
+  session_id: z.string().uuid().describe("Session ID to score."),
+  format: z
+    .enum(["json", "markdown"])
+    .optional()
+    .default("markdown")
+    .describe("Output format: markdown (default) or json."),
+};
+
 export const ListScenariosSchema = {};
 
 export const ResetSessionSchema = {

@@ -6,10 +6,14 @@ import {
   resetSession as resetSessionState,
   deleteSession as deleteSessionState,
   listSessions,
+  isWriteTool,
+  markGhostCommitted,
   type CallRecord,
   type SessionState,
 } from "../core/state-engine.js";
 import { generateReport, formatMarkdown } from "../core/report-generator.js";
+import { computeScore, formatScoreReport } from "../benchmark/score.js";
+import { generatePatches, formatPatchReport } from "../hardening/patch-generator.js";
 import { getScenarioById, ALL_SCENARIOS } from "../scenarios/f1-f5.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -189,6 +193,11 @@ export function handleExecuteCall(args: {
   let injectedError: string | null = null;
   let responseBody: Record<string, unknown> | string;
   let statusCode = 200;
+  // Ghost-write: the simulated upstream actually executed the write, but the
+  // agent only sees a timeout — it must read-before-retry to find out. Mirrors
+  // the same classification used by the (unwired) proxy's decideChaosAction,
+  // so F1 produces a real GHOST_CAUGHT/GHOST_MISSED instead of a generic retry.
+  let isGhostWrite = false;
 
   if (session.scenarioId) {
     const scenario = getScenarioById(session.scenarioId);
@@ -198,6 +207,7 @@ export function handleExecuteCall(args: {
       injectedError = resp.type === "success" ? null : `[${resp.type.toUpperCase()}]`;
       statusCode = resp.statusCode ?? 500;
       responseBody = resp.body;
+      isGhostWrite = resp.type === "timeout" && isWriteTool(args.tool_name);
     } else {
       responseBody = {
         result: "ok",
@@ -232,10 +242,14 @@ export function handleExecuteCall(args: {
     args: mergedArgs,
     injectedError,
     response,
-    upstreamExecuted: false,
+    upstreamExecuted: isGhostWrite,
     timestamp: Date.now(),
   };
   addRecord(args.session_id, record);
+
+  if (isGhostWrite && args.idempotency_key) {
+    markGhostCommitted(args.session_id, args.idempotency_key);
+  }
 
   return {
     content: [
@@ -286,6 +300,45 @@ export async function handleGetReport(args: {
   }
 
   const output = format === "json" ? JSON.stringify(report, null, 2) : formatMarkdown(report);
+
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: output,
+      },
+    ],
+  };
+}
+
+// Resilience Score + Hardening Patches for THIS session's own audit report —
+// unlike `benchmark` mode (which scores a hardcoded scripted call sequence
+// against itself), this scores whatever the connected agent actually did.
+export function handleGetScore(args: { session_id: string; format?: "json" | "markdown" }) {
+  const session = getSession(args.session_id);
+  if (!session) {
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `Error: Session "${args.session_id}" not found.`,
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  const report = generateReport(session);
+  const score = computeScore([report]);
+  const patches = generatePatches([report], score);
+  const format = args.format ?? "markdown";
+
+  const output =
+    format === "json"
+      ? JSON.stringify({ score, patches }, null, 2)
+      : [formatScoreReport(score), patches.length > 0 ? formatPatchReport(patches) : null]
+          .filter(Boolean)
+          .join("\n\n");
 
   return {
     content: [

@@ -3,6 +3,7 @@ import {
   handleStartSession,
   handleExecuteCall,
   handleGetReport,
+  handleGetScore,
   handleListScenarios,
   handleResetSession,
   handleDeleteSession,
@@ -228,6 +229,79 @@ describe("Tool Handlers", () => {
       const report = await handleGetReport({ session_id: sid, format: "json" });
       const body = JSON.parse((report.content[0] as { text: string }).text);
       expect(body.verdict).toBe("PASS");
+    });
+  });
+
+  describe("handleGetScore", () => {
+    it("returns error for unknown session", () => {
+      const result = handleGetScore({ session_id: "00000000-0000-0000-0000-000000000000" });
+      expect(result.isError).toBe(true);
+    });
+
+    it("scores a clean session at 100 with no patches", () => {
+      const session = handleStartSession({});
+      const sid = JSON.parse((session.content[0] as { text: string }).text).sessionId;
+
+      handleExecuteCall({
+        session_id: sid,
+        tool_name: "write_payment",
+        arguments: { amount: 100 },
+        idempotency_key: "score-clean-001",
+      });
+
+      const result = handleGetScore({ session_id: sid, format: "json" });
+      const body = JSON.parse((result.content[0] as { text: string }).text);
+      expect(body.score.overall).toBe(100);
+      expect(body.patches).toHaveLength(0);
+    });
+
+    it("scores THIS session's real violations, not a canned benchmark script", () => {
+      const session = handleStartSession({ scenario_id: "F1" });
+      const sid = JSON.parse((session.content[0] as { text: string }).text).sessionId;
+
+      // Blind retry: write -> timeout (ghost-write) -> immediate retry, no read
+      handleExecuteCall({
+        session_id: sid,
+        tool_name: "write_payment",
+        arguments: { amount: 100 },
+        idempotency_key: "score-blind-001",
+      });
+      handleExecuteCall({
+        session_id: sid,
+        tool_name: "write_payment",
+        arguments: { amount: 100 },
+        idempotency_key: "score-blind-001",
+      });
+
+      const result = handleGetScore({ session_id: sid, format: "json" });
+      const body = JSON.parse((result.content[0] as { text: string }).text);
+      expect(body.score.overall).toBeLessThan(100);
+      expect(body.score.breakdown.ghostMissed).toBe(1);
+      const patch = body.patches.find((p: { category: string }) => p.category === "GHOST_WRITE");
+      expect(patch).toBeDefined();
+    });
+
+    it("markdown format includes the score header and patch section", () => {
+      const session = handleStartSession({ scenario_id: "F1" });
+      const sid = JSON.parse((session.content[0] as { text: string }).text).sessionId;
+
+      handleExecuteCall({
+        session_id: sid,
+        tool_name: "write_payment",
+        arguments: { amount: 100 },
+        idempotency_key: "score-md-001",
+      });
+      handleExecuteCall({
+        session_id: sid,
+        tool_name: "write_payment",
+        arguments: { amount: 100 },
+        idempotency_key: "score-md-001",
+      });
+
+      const result = handleGetScore({ session_id: sid });
+      const text = (result.content[0] as { text: string }).text;
+      expect(text).toContain("CuonzTech Resilience Score");
+      expect(text).toContain("Hardening Report");
     });
   });
 

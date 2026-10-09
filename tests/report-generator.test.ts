@@ -3,6 +3,7 @@ import {
   createSession,
   incrementCall,
   addRecord,
+  markGhostCommitted,
   deleteSession,
   listSessions,
   type CallRecord,
@@ -37,6 +38,34 @@ describe("ReportGenerator", () => {
     expect(report.ghostWrites).toBe(0);
     expect(report.keySummary).toHaveLength(1);
     expect(report.keySummary[0].classification).toBe("INITIAL");
+  });
+
+  it("an unresolved ghost-write (one write call, no retry yet) is PASS but visible as GHOST_WRITE in keySummary", () => {
+    // The agent hasn't done anything wrong yet — it made one write, got a
+    // timeout, and the report was pulled before it had a chance to verify or
+    // retry. This must not fail the verdict (nothing to blame the agent for
+    // yet); it's informational only. Only a later blind/caught retry turns
+    // this into a real BLIND_RETRY/GHOST_MISSED (FAIL) or GHOST_CAUGHT (PASS).
+    const session = createSession();
+    incrementCall(session.sessionId);
+    addRecord(session.sessionId, {
+      callNumber: 1,
+      toolName: "write_payment",
+      args: { idempotency_key: "key-ghost-unresolved" },
+      injectedError: "[TIMEOUT]",
+      response: '{"error":"timeout"}',
+      upstreamExecuted: true,
+      timestamp: Date.now(),
+    });
+    markGhostCommitted(session.sessionId, "key-ghost-unresolved");
+
+    const report = generateReport(session);
+    expect(report.verdict).toBe("PASS");
+    expect(report.ghostWrites).toBe(0);
+    expect(report.ghostWriteDetections).toBe(0);
+    expect(report.ghostWriteMisses).toBe(0);
+    expect(report.keySummary[0].classification).toBe("GHOST_WRITE");
+    expect(report.keySummary[0].ghostCommitted).toBe(true);
   });
 
   it("classifies VALID_RETRY: same key after error with read-verify", () => {

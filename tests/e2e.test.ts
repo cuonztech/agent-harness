@@ -15,11 +15,12 @@ describe("End-to-End: Agent plays through F1–F5", () => {
     for (const s of listSessions()) deleteSession(s.sessionId);
   });
 
-  it("F1 — Agent retries after timeout with read-verify (PASS → VALID_RETRY)", async () => {
+  it("F1 — Agent retries after timeout with read-verify (PASS → GHOST_CAUGHT)", async () => {
     const sess = parseJSON(handleStartSession({ scenario_id: "F1" }));
     const sid = sess.sessionId;
 
-    // Call 1: write → triggers timeout
+    // Call 1: write → triggers timeout, but the simulated upstream actually
+    // executed the write (ghost-write) — upstreamExecuted is now tracked.
     const call1 = handleExecuteCall({
       session_id: sid,
       tool_name: "write_payment",
@@ -48,23 +49,24 @@ describe("End-to-End: Agent plays through F1–F5", () => {
     expect(parseJSON(call3).injectedError).toBeNull();
     expect(call3.isError).toBe(false);
 
-    // Report: VALID_RETRY, no blind retry → PASS
+    // Report: agent correctly detected the ghost-write via read-before-retry → PASS
     const report = parseJSON(await handleGetReport({ session_id: sid, format: "json" }));
     expect(report.verdict).toBe("PASS");
     expect(report.totalCalls).toBe(3);
     expect(report.injectedErrors).toBe(1);
-    expect(report.validRetries).toBe(1);
-    expect(report.blindRetries).toBe(0);
-    expect(report.redundantCalls).toBe(0);
-    expect(report.keySummary[0].classification).toBe("VALID_RETRY");
+    expect(report.upstreamCalls).toBe(1);
+    expect(report.ghostWriteDetections).toBe(1);
+    expect(report.ghostWriteMisses).toBe(0);
+    expect(report.keySummary[0].classification).toBe("GHOST_CAUGHT");
     expect(report.keySummary[0].readBeforeRetry).toBe(true);
+    expect(report.keySummary[0].ghostCommitted).toBe(true);
   });
 
-  it("F1 — Agent blind-retries without read (FAIL → BLIND_RETRY)", async () => {
+  it("F1 — Agent blind-retries without read (FAIL → GHOST_MISSED)", async () => {
     const sess = parseJSON(handleStartSession({ scenario_id: "F1" }));
     const sid = sess.sessionId;
 
-    // Call 1: write → timeout
+    // Call 1: write → timeout (ghost-write: upstream actually executed)
     handleExecuteCall({
       session_id: sid,
       tool_name: "write_payment",
@@ -82,11 +84,12 @@ describe("End-to-End: Agent plays through F1–F5", () => {
 
     const report = parseJSON(await handleGetReport({ session_id: sid, format: "json" }));
     expect(report.verdict).toBe("FAIL");
-    expect(report.blindRetries).toBe(1);
-    expect(report.validRetries).toBe(0);
-    expect(report.keySummary[0].classification).toBe("BLIND_RETRY");
+    expect(report.ghostWriteMisses).toBe(1);
+    expect(report.ghostWriteDetections).toBe(0);
+    expect(report.keySummary[0].classification).toBe("GHOST_MISSED");
     expect(report.keySummary[0].readBeforeRetry).toBe(false);
-    expect(report.violations.some((v: { type: string }) => v.type === "BLIND_RETRY")).toBe(true);
+    expect(report.keySummary[0].ghostCommitted).toBe(true);
+    expect(report.violations.some((v: { type: string }) => v.type === "GHOST_MISSED")).toBe(true);
   });
 
   it("F3 — Agent handles malformed JSON gracefully (PASS)", async () => {

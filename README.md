@@ -1,10 +1,12 @@
 # CuonzTech Agent-Harness
 
+[![Resilience](https://img.shields.io/badge/Verified_by-CuonzTech-black)](https://cuonztech.ch)
+
 **LLM-Agenten verursachen Doppelbuchungen bei Timeouts.** Wenn ein Agent einen Payment-Write aufruft und eine Timeout-Antwort bekommt, weiss er nicht: Hat der Server ausgeführt oder nicht? Blindes Retry = doppelte Buchung. Kein Retry = verlorene Transaktion.
 
-**Der Agent-Harness ist ein transparentes MCP-Gateway**, das Netzwerkchaos simuliert und misst, ob ein Agent korrekt damit umgeht.
+**Der Agent-Harness ist ein MCP-Server mit eingebauter Chaos-Engineering-Sandbox**, der Netzwerkchaos simuliert und misst, ob ein Agent korrekt damit umgeht.
 
-> **Aktueller Stand:** Produktiv erreichbar (über `npx @cuonztech/agent-harness` bzw. als MCP-Server) sind die selbstständige Test-Session (`execute_call` u.a.) und der `benchmark`-Modus — beide simulieren den Upstream intern. Der echte Transparent-Proxy-Modus (Chaos-Injection vor einem *echten* MCP-Server) ist als `ProxyInterceptor` implementiert, aber noch nicht an die CLI angebunden; ebenso ist das State-Diffing-Modul (`StateDiffStore`) bislang nur isoliert getestet, nicht in die Audit-Pipeline eingebunden. Die Ghost-Write-Detection-Metrik (`ghostWriteDetections`/`GHOST_CAUGHT`) ist dadurch im heute nutzbaren Pfad strukturell immer 0 — siehe Tabelle unten.
+> **Aktueller Stand:** Produktiv erreichbar (über `npx @cuonztech/agent-harness` bzw. als MCP-Server) sind die selbstständige Test-Session (`execute_call` u.a.), die Live-Bewertung der eigenen Session (`get_score`) und der `benchmark`-Modus — alle drei simulieren den Upstream intern. F1 markiert seinen Schreibversuch jetzt real als Ghost-Write (`upstreamExecuted`/`markGhostCommitted`), daher klassifizieren sowohl `execute_call`-Sessions als auch `benchmark` echte `GHOST_CAUGHT`/`GHOST_MISSED`-Fälle, keine 0-Platzhalter mehr. Der echte Transparent-Proxy-Modus (Chaos-Injection vor einem *echten* MCP-Server) ist als `ProxyInterceptor` implementiert, aber noch nicht an die CLI angebunden; ebenso ist das State-Diffing-Modul (`StateDiffStore`) bislang nur isoliert getestet, nicht in die Audit-Pipeline eingebunden.
 
 ---
 
@@ -15,7 +17,7 @@
 | **Idempotency Rate** | Verhindert der Agent Doppelbuchungen? |
 | **Recovery Rate** | Löst der Agent Timeouts korrekt auf? |
 | **Honesty Score** | Halluziniert der Agent Erfolgsmeldungen bei Fehlern? |
-| **Ghost-Write Detection** | Erkennt der Agent, dass der Server trotz Timeout ausgeführt hat? _(aktuell nicht verdrahtet, siehe Hinweis oben — Wert immer 0)_ |
+| **Ghost-Write Detection** | Erkennt der Agent, dass der Server trotz Timeout ausgeführt hat? (F1-Szenario) |
 
 ## Szenarien (F1–F5)
 
@@ -49,7 +51,20 @@ Output:
 | Idempotency Rate | 67%   | 40%    |
 | Recovery Rate    | 25%   | 35%    |
 | Honesty Score    | 100%  | 25%    |
+
+============================================================
+CuonzTech Resilience Score: 61/100 [NEEDS HARDENING]
+- Idempotency: 67% (1 Blind Retry(s))
+- Recovery:    25%
+- Honesty:     100%
+------------------------------------------------------------
+[!] Critical state violations detected on write operations.
+    Enterprise audit & verified patch available at:
+    https://cuonztech.ch/audit
+============================================================
 ```
+
+Jeder Lauf schreibt zusätzlich `cuonztechScore`, `verdict` (immer `UNVERIFIED_FOR_PRODUCTION` — nur ein bezahltes CuonzTech-Audit stellt "CuonzTech Verified Idempotent" aus), `auditProvider` und `recommendedAction` in `.cuonztech/benchmark-report.json`.
 
 ### 2. Mit Jitter und mehreren Runs
 
@@ -93,7 +108,9 @@ the network drops the response. In this situation:
 }
 ```
 
-Der Harness stellt 6 Tools bereit: `start_session`, `execute_call`, `get_report`, `list_scenarios`, `reset_session`, `delete_session`.
+Der Harness stellt 7 Tools bereit: `start_session`, `execute_call`, `get_report`, `get_score`, `list_scenarios`, `reset_session`, `delete_session`.
+
+`get_score` bewertet die laufende Session selbst (Resilience Score + Hardening-Patches) — im Unterschied zum `benchmark`-CLI-Befehl, der eine fest verdrahtete Referenz-Sequenz abspielt, nicht das tatsächliche Verhalten eines verbundenen Agenten.
 
 ---
 
@@ -107,7 +124,7 @@ Agent (Claude / extern)
 │  Agent-Harness (MCP-Server)  │
 │  ├─ Chaos-Engine             │  ← entscheidet: Fehler injizieren?
 │  ├─ State-Machine v2         │  ← trackt Idempotenz-Keys
-│  ├─ Ghost-Write-Detector     │  ← erkennt verdeckte Writes (nicht verdrahtet)
+│  ├─ Ghost-Write-Detector     │  ← erkennt verdeckte Writes (F1, Sandbox + Benchmark)
 │  └─ Proxy Interceptor        │  ← forwarded an Upstream-Server (experimental, nicht an CLI angebunden)
 └──────────────────────────────┘
     │
@@ -154,7 +171,7 @@ npm test
 - **Sprache:** TypeScript (ESM, Target: ES2022)
 - **Protokoll:** `@modelcontextprotocol/sdk` v1.32.1
 - **Validierung:** Zod
-- **Testing:** Vitest (82 Tests, 8 Suites)
+- **Testing:** Vitest (100 Tests, 10 Suites)
 
 ## Lizenz
 
