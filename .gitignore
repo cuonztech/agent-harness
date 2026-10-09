@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.cuonztech/
+.mimocode/
+*.tgz
+*.tsbuildinfo
+.vitest/
+
+# Internal project management (not for public repo)
+AGENT.md
+BRAND.md
+CLAUDE.md
+MEMORY.md
+STAND.md
+.claude/

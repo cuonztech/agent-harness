@@ -1,0 +1,49 @@
+{
+  "name": "@cuonztech/agent-harness",
+  "version": "0.3.0",
+  "description": "Transparentes MCP-Gateway zur Härtung autonomer KI-Agenten — Chaos-Proxy, Idempotenz-Prüfung, Ghost-Write-Erkennung und automatische System-Prompt-Reparatur.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "cuonztech-harness": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "benchmark": "node dist/index.js benchmark",
+    "prepublishOnly": "npm run lint && npm run build && npm test"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "agent-testing",
+    "chaos-engineering",
+    "idempotency",
+    "llm-agents",
+    "ghost-write",
+    "resilience",
+    "cuonztech"
+  ],
+  "author": "CuonzTech",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}
