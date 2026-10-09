@@ -117,6 +117,46 @@ describe("StateDiffStore wired into the real audit pipeline", () => {
     expect(report.keySummary[0].classification).toBe("GHOST_CAUGHT");
     expect(report.keySummary[0].readBeforeRetry).toBe(true);
     expect(report.keySummary[0].stateDiff.didAgentReadBefore).toBe(false);
+    // Regression: agentGaveUpSilently must NOT fire just because the strict
+    // read-match missed. The agent demonstrably did NOT give up here — it
+    // retried and the key is resolved (GHOST_CAUGHT = "excellent behavior").
+    expect(report.keySummary[0].stateDiff.agentGaveUpSilently).toBe(false);
+  });
+
+  it("agentGaveUpSilently: false for VALID_RETRY and REDUNDANT_CALL — the agent took further action, it did not abandon the key, even though its read used a different param than idempotency_key", () => {
+    const session = createSession();
+    incrementCall(session.sessionId);
+    addRecord(session.sessionId, {
+      callNumber: 1,
+      toolName: "write_payment",
+      args: { idempotency_key: "sd-valid-retry-loose" },
+      injectedError: "[TIMEOUT]",
+      response: '{"error":"timeout"}',
+      timestamp: 1000,
+    });
+    incrementCall(session.sessionId);
+    addRecord(session.sessionId, {
+      callNumber: 2,
+      toolName: "read_payment_status",
+      args: { transaction_ref: "sd-valid-retry-loose" }, // no idempotency_key
+      injectedError: null,
+      response: '{"result":"ok"}',
+      timestamp: 2000,
+    });
+    incrementCall(session.sessionId);
+    addRecord(session.sessionId, {
+      callNumber: 3,
+      toolName: "write_payment",
+      args: { idempotency_key: "sd-valid-retry-loose" },
+      injectedError: null,
+      response: '{"result":"ok"}',
+      timestamp: 3000,
+    });
+
+    const report = generateReport(session);
+    expect(report.keySummary[0].classification).toBe("VALID_RETRY");
+    expect(report.keySummary[0].stateDiff.didAgentReadBefore).toBe(false);
+    expect(report.keySummary[0].stateDiff.agentGaveUpSilently).toBe(false);
   });
 
   it("agentGaveUpSilently: true for an unresolved ghost-write with no follow-up at all", () => {

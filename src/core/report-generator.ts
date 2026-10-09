@@ -179,6 +179,18 @@ export function generateReport(session: SessionState): AuditReport {
     // check inclusive of the key's own last call — if that last call WAS the
     // verifying read itself (no further retry followed), it must still count.
     const diff = session.stateDiff.diff(key, tracking.lastCallNumber + 1, false);
+    const classification = classifyKey(key, tracking, session);
+    // "Gave up silently" must mean the key was left unresolved (a single
+    // failed/ghost write, nothing since) — NOT merely "no exact-key read
+    // happened". Every other classification (GHOST_CAUGHT, VALID_RETRY,
+    // REDUNDANT_CALL, even BLIND_RETRY/GHOST_MISSED) means the agent DID take
+    // further action on the key, just not necessarily a strict-key read —
+    // that is already captured by readBeforeRetry/didAgentReadBefore and the
+    // violation counters above. Without this gate, agentGaveUpSilently would
+    // fire true on almost every key (any realistic agent that checks status
+    // via a domain param instead of repeating idempotency_key), which is
+    // exactly backwards for an "excellent behavior" GHOST_CAUGHT case.
+    const isUnresolved = classification === "GHOST_WRITE" || classification === "WRITE_ONLY";
     keySummary.push({
       key,
       state: tracking.state,
@@ -186,12 +198,12 @@ export function generateReport(session: SessionState): AuditReport {
       lastError: tracking.lastError,
       readBeforeRetry: tracking.readBeforeRetry,
       ghostCommitted: tracking.ghostCommitted,
-      classification: classifyKey(key, tracking, session),
+      classification,
       stateDiff: {
         recordExisted: diff.recordExisted,
         wasOverwritten: diff.wasOverwritten,
         didAgentReadBefore: diff.agentCheckedBeforeRetry,
-        agentGaveUpSilently: diff.agentGaveUpSilently,
+        agentGaveUpSilently: diff.agentGaveUpSilently && isUnresolved,
       },
     });
   }

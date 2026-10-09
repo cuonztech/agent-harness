@@ -226,7 +226,7 @@ npm test
 - **Sprache:** TypeScript (ESM, Target: ES2022)
 - **Protokoll:** `@modelcontextprotocol/sdk` v1.32.1
 - **Validierung:** Zod
-- **Testing:** Vitest (111 Tests, 12 Suites)
+- **Testing:** Vitest (113 Tests, 12 Suites)
 
 ## Lizenz
 

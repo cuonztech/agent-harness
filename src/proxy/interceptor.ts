@@ -142,6 +142,7 @@ export class ProxyInterceptor {
     }
 
     // Apply chaos decision (after upstream execution for ghost-writes)
+    let isGhostWrite = false;
     if (decision.injectError) {
       injectedError = decision.errorType;
       statusCode = decision.statusCode;
@@ -150,10 +151,7 @@ export class ProxyInterceptor {
           ? decision.errorBody
           : JSON.stringify(decision.errorBody);
 
-      // Ghost-write: upstream was executed but agent gets error
-      if (decision.executeUpstream && upstreamExecuted && key) {
-        handleGhostWrite(this.session, mergedArgs, upstreamResponse);
-      }
+      isGhostWrite = decision.executeUpstream && upstreamExecuted && Boolean(key);
     } else {
       statusCode = 200;
       if (!upstreamExecuted) {
@@ -176,6 +174,15 @@ export class ProxyInterceptor {
       upstreamExecuted,
     );
     addRecord(this.session.sessionId, record);
+
+    // Ghost-write: upstream executed but the agent sees an error. Mark this
+    // AFTER addRecord(), mirroring handlers.ts's order — marking it first
+    // makes addRecord() treat the freshly-created key entry as "existing"
+    // (double-counting writeCalls and clobbering GHOST_COMMITTED back to
+    // FAILED_DOWNSTREAM via its own isError branch).
+    if (isGhostWrite) {
+      handleGhostWrite(this.session, mergedArgs, upstreamResponse);
+    }
 
     return {
       content: [

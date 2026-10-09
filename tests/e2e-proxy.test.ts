@@ -122,5 +122,30 @@ describe("MCP proxy mode (two real stdio processes)", () => {
       expect(score.score.overall).toBeGreaterThanOrEqual(0);
       expect(score.score.overall).toBeLessThanOrEqual(100);
     });
+
+    it("counts writeCalls correctly and keeps the key GHOST_COMMITTED through a read + successful retry", async () => {
+      // Regression: handleGhostWrite() used to run BEFORE addRecord() in the
+      // proxy interceptor, so addRecord() treated the just-created key entry
+      // as "existing" — double-counting writeCalls and clobbering the state
+      // back to FAILED_DOWNSTREAM via its own isError branch. Order is now
+      // addRecord() first, mirroring tools/handlers.ts.
+      await client.callTool({
+        name: "read_payment_status",
+        arguments: {},
+      });
+      await client.callTool({
+        name: "write_payment",
+        arguments: { amount: 10, idempotency_key: "proxy-ghost-1" },
+      });
+
+      const reportRes = await client.callTool({ name: "get_report", arguments: { format: "json" } });
+      const report = JSON.parse(textOf(reportRes)) as {
+        keySummary: Array<{ key: string; state: string; writeCalls: number; classification: string }>;
+      };
+      const entry = report.keySummary.find((k) => k.key === "proxy-ghost-1");
+      expect(entry?.state).toBe("GHOST_COMMITTED");
+      expect(entry?.writeCalls).toBe(2);
+      expect(entry?.classification).toBe("GHOST_CAUGHT");
+    });
   });
 });
