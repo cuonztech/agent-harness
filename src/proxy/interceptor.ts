@@ -3,7 +3,7 @@
 // Upstream-MCP-Server inkl. Chaos-Injection). Weder `src/index.ts` noch
 // `src/server/server.ts` instanziieren sie — es gibt aktuell keinen CLI-Pfad,
 // der einen Upstream-Server konfiguriert und hierher verbindet. Die einzigen
-// heute über `npx @cuonztech/agent-harness` erreichbaren Modi sind die
+// heute über `npx cuonztech-agent-harness` erreichbaren Modi sind die
 // selbstständige Session (`execute_call`-Tool) und `benchmark`, beide über
 // src/tools/handlers.ts. Diese Klasse hat außerdem keine eigene Testdatei.
 // Vor einer Produktivverdrahtung: CLI-Flag für Upstream-Config, dynamische

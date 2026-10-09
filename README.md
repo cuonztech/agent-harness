@@ -6,7 +6,7 @@
 
 **Der Agent-Harness ist ein MCP-Server mit eingebauter Chaos-Engineering-Sandbox**, der Netzwerkchaos simuliert und misst, ob ein Agent korrekt damit umgeht.
 
-> **Aktueller Stand:** Produktiv erreichbar (über `npx @cuonztech/agent-harness` bzw. als MCP-Server) sind die selbstständige Test-Session (`execute_call` u.a.), die Live-Bewertung der eigenen Session (`get_score`) und der `benchmark`-Modus — alle drei simulieren den Upstream intern. F1 markiert seinen Schreibversuch jetzt real als Ghost-Write (`upstreamExecuted`/`markGhostCommitted`), daher klassifizieren sowohl `execute_call`-Sessions als auch `benchmark` echte `GHOST_CAUGHT`/`GHOST_MISSED`-Fälle, keine 0-Platzhalter mehr. Der echte Transparent-Proxy-Modus (Chaos-Injection vor einem *echten* MCP-Server) ist als `ProxyInterceptor` implementiert, aber noch nicht an die CLI angebunden; ebenso ist das State-Diffing-Modul (`StateDiffStore`) bislang nur isoliert getestet, nicht in die Audit-Pipeline eingebunden.
+> **Aktueller Stand:** Produktiv erreichbar (über `npx cuonztech-agent-harness` bzw. als MCP-Server) sind die selbstständige Test-Session (`execute_call` u.a.), die Live-Bewertung der eigenen Session (`get_score`) und der `benchmark`-Modus — alle drei simulieren den Upstream intern. F1 markiert seinen Schreibversuch jetzt real als Ghost-Write (`upstreamExecuted`/`markGhostCommitted`), daher klassifizieren sowohl `execute_call`-Sessions als auch `benchmark` echte `GHOST_CAUGHT`/`GHOST_MISSED`-Fälle, keine 0-Platzhalter mehr. Der echte Transparent-Proxy-Modus (Chaos-Injection vor einem *echten* MCP-Server) ist als `ProxyInterceptor` implementiert, aber noch nicht an die CLI angebunden; ebenso ist das State-Diffing-Modul (`StateDiffStore`) bislang nur isoliert getestet, nicht in die Audit-Pipeline eingebunden.
 
 ---
 
@@ -36,7 +36,7 @@
 ### 1. Benchmark laufen lassen
 
 ```bash
-npx @cuonztech/agent-harness benchmark
+npx cuonztech-agent-harness benchmark
 ```
 
 Output:
@@ -69,7 +69,7 @@ Jeder Lauf schreibt zusätzlich `cuonztechScore`, `verdict` (immer `UNVERIFIED_F
 ### 2. Mit Jitter und mehreren Runs
 
 ```bash
-npx @cuonztech/agent-harness benchmark --runs 5 --jitter 200 --scenarios F1,F3,F5
+npx cuonztech-agent-harness benchmark --runs 5 --jitter 200 --scenarios F1,F3,F5
 ```
 
 ### 3. System-Prompt härten
@@ -102,7 +102,7 @@ the network drops the response. In this situation:
   "mcpServers": {
     "cuonztech-harness": {
       "command": "npx",
-      "args": ["-y", "@cuonztech/agent-harness"]
+      "args": ["-y", "cuonztech-agent-harness"]
     }
   }
 }
@@ -148,13 +148,13 @@ PENDING → FAILED_DOWNSTREAM → COMMITTED
 
 ```bash
 # MCP-Server starten (stdio, für Claude Desktop)
-npx @cuonztech/agent-harness
+npx cuonztech-agent-harness
 
 # Benchmark mit Standard-Szenarien
-npx @cuonztech/agent-harness benchmark
+npx cuonztech-agent-harness benchmark
 
 # Benchmark mit Optionen
-npx @cuonztech/agent-harness benchmark --runs 3 --jitter 100 --scenarios F1,F3,F5
+npx cuonztech-agent-harness benchmark --runs 3 --jitter 100 --scenarios F1,F3,F5
 
 # Nur bauen
 npm run build

@@ -1,7 +1,7 @@
 // Echter Stdio-E2E-Test: spawnt den KOMPILIERTEN Server (dist/index.js) als
 // eigenen Prozess und spricht ihn per echtem MCP-Client-SDK über Stdio an —
 // anders als die restliche Suite, die die Handler-Funktionen direkt aufruft.
-// Das testet, was `npx @cuonztech/agent-harness` tatsächlich ausliefert:
+// Das testet, was `npx cuonztech-agent-harness` tatsächlich ausliefert:
 // Protokoll-Handshake, Tool-Registrierung, echte Tool-Aufrufe über die Wire.
 // Braucht einen frischen `dist/` — siehe "pretest" in package.json.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
