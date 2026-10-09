@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { StateDiffStore } from "./state-diff.js";
 
 export type KeyState = "PENDING" | "FAILED_DOWNSTREAM" | "COMMITTED" | "GHOST_COMMITTED";
 
@@ -21,6 +22,11 @@ export interface SessionState {
   history: CallRecord[];
   keyStates: Map<string, KeyTracking>;
   createdAt: number;
+  // Real-value backing store, keyed by idempotency_key: tracks what was
+  // actually written and whether the agent actually read that exact key
+  // back before retrying. Independent of keyStates' tool-name-based
+  // readBeforeRetry heuristic — see report-generator.ts's stateDiff fields.
+  stateDiff: StateDiffStore;
 }
 
 export interface CallRecord {
@@ -54,6 +60,7 @@ export function createSession(
     history: [],
     keyStates: new Map(),
     createdAt: Date.now(),
+    stateDiff: new StateDiffStore(),
   };
   sessions.set(session.sessionId, session);
   return session;
@@ -88,6 +95,17 @@ export function addRecord(sessionId: string, record: CallRecord): void {
   const hasResponseError =
     typeof record.response === "string" && record.response.includes('"error"');
   const isError = hasInjectedError || hasResponseError;
+
+  // Real-value tracking, independent of the keyStates classification below.
+  // A write only actually lands in the backing store if it wasn't rejected
+  // outright — either it succeeded cleanly, or (ghost-write) the upstream
+  // executed it despite the agent seeing an error.
+  if (isWrite && (!isError || record.upstreamExecuted)) {
+    session.stateDiff.write(key, record.response, record.callNumber);
+  } else if (isReadTool(record.toolName)) {
+    session.stateDiff.read(key, record.callNumber);
+  }
+
   const existing = session.keyStates.get(key);
 
   if (!existing) {
@@ -162,6 +180,7 @@ export function resetSession(sessionId: string): void {
   session.callCount = 0;
   session.history = [];
   session.keyStates = new Map();
+  session.stateDiff.reset();
 }
 
 export function deleteSession(sessionId: string): boolean {

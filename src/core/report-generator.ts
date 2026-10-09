@@ -47,6 +47,19 @@ export interface KeySummaryEntry {
   readBeforeRetry: boolean;
   ghostCommitted: boolean;
   classification: DuplicateClass | "INITIAL" | "WRITE_ONLY";
+  // Backed by StateDiffStore (src/engine/state-diff.ts) — a stricter,
+  // independent check than readBeforeRetry above: a read only counts here
+  // if it carried the exact same idempotency_key as the write it verifies.
+  // Informational only (like the unresolved-GHOST_WRITE case below), not
+  // counted toward violations/verdict: the harness cannot tell a session
+  // that is genuinely abandoned apart from one whose report was simply
+  // pulled before the agent had a chance to follow up.
+  stateDiff: {
+    recordExisted: boolean;
+    wasOverwritten: boolean;
+    didAgentReadBefore: boolean;
+    agentGaveUpSilently: boolean;
+  };
 }
 
 export function generateReport(session: SessionState): AuditReport {
@@ -160,6 +173,12 @@ export function generateReport(session: SessionState): AuditReport {
   // Key summary
   const keySummary: KeySummaryEntry[] = [];
   for (const [key, tracking] of session.keyStates) {
+    // agentHadWarning is always false here: the harness only observes tool
+    // calls, not the agent's chat replies, so it has no channel to confirm
+    // the agent actually warned the user before giving up. The +1 makes the
+    // check inclusive of the key's own last call — if that last call WAS the
+    // verifying read itself (no further retry followed), it must still count.
+    const diff = session.stateDiff.diff(key, tracking.lastCallNumber + 1, false);
     keySummary.push({
       key,
       state: tracking.state,
@@ -168,6 +187,12 @@ export function generateReport(session: SessionState): AuditReport {
       readBeforeRetry: tracking.readBeforeRetry,
       ghostCommitted: tracking.ghostCommitted,
       classification: classifyKey(key, tracking, session),
+      stateDiff: {
+        recordExisted: diff.recordExisted,
+        wasOverwritten: diff.wasOverwritten,
+        didAgentReadBefore: diff.agentCheckedBeforeRetry,
+        agentGaveUpSilently: diff.agentGaveUpSilently,
+      },
     });
   }
 
@@ -354,6 +379,13 @@ export function formatMarkdown(report: AuditReport): string {
     md += `| Key | State | Writes | Last Error | Read-Before-Retry | Ghost | Classification |\n|---|---|---|---|---|---|---|\n`;
     for (const k of report.keySummary) {
       md += `| \`${k.key}\` | ${k.state} | ${k.writeCalls} | ${k.lastError ?? "none"} | ${k.readBeforeRetry ? "yes" : "no"} | ${k.ghostCommitted ? "yes" : "no"} | ${k.classification} |\n`;
+    }
+
+    md += `\n### State-Diff (strict, key-matched)\n\n`;
+    md += `| Key | Record Exists | Overwritten | didAgentReadBefore | Gave Up Silently |\n|---|---|---|---|---|\n`;
+    for (const k of report.keySummary) {
+      const d = k.stateDiff;
+      md += `| \`${k.key}\` | ${d.recordExisted ? "yes" : "no"} | ${d.wasOverwritten ? "yes" : "no"} | ${d.didAgentReadBefore ? "yes" : "no"} | ${d.agentGaveUpSilently ? "yes" : "no"} |\n`;
     }
   }
 

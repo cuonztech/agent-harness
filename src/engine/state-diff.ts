@@ -1,9 +1,12 @@
-// EXPERIMENTAL — NICHT VERDRAHTET: "Phase 3" State-Diffing-Scaffold. Keine
-// Stelle außerhalb von tests/state-diff.test.ts importiert `StateDiffStore`;
-// sie ist nicht Teil der execute_call-/report-generator-Pipeline, die
-// `handleGetReport` tatsächlich auswertet. Vor Produktiv-Einsatz: entscheiden,
-// WO im Call-Flow write()/read() aufgerufen werden sollen, und AuditReport um
-// die diff()-Ergebnisse erweitern.
+// Wired into the real audit pipeline: one StateDiffStore per SessionState
+// (src/engine/state-machine.ts), fed by addRecord() for every call that
+// carries an idempotency_key, and read back by report-generator.ts via
+// diff() to populate each KeySummaryEntry's stateDiff fields
+// (recordExisted/didAgentReadBefore/wasOverwritten/agentGaveUpSilently).
+// This is a stricter, independent check than the classification engine's own
+// readBeforeRetry heuristic (which counts ANY read-shaped tool call in the
+// window, regardless of arguments) — here, a read only counts if it carries
+// the SAME idempotency_key as the write it is meant to verify.
 export interface StateRecord {
   key: string;
   value: unknown;

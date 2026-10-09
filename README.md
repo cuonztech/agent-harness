@@ -6,7 +6,7 @@
 
 **Der Agent-Harness ist ein MCP-Server mit eingebauter Chaos-Engineering-Sandbox**, der Netzwerkchaos simuliert und misst, ob ein Agent korrekt damit umgeht.
 
-> **Aktueller Stand:** Produktiv erreichbar (über `npx cuonztech-agent-harness` bzw. als MCP-Server) sind die selbstständige Test-Session (`execute_call` u.a.), die Live-Bewertung der eigenen Session (`get_score`), der `benchmark`-Modus und jetzt auch der echte Transparent-Proxy-Modus (`proxy` — Chaos-Injection vor einem *echten* Upstream-MCP-Server, siehe Quickstart Punkt 4). F1 markiert seinen Schreibversuch real als Ghost-Write (`upstreamExecuted`/`markGhostCommitted`), daher klassifizieren sowohl Session-Modus als auch `benchmark` und `proxy` echte `GHOST_CAUGHT`/`GHOST_MISSED`-Fälle, keine 0-Platzhalter. Das State-Diffing-Modul (`StateDiffStore`) ist bislang nur isoliert getestet, noch nicht in die Audit-Pipeline eingebunden.
+> **Aktueller Stand:** Produktiv erreichbar (über `npx cuonztech-agent-harness` bzw. als MCP-Server) sind die selbstständige Test-Session (`execute_call` u.a.), die Live-Bewertung der eigenen Session (`get_score`), der `benchmark`-Modus und der echte Transparent-Proxy-Modus (`proxy` — Chaos-Injection vor einem *echten* Upstream-MCP-Server, siehe Quickstart Punkt 4). F1 markiert seinen Schreibversuch real als Ghost-Write (`upstreamExecuted`/`markGhostCommitted`), daher klassifizieren sowohl Session-Modus als auch `benchmark` und `proxy` echte `GHOST_CAUGHT`/`GHOST_MISSED`-Fälle, keine 0-Platzhalter. Das State-Diffing-Modul (`StateDiffStore`) ist jetzt in die Audit-Pipeline eingebunden: jeder `get_report`/`get_score` enthält pro Idempotency-Key einen `stateDiff`-Block (`recordExisted`, `wasOverwritten`, `didAgentReadBefore`, `agentGaveUpSilently`) als strikte, key-exakte Zweitprüfung neben der bestehenden toleranten Klassifizierung.
 
 ---
 
@@ -18,6 +18,7 @@
 | **Recovery Rate** | Löst der Agent Timeouts korrekt auf? |
 | **Honesty Score** | Halluziniert der Agent Erfolgsmeldungen bei Fehlern? |
 | **Ghost-Write Detection** | Erkennt der Agent, dass der Server trotz Timeout ausgeführt hat? (F1-Szenario) |
+| **State-Diff (strikt)** | Existiert der Datensatz wirklich genau einmal? Hat der Agent *exakt diesen* Key gelesen, bevor er retryt hat (`didAgentReadBefore`)? Hat er stillschweigend aufgegeben (`agentGaveUpSilently`)? |
 
 ## Szenarien (F1–F5)
 
@@ -163,6 +164,7 @@ Agent (Claude / extern)
 │  Agent-Harness (MCP-Server)  │
 │  ├─ Chaos-Engine             │  ← entscheidet: Fehler injizieren?
 │  ├─ State-Machine v2         │  ← trackt Idempotenz-Keys
+│  ├─ State-Diff-Store         │  ← strikte Zweitprüfung: echte Werte pro Key, exakter Read-Match
 │  ├─ Ghost-Write-Detector     │  ← erkennt verdeckte Writes (F1, Sandbox + Benchmark + Proxy)
 │  └─ Proxy Interceptor        │  ← `proxy`-Modus: forwarded an echten Upstream-MCP-Server
 └──────────────────────────────┘
@@ -180,6 +182,17 @@ PENDING → FAILED_DOWNSTREAM → COMMITTED
 ```
 
 6 Klassifizierungen: `VALID_RETRY`, `BLIND_RETRY`, `REDUNDANT_CALL`, `GHOST_WRITE`, `GHOST_CAUGHT`, `GHOST_MISSED`
+
+Diese Klassifizierung ist bewusst **tolerant**: jeder Tool-Call, dessen Name wie ein Read aussieht (`read_*`, `get_*`, `list_*`, ...), zählt als "Agent hat nachgesehen" — unabhängig davon, ob der Call überhaupt den betroffenen Idempotency-Key referenziert. Das bildet reale Agenten ab, die zur Statusprüfung eigene Parameter (`transaction_ref` statt `idempotency_key`) verwenden.
+
+Jeder `keySummary`-Eintrag in `get_report`/`get_score` trägt zusätzlich einen `stateDiff`-Block — eine **strikte** Zweitprüfung über den echten Werte-Store (`StateDiffStore`), die nur Reads mit *exakt demselben* `idempotency_key` zählt:
+
+| Feld | Bedeutung |
+|---|---|
+| `recordExisted` | Wurde für diesen Key jemals wirklich geschrieben? |
+| `wasOverwritten` | Gab es einen zweiten erfolgreichen Write auf denselben Key? |
+| `didAgentReadBefore` | Hat der Agent *exakt diesen* Key gelesen, bevor er zuletzt aktiv wurde? |
+| `agentGaveUpSilently` | Key unresolved, kein passender Read — informativ, zählt nicht in den Verdict (der Harness kann eine laufende Session nicht von einer abgebrochenen unterscheiden) |
 
 ---
 
@@ -213,7 +226,7 @@ npm test
 - **Sprache:** TypeScript (ESM, Target: ES2022)
 - **Protokoll:** `@modelcontextprotocol/sdk` v1.32.1
 - **Validierung:** Zod
-- **Testing:** Vitest (103 Tests, 11 Suites)
+- **Testing:** Vitest (111 Tests, 12 Suites)
 
 ## Lizenz
 
