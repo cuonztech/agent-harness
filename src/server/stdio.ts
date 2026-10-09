@@ -1,7 +1,11 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
-export async function startStdio(server: McpServer): Promise<void> {
+interface Connectable {
+  connect(transport: Transport): Promise<void>;
+}
+
+export async function startStdio(server: Connectable): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

@@ -1,7 +1,7 @@
 {
   "name": "cuonztech-agent-harness",
   "version": "0.3.0",
-  "description": "MCP-Server zur Härtung autonomer KI-Agenten — simulierte F1-F5-Chaos-Szenarien, Idempotenz-Prüfung, Ghost-Write-Erkennung, Resilience Score und automatische System-Prompt-Reparatur. Transparenter Proxy zu einem echten Upstream-MCP-Server ist in Arbeit, noch nicht an die CLI angebunden.",
+  "description": "MCP-Server zur Härtung autonomer KI-Agenten — simulierte F1-F5-Chaos-Szenarien, Idempotenz-Prüfung, Ghost-Write-Erkennung, Resilience Score, automatische System-Prompt-Reparatur und ein transparenter Chaos-Proxy vor einem echten Upstream-MCP-Server.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {

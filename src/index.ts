@@ -4,6 +4,8 @@ import { createServer } from "./server/server.js";
 import { startStdio } from "./server/stdio.js";
 import { runBenchmark, defaultConfig } from "./benchmark/runner.js";
 import { formatCTA, buildTelemetry } from "./benchmark/cta.js";
+import { ProxyInterceptor } from "./proxy/interceptor.js";
+import { createProxyServer } from "./proxy/gateway.js";
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -14,11 +16,65 @@ async function main(): Promise<void> {
 
   if (mode === "benchmark" || mode === "evaluate") {
     await runBenchmarkMode();
+  } else if (mode === "proxy") {
+    await runProxyMode();
   } else {
     // Default: MCP server mode (stdio)
     const server = createServer();
     await startStdio(server);
   }
+}
+
+async function runProxyMode(): Promise<void> {
+  const cmdIdx = args.indexOf("--upstream-command");
+  const upstreamCommand = cmdIdx !== -1 ? args[cmdIdx + 1] : undefined;
+  if (!upstreamCommand) {
+    process.stderr.write(
+      "Error: proxy mode requires --upstream-command <cmd>\n" +
+        "Example: cuonztech-agent-harness proxy --upstream-command node --upstream-args dist/server.js\n",
+    );
+    process.exit(1);
+    return;
+  }
+
+  const argsIdx = args.indexOf("--upstream-args");
+  const upstreamArgs =
+    argsIdx !== -1 && args[argsIdx + 1] ? args[argsIdx + 1].split(",") : [];
+
+  const cwdIdx = args.indexOf("--upstream-cwd");
+  const upstreamCwd = cwdIdx !== -1 ? args[cwdIdx + 1] : undefined;
+
+  const scenarioIdx = args.indexOf("--scenario");
+  const scenarioId = scenarioIdx !== -1 ? args[scenarioIdx + 1] : undefined;
+
+  const modeIdx = args.indexOf("--mode");
+  const chaosMode: "deterministic" | "chaos" =
+    modeIdx !== -1 && args[modeIdx + 1] === "chaos" ? "chaos" : "deterministic";
+
+  const errorRateIdx = args.indexOf("--error-rate");
+  const errorRate =
+    errorRateIdx !== -1 && args[errorRateIdx + 1]
+      ? parseFloat(args[errorRateIdx + 1])
+      : 0.0;
+
+  const interceptor = new ProxyInterceptor({
+    upstream: { command: upstreamCommand, args: upstreamArgs, cwd: upstreamCwd },
+    scenarioId,
+    mode: chaosMode,
+    errorRate,
+  });
+
+  await interceptor.connectUpstream();
+
+  const shutdown = async (): Promise<void> => {
+    await interceptor.disconnectUpstream();
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+
+  const server = createProxyServer(interceptor);
+  await startStdio(server);
 }
 
 async function runBenchmarkMode(): Promise<void> {

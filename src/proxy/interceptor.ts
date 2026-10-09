@@ -1,16 +1,12 @@
-// EXPERIMENTAL — NICHT VERDRAHTET: Diese Klasse implementiert den in der
-// README beworbenen "transparenten MCP-Gateway"-Modus (Proxy zu einem echten
-// Upstream-MCP-Server inkl. Chaos-Injection). Weder `src/index.ts` noch
-// `src/server/server.ts` instanziieren sie — es gibt aktuell keinen CLI-Pfad,
-// der einen Upstream-Server konfiguriert und hierher verbindet. Die einzigen
-// heute über `npx cuonztech-agent-harness` erreichbaren Modi sind die
-// selbstständige Session (`execute_call`-Tool) und `benchmark`, beide über
-// src/tools/handlers.ts. Diese Klasse hat außerdem keine eigene Testdatei.
-// Vor einer Produktivverdrahtung: CLI-Flag für Upstream-Config, dynamische
-// Tool-Registrierung anhand `getUpstreamTools()`, und Tests.
+// Transparenter MCP-Gateway: verbindet sich zu einem echten Upstream-MCP-
+// Server, discovered dessen Tools und injected Chaos (F1–F5 oder stochastisch)
+// bevor/nachdem Calls durchgereicht werden. Verdrahtet über `proxy`-CLI-Modus
+// in `src/index.ts` → `src/proxy/gateway.ts` (dynamische Tool-Registrierung
+// anhand `getUpstreamTools()`).
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import {
   createSession,
   getSession,
@@ -42,7 +38,7 @@ export class ProxyInterceptor {
   private upstreamTransport: Transport | null = null;
   private session: SessionState;
   private config: ProxyConfig;
-  private upstreamTools: Array<{ name: string; description?: string }> = [];
+  private upstreamTools: Tool[] = [];
 
   constructor(config: ProxyConfig) {
     this.config = config;
@@ -71,12 +67,10 @@ export class ProxyInterceptor {
     );
     await this.upstreamClient.connect(this.upstreamTransport);
 
-    // Discover upstream tools
+    // Discover upstream tools (full definitions, including inputSchema, so
+    // the gateway can advertise them to its own client unchanged)
     const tools = await this.upstreamClient.listTools();
-    this.upstreamTools = tools.tools.map((t) => ({
-      name: t.name,
-      description: t.description,
-    }));
+    this.upstreamTools = tools.tools;
   }
 
   async disconnectUpstream(): Promise<void> {
@@ -86,7 +80,7 @@ export class ProxyInterceptor {
     }
   }
 
-  getUpstreamTools(): Array<{ name: string; description?: string }> {
+  getUpstreamTools(): Tool[] {
     return this.upstreamTools;
   }
 
