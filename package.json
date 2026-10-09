@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "cuonztech-harness": "./dist/index.js"
+    "cuonztech-harness": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",
@@ -30,6 +30,14 @@
   ],
   "author": "CuonzTech",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cuonztech/agent-harness.git"
+  },
+  "homepage": "https://github.com/cuonztech/agent-harness#readme",
+  "bugs": {
+    "url": "https://github.com/cuonztech/agent-harness/issues"
+  },
   "engines": {
     "node": ">=20"
   },
