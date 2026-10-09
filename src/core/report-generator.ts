@@ -277,11 +277,18 @@ function classifyKey(
     return tracking.readBeforeRetry ? "VALID_RETRY" : "BLIND_RETRY";
   }
 
-  if (tracking.state === "COMMITTED") {
-    return "REDUNDANT_CALL";
-  }
-
-  return "GHOST_WRITE";
+  // No error on any EARLIER write for this key: the first write already
+  // succeeded cleanly, so this (and any further) write is a needless
+  // re-issue — REDUNDANT_CALL — regardless of whether THIS particular
+  // re-issue itself came back with an error (e.g. rate-limited). Previously
+  // only the clean-success sub-case (tracking.state === "COMMITTED") was
+  // labeled REDUNDANT_CALL; the errored sub-case fell through to a bare
+  // "GHOST_WRITE" below even though no ghost-write occurred (e.g. F2: a
+  // clean commit followed by an unnecessary re-write that got 429'd) — same
+  // underlying mistake either way, so it gets the same label and the same
+  // (uncapped) idempotency-rate penalty instead of being silently exempt
+  // from it.
+  return "REDUNDANT_CALL";
 }
 
 function getKeyViolations(

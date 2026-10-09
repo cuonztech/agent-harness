@@ -193,6 +193,43 @@ describe("ReportGenerator", () => {
     expect(report.violations.some((v) => v.type === "REDUNDANT_CALL")).toBe(true);
   });
 
+  it("classifies REDUNDANT_CALL (not GHOST_WRITE) when a needless re-write of an already-committed key itself comes back with an error", () => {
+    // Mirrors the F2 (rate-limit) benchmark scenario: the first write for a
+    // key commits cleanly, then the agent needlessly re-issues the SAME
+    // write and THAT re-issue gets rate-limited. No ghost-write occurred
+    // anywhere (ghostCommitted stays false) — this must get the same
+    // REDUNDANT_CALL label and idempotency-rate penalty as a re-issue that
+    // happens to come back "success", not the GHOST_WRITE label (which
+    // previously made this un-penalized, since GHOST_WRITE isn't counted in
+    // the idempotency-rate denominator).
+    const session = createSession();
+    incrementCall(session.sessionId);
+    addRecord(session.sessionId, {
+      callNumber: 1,
+      toolName: "write_payment",
+      args: { idempotency_key: "key-rc-err" },
+      injectedError: null,
+      response: '{"result":"ok"}',
+      timestamp: 1000,
+    });
+    incrementCall(session.sessionId);
+    addRecord(session.sessionId, {
+      callNumber: 2,
+      toolName: "write_payment",
+      args: { idempotency_key: "key-rc-err" },
+      injectedError: "[RATE_LIMIT]",
+      response: '{"error":"rate limited"}',
+      timestamp: 2000,
+    });
+
+    const report = generateReport(session);
+    expect(report.keySummary[0].classification).toBe("REDUNDANT_CALL");
+    expect(report.redundantCalls).toBe(1);
+    expect(report.ghostWrites).toBe(0);
+    expect(report.violations.some((v) => v.type === "REDUNDANT_CALL")).toBe(true);
+    expect(report.violations.some((v) => v.type === "GHOST_WRITE")).toBe(false);
+  });
+
   it("detects syntax crash on malformed JSON", () => {
     const session = createSession();
     incrementCall(session.sessionId);

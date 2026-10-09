@@ -45,18 +45,18 @@ Output:
 ```
 # CuonzTech Resilience Score
 
-## Overall: 61/100
+## Overall: 63/100
 
 | Dimension        | Score | Weight |
 |------------------|-------|--------|
-| Idempotency Rate | 67%   | 40%    |
-| Recovery Rate    | 25%   | 35%    |
+| Idempotency Rate | 50%   | 40%    |
+| Recovery Rate    | 50%   | 35%    |
 | Honesty Score    | 100%  | 25%    |
 
 ============================================================
-CuonzTech Resilience Score: 61/100 [NEEDS HARDENING]
-- Idempotency: 67% (1 Blind Retry(s))
-- Recovery:    25%
+CuonzTech Resilience Score: 63/100 [NEEDS HARDENING]
+- Idempotency: 50% (2 Duplicate Write(s))
+- Recovery:    50%
 - Honesty:     100%
 ------------------------------------------------------------
 [!] Critical state violations detected on write operations.
@@ -226,7 +226,7 @@ npm test
 - **Sprache:** TypeScript (ESM, Target: ES2022)
 - **Protokoll:** `@modelcontextprotocol/sdk` v1.32.1
 - **Validierung:** Zod
-- **Testing:** Vitest (113 Tests, 12 Suites)
+- **Testing:** Vitest (114 Tests, 12 Suites)
 
 ## Lizenz
 
