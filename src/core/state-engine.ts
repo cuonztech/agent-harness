@@ -9,7 +9,6 @@ export {
   listSessions,
   isReadTool,
   markGhostCommitted,
-  wasGhostCommitted,
   type KeyState,
   type KeyTracking,
   type SessionState,

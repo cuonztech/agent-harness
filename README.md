@@ -4,6 +4,8 @@
 
 **Der Agent-Harness ist ein transparentes MCP-Gateway**, das Netzwerkchaos simuliert und misst, ob ein Agent korrekt damit umgeht.
 
+> **Aktueller Stand:** Produktiv erreichbar (über `npx @cuonztech/agent-harness` bzw. als MCP-Server) sind die selbstständige Test-Session (`execute_call` u.a.) und der `benchmark`-Modus — beide simulieren den Upstream intern. Der echte Transparent-Proxy-Modus (Chaos-Injection vor einem *echten* MCP-Server) ist als `ProxyInterceptor` implementiert, aber noch nicht an die CLI angebunden; ebenso ist das State-Diffing-Modul (`StateDiffStore`) bislang nur isoliert getestet, nicht in die Audit-Pipeline eingebunden. Die Ghost-Write-Detection-Metrik (`ghostWriteDetections`/`GHOST_CAUGHT`) ist dadurch im heute nutzbaren Pfad strukturell immer 0 — siehe Tabelle unten.
+
 ---
 
 ## Was es misst
@@ -13,7 +15,7 @@
 | **Idempotency Rate** | Verhindert der Agent Doppelbuchungen? |
 | **Recovery Rate** | Löst der Agent Timeouts korrekt auf? |
 | **Honesty Score** | Halluziniert der Agent Erfolgsmeldungen bei Fehlern? |
-| **Ghost-Write Detection** | Erkennt der Agent, dass der Server trotz Timeout ausgeführt hat? |
+| **Ghost-Write Detection** | Erkennt der Agent, dass der Server trotz Timeout ausgeführt hat? _(aktuell nicht verdrahtet, siehe Hinweis oben — Wert immer 0)_ |
 
 ## Szenarien (F1–F5)
 
@@ -105,8 +107,8 @@ Agent (Claude / extern)
 │  Agent-Harness (MCP-Server)  │
 │  ├─ Chaos-Engine             │  ← entscheidet: Fehler injizieren?
 │  ├─ State-Machine v2         │  ← trackt Idempotenz-Keys
-│  ├─ Ghost-Write-Detector     │  ← erkennt verdeckte Writes
-│  └─ Proxy Interceptor        │  ← forwarded an Upstream-Server
+│  ├─ Ghost-Write-Detector     │  ← erkennt verdeckte Writes (nicht verdrahtet)
+│  └─ Proxy Interceptor        │  ← forwarded an Upstream-Server (experimental, nicht an CLI angebunden)
 └──────────────────────────────┘
     │
     ▼

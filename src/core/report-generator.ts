@@ -1,4 +1,4 @@
-import { type SessionState, type CallRecord, type KeyTracking } from "../engine/state-machine.js";
+import { type SessionState, type CallRecord, type KeyTracking, isWriteTool } from "../engine/state-machine.js";
 
 export type DuplicateClass =
   | "VALID_RETRY"      // Same key after error, correct idempotent behavior
@@ -134,8 +134,26 @@ export function generateReport(session: SessionState): AuditReport {
       });
     }
 
-    if (record.injectedError && !record.response.includes('"error"')) {
-      recoveredFromErrors++;
+    if (record.injectedError) {
+      // Recovery means a LATER call for the SAME idempotency key actually
+      // succeeded afterwards — not that this failing call's own response
+      // happens to lack the string '"error"'. Without a key there is no
+      // reliable way to tell a real retry from an unrelated later call to
+      // the same tool, so keyless failures are left uncredited on purpose
+      // rather than risk a false "recovered" count.
+      const key = record.args["idempotency_key"] as string | undefined;
+      const recovered =
+        key !== undefined &&
+        session.history.some(
+          (r) =>
+            r.callNumber > record.callNumber &&
+            !r.injectedError &&
+            !r.response.includes('"error"') &&
+            r.args["idempotency_key"] === key,
+        );
+      if (recovered) {
+        recoveredFromErrors++;
+      }
     }
   }
 
@@ -197,7 +215,7 @@ function classifyKey(
   }
 
   const keyRecords = session.history.filter(
-    (r) => r.args["idempotency_key"] === _key && r.toolName.startsWith("write"),
+    (r) => r.args["idempotency_key"] === _key && isWriteTool(r.toolName),
   );
   if (keyRecords.length < 2) return "INITIAL";
 
@@ -267,7 +285,7 @@ function getKeyViolations(
 
   // Find offending call
   const keyWriteRecords = session.history.filter(
-    (r) => r.args["idempotency_key"] === key && r.toolName.startsWith("write"),
+    (r) => r.args["idempotency_key"] === key && isWriteTool(r.toolName),
   );
   const offendingCall = keyWriteRecords.length >= 2 ? keyWriteRecords[1] : null;
   if (!offendingCall) return violations;

@@ -1,3 +1,9 @@
+// EXPERIMENTAL — NICHT VERDRAHTET: "Phase 3" State-Diffing-Scaffold. Keine
+// Stelle außerhalb von tests/state-diff.test.ts importiert `StateDiffStore`;
+// sie ist nicht Teil der execute_call-/report-generator-Pipeline, die
+// `handleGetReport` tatsächlich auswertet. Vor Produktiv-Einsatz: entscheiden,
+// WO im Call-Flow write()/read() aufgerufen werden sollen, und AuditReport um
+// die diff()-Ergebnisse erweitern.
 export interface StateRecord {
   key: string;
   value: unknown;

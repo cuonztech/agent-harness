@@ -7,6 +7,7 @@ import {
   deleteSession as deleteSessionState,
   listSessions,
   type CallRecord,
+  type SessionState,
 } from "../core/state-engine.js";
 import { generateReport, formatMarkdown } from "../core/report-generator.js";
 import { getScenarioById, ALL_SCENARIOS } from "../scenarios/f1-f5.js";
@@ -15,6 +16,51 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 const AUDIT_REPORT_PATH = ".cuonztech/audit-report.json";
+
+// Two calls are the "same request" for dedup purposes only if every argument
+// besides idempotency_key itself also matches — otherwise a reused key with
+// different arguments would silently replay the FIRST call's response while
+// the new, different arguments get recorded in history (inconsistent audit
+// trail, and a real anomaly worth letting through to normal classification
+// instead of masking it as a clean cache hit).
+function sameArgs(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const strip = (o: Record<string, unknown>) => {
+    const { idempotency_key, ...rest } = o;
+    return rest;
+  };
+  return JSON.stringify(strip(a)) === JSON.stringify(strip(b));
+}
+
+// Ad-hoc, non-chaos mode only: a key that already committed a successful
+// write must replay that exact result instead of generating a fresh one each
+// time (real idempotency is enforced server-side, not just classified after
+// the fact). Excluded on purpose:
+// - Deterministic scenarios (F1–F5): their trigger conditions are positional
+//   (by callNumber) and intentionally decide what a specific call number
+//   returns regardless of key reuse (e.g. F2 must still 429 the 2nd call
+//   even though it shares a key with the 1st).
+// - Chaos mode: stochastic error_rate injection must keep applying to every
+//   call attempt, including retries of a committed key — otherwise a key
+//   that happened to commit early becomes permanently immune to chaos for
+//   the rest of the session, defeating the configured error_rate.
+function findCommittedResponse(
+  session: SessionState,
+  key: string,
+  toolName: string,
+  callArgs: Record<string, unknown>,
+): CallRecord | null {
+  const tracking = session.keyStates.get(key);
+  if (!tracking || tracking.state !== "COMMITTED") return null;
+  const committed = session.history.filter(
+    (r) =>
+      r.args["idempotency_key"] === key &&
+      r.toolName === toolName &&
+      !r.injectedError &&
+      !r.response.includes('"error"') &&
+      sameArgs(r.args, callArgs),
+  );
+  return committed.length > 0 ? committed[committed.length - 1] : null;
+}
 
 export function handleStartSession(args: {
   scenario_id?: string;
@@ -82,6 +128,56 @@ export function handleExecuteCall(args: {
   }
 
   const callNumber = incrementCall(args.session_id);
+
+  if (args.idempotency_key && !session.scenarioId && session.mode !== "chaos") {
+    const cached = findCommittedResponse(
+      session,
+      args.idempotency_key,
+      args.tool_name,
+      args.arguments,
+    );
+    if (cached) {
+      const dedupArgs = { ...args.arguments, idempotency_key: args.idempotency_key };
+      const record: CallRecord = {
+        callNumber,
+        toolName: args.tool_name,
+        args: dedupArgs,
+        injectedError: null,
+        response: cached.response,
+        upstreamExecuted: false,
+        timestamp: Date.now(),
+        deduplicated: true,
+      };
+      addRecord(args.session_id, record);
+
+      let cachedBody: unknown;
+      try {
+        cachedBody = JSON.parse(cached.response);
+      } catch {
+        cachedBody = cached.response;
+      }
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                callNumber,
+                statusCode: 200,
+                injectedError: null,
+                response: cachedBody,
+                deduplicated: true,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+        isError: false,
+      };
+    }
+  }
 
   // Inject idempotency key into args for tracking
   const mergedArgs = { ...args.arguments };

@@ -77,6 +77,138 @@ describe("Tool Handlers", () => {
       expect(body.injectedError).toContain("TIMEOUT");
       expect(result.isError).toBe(true);
     });
+
+    it("enforces idempotency in ad-hoc mode: repeated key returns the identical cached result", () => {
+      const session = handleStartSession({});
+      const sid = JSON.parse((session.content[0] as { text: string }).text).sessionId;
+
+      const first = handleExecuteCall({
+        session_id: sid,
+        tool_name: "write_payment",
+        arguments: { amount: 100 },
+        idempotency_key: "dedup-001",
+      });
+      const firstBody = JSON.parse((first.content[0] as { text: string }).text);
+
+      const second = handleExecuteCall({
+        session_id: sid,
+        tool_name: "write_payment",
+        arguments: { amount: 100 },
+        idempotency_key: "dedup-001",
+      });
+      const secondBody = JSON.parse((second.content[0] as { text: string }).text);
+
+      // Before the fix, call 2 got its own callNumber/timestamp — a different
+      // response from call 1 despite the identical idempotency key.
+      expect(secondBody.response).toEqual(firstBody.response);
+      expect(secondBody.deduplicated).toBe(true);
+      expect(secondBody.callNumber).toBe(2); // call counter still advances
+    });
+
+    it("a dedup hit must not make the audit report misclassify itself as REDUNDANT_CALL/FAIL", async () => {
+      const session = handleStartSession({});
+      const sid = JSON.parse((session.content[0] as { text: string }).text).sessionId;
+
+      handleExecuteCall({
+        session_id: sid,
+        tool_name: "write_payment",
+        arguments: { amount: 100 },
+        idempotency_key: "dedup-report-001",
+      });
+      handleExecuteCall({
+        session_id: sid,
+        tool_name: "write_payment",
+        arguments: { amount: 100 },
+        idempotency_key: "dedup-report-001",
+      });
+
+      const report = await handleGetReport({ session_id: sid, format: "json" });
+      const body = JSON.parse((report.content[0] as { text: string }).text);
+      expect(body.redundantCalls).toBe(0);
+      expect(body.verdict).toBe("PASS");
+      const keyEntry = body.keySummary.find((k: { key: string }) => k.key === "dedup-report-001");
+      expect(keyEntry.writeCalls).toBe(1);
+    });
+
+    it("does NOT dedup when the reused key carries different arguments", () => {
+      const session = handleStartSession({});
+      const sid = JSON.parse((session.content[0] as { text: string }).text).sessionId;
+
+      const first = handleExecuteCall({
+        session_id: sid,
+        tool_name: "write_payment",
+        arguments: { amount: 100 },
+        idempotency_key: "dedup-argmismatch",
+      });
+      const firstBody = JSON.parse((first.content[0] as { text: string }).text);
+
+      const second = handleExecuteCall({
+        session_id: sid,
+        tool_name: "write_payment",
+        arguments: { amount: 999 },
+        idempotency_key: "dedup-argmismatch",
+      });
+      const secondBody = JSON.parse((second.content[0] as { text: string }).text);
+
+      expect(secondBody.deduplicated).toBeUndefined();
+      expect(secondBody.response).not.toEqual(firstBody.response);
+    });
+
+    it("does NOT dedup in chaos mode — a committed key must stay re-executable so error_rate keeps applying", () => {
+      // error_rate 0 here only isolates the dedup guard itself (mode check):
+      // the key commits cleanly on call 1, then call 2 must still go through
+      // normal execution (fresh callNumber/timestamp in the response) instead
+      // of being served from cache — proving the key is NOT permanently
+      // immune to future chaos injection just because it once committed.
+      const session = handleStartSession({ mode: "chaos", error_rate: 0.0 });
+      const sid = JSON.parse((session.content[0] as { text: string }).text).sessionId;
+
+      const first = handleExecuteCall({
+        session_id: sid,
+        tool_name: "write_payment",
+        arguments: { amount: 100 },
+        idempotency_key: "dedup-chaos-001",
+      });
+      const firstBody = JSON.parse((first.content[0] as { text: string }).text);
+
+      const second = handleExecuteCall({
+        session_id: sid,
+        tool_name: "write_payment",
+        arguments: { amount: 100 },
+        idempotency_key: "dedup-chaos-001",
+      });
+      const secondBody = JSON.parse((second.content[0] as { text: string }).text);
+
+      expect(secondBody.deduplicated).toBeUndefined();
+      // Nested callNumber comes from the response BODY, not the wrapper — a
+      // dedup hit would replay call 1's stale body (callNumber 1) verbatim.
+      expect(firstBody.response.callNumber).toBe(1);
+      expect(secondBody.response.callNumber).toBe(2);
+    });
+
+    it("does NOT dedup inside a deterministic scenario — positional triggers stay authoritative", () => {
+      const session = handleStartSession({ scenario_id: "F2" });
+      const sid = JSON.parse((session.content[0] as { text: string }).text).sessionId;
+
+      // Call 1: success (F2 only triggers on callNumber 2)
+      handleExecuteCall({
+        session_id: sid,
+        tool_name: "write_payment",
+        arguments: { amount: 10 },
+        idempotency_key: "f2-no-dedup",
+      });
+
+      // Call 2: same key — F2 must still rate-limit this, not replay call 1's result
+      const second = handleExecuteCall({
+        session_id: sid,
+        tool_name: "write_payment",
+        arguments: { amount: 10 },
+        idempotency_key: "f2-no-dedup",
+      });
+      const secondBody = JSON.parse((second.content[0] as { text: string }).text);
+      expect(secondBody.injectedError).toContain("RATE_LIMIT");
+      expect(second.isError).toBe(true);
+    });
   });
 
   describe("handleGetReport", () => {

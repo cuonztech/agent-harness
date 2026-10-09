@@ -31,11 +31,14 @@ export interface CallRecord {
   response: string;
   upstreamExecuted: boolean;
   timestamp: number;
+  // True for a cache-replay of an already-COMMITTED idempotency key: no new
+  // write happened, so it must not bump writeCalls or affect key-state —
+  // otherwise the audit engine misclassifies the dedup hit itself as a
+  // REDUNDANT_CALL violation.
+  deduplicated?: boolean;
 }
 
 const sessions = new Map<string, SessionState>();
-// Track keys that were ghost-committed (upstream executed but agent got error)
-const ghostCommittedKeys = new Map<string, Set<string>>();
 
 export function createSession(
   scenarioId: string | null = null,
@@ -72,10 +75,14 @@ export function addRecord(sessionId: string, record: CallRecord): void {
   if (!session) throw new Error(`Session ${sessionId} not found`);
   session.history.push(record);
 
+  // Cache replay of an already-committed key: stays in history for the call
+  // count, but is a no-op for key-tracking — nothing new was written.
+  if (record.deduplicated) return;
+
   const key = record.args["idempotency_key"] as string | undefined;
   if (!key) return;
 
-  const isWrite = record.toolName.startsWith("write");
+  const isWrite = isWriteTool(record.toolName);
   const hasInjectedError =
     record.injectedError !== null && !record.injectedError.includes("SUCCESS");
   const hasResponseError =
@@ -132,12 +139,6 @@ export function markGhostCommitted(
   const session = sessions.get(sessionId);
   if (!session) return;
 
-  // Track globally that this key was ghost-committed
-  if (!ghostCommittedKeys.has(sessionId)) {
-    ghostCommittedKeys.set(sessionId, new Set());
-  }
-  ghostCommittedKeys.get(sessionId)!.add(key);
-
   const tracking = session.keyStates.get(key);
   if (tracking) {
     tracking.state = "GHOST_COMMITTED";
@@ -155,10 +156,6 @@ export function markGhostCommitted(
   }
 }
 
-export function wasGhostCommitted(sessionId: string, key: string): boolean {
-  return ghostCommittedKeys.get(sessionId)?.has(key) ?? false;
-}
-
 export function resetSession(sessionId: string): void {
   const session = sessions.get(sessionId);
   if (!session) throw new Error(`Session ${sessionId} not found`);
@@ -173,6 +170,10 @@ export function deleteSession(sessionId: string): boolean {
 
 export function listSessions(): SessionState[] {
   return Array.from(sessions.values());
+}
+
+export function isWriteTool(toolName: string): boolean {
+  return toolName.startsWith("write");
 }
 
 export function isReadTool(toolName: string): boolean {

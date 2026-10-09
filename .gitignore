@@ -6,6 +6,10 @@ dist/
 *.tsbuildinfo
 .vitest/
 
+# Secrets - niemals committen (siehe Hausregel: Secrets nur im KeePassXC-Tresor)
+scripts/*.token
+*.token
+
 # Internal project management (not for public repo)
 AGENT.md
 BRAND.md

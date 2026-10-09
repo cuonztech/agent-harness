@@ -81,6 +81,24 @@ describe("ReportGenerator", () => {
     expect(report.keySummary[0].readBeforeRetry).toBe(true);
     // VALID_RETRY should NOT appear as a critical violation
     expect(report.violations.filter((v) => v.type === "BLIND_RETRY" || v.type === "REDUNDANT_CALL" || v.type === "GHOST_WRITE")).toHaveLength(0);
+    // The failed call 1 was genuinely resolved by the successful retry (call 3).
+    expect(report.recoveredFromErrors).toBe(1);
+  });
+
+  it("recoveredFromErrors does not count a response that merely lacks the string '\"error\"' (e.g. malformed JSON) without an actual later success", () => {
+    const session = createSession();
+    incrementCall(session.sessionId);
+    addRecord(session.sessionId, {
+      callNumber: 1,
+      toolName: "execute_query",
+      args: {},
+      injectedError: "[MALFORMED]",
+      response: '{"result": "ok", "data": {broken',
+      timestamp: Date.now(),
+    });
+
+    const report = generateReport(session);
+    expect(report.recoveredFromErrors).toBe(0);
   });
 
   it("classifies BLIND_RETRY: same key after error WITHOUT read-verify", () => {
