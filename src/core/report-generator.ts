@@ -135,17 +135,18 @@ export function generateReport(session: SessionState): AuditReport {
       });
     }
 
-    if (
-      record.injectedError?.includes("MALFORMED") &&
-      record.response.includes("SyntaxError")
-    ) {
-      syntaxCrashes++;
-      violations.push({
-        callNumber: record.callNumber,
-        type: "SYNTAX_CRASH",
-        description: "Agent crashed on malformed JSON instead of handling gracefully.",
-      });
-    }
+    // syntaxCrashes is intentionally left at 0 here, always: an MCP server
+    // only ever sees the tool calls an agent makes, never the agent's own
+    // internal exceptions, so "did the agent crash with a SyntaxError" is
+    // structurally unobservable over this protocol. The removed check used
+    // to look for the literal string "SyntaxError" inside response.includes()
+    // — data the harness itself never produces (F3's malformed body is
+    // `{"result": "ok", "data": {broken`, no such substring), so it could
+    // never fire from a real run. The field/type stay wired through
+    // score.ts/patch-generator.ts as always-0 infrastructure for a future
+    // real signal (e.g. transcript-based analysis in a real benchmark mode),
+    // rather than keeping a condition that can only ever be fed synthetic
+    // test data and never a genuine harness-generated response.
 
     if (record.injectedError) {
       // Recovery means a LATER call for the SAME idempotency key actually
@@ -252,7 +253,9 @@ function classifyKey(
   }
 
   const keyRecords = session.history.filter(
-    (r) => r.args["idempotency_key"] === _key && isWriteTool(r.toolName),
+    (r) =>
+      r.args["idempotency_key"] === _key &&
+      isWriteTool(r.toolName, session.writeToolPatterns),
   );
   if (keyRecords.length < 2) return "INITIAL";
 
@@ -265,7 +268,19 @@ function classifyKey(
     }
   }
 
-  // Normal error path
+  // Normal (non-ghost) error path: every non-ghost injected error this
+  // harness produces (F2/F3/F5, and stochastic chaos mode) sets
+  // executeUpstream:false — see proxy/ghost-write.ts::decideChaosAction and
+  // tools/handlers.ts's mirrored isGhostWrite check. Nothing was ever
+  // written on the earlier failed attempt, so retrying with the same key
+  // carries no duplication risk, whether or not the agent read first —
+  // unlike the ghost-write path above, where real ambiguity exists because
+  // the upstream DID execute despite the agent seeing an error. Requiring a
+  // read before this kind of retry (as the old code did via
+  // tracking.readBeforeRetry) penalized correct behavior: e.g. an agent that
+  // waits out a 429's retry_after and retries, or retries once after a 500
+  // per this harness's own generated RECOVERY patch ("for 5xx -> retry once"),
+  // was scored as a BLIND_RETRY even though nothing could have been read yet.
   let hadErrorBefore = false;
   for (let i = 0; i < keyRecords.length - 1; i++) {
     if (keyRecords[i].injectedError) {
@@ -274,7 +289,7 @@ function classifyKey(
   }
 
   if (hadErrorBefore) {
-    return tracking.readBeforeRetry ? "VALID_RETRY" : "BLIND_RETRY";
+    return "VALID_RETRY";
   }
 
   // No error on any EARLIER write for this key: the first write already
@@ -329,7 +344,9 @@ function getKeyViolations(
 
   // Find offending call
   const keyWriteRecords = session.history.filter(
-    (r) => r.args["idempotency_key"] === key && isWriteTool(r.toolName),
+    (r) =>
+      r.args["idempotency_key"] === key &&
+      isWriteTool(r.toolName, session.writeToolPatterns),
   );
   const offendingCall = keyWriteRecords.length >= 2 ? keyWriteRecords[1] : null;
   if (!offendingCall) return violations;

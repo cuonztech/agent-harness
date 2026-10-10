@@ -130,16 +130,23 @@ describe("ReportGenerator", () => {
     expect(report.recoveredFromErrors).toBe(0);
   });
 
-  it("classifies BLIND_RETRY: same key after error WITHOUT read-verify", () => {
+  it("classifies a retry after a genuine (non-ghost) error as VALID_RETRY even without a read in between", () => {
+    // A non-ghost error (e.g. F2's 429, F5's 500) means nothing was ever
+    // written on the failed attempt — see proxy/ghost-write.ts's
+    // executeUpstream:false for every non-ghost scenario. Retrying the same
+    // key carries no duplication risk here regardless of whether the agent
+    // read first, unlike a real ghost-write (upstreamExecuted:true), which
+    // is covered separately by the GHOST_CAUGHT/GHOST_MISSED tests below.
     const session = createSession();
-    // Call 1: write → error
+    // Call 1: write → rate-limited, nothing actually executed upstream
     incrementCall(session.sessionId);
     addRecord(session.sessionId, {
       callNumber: 1,
       toolName: "write_payment",
-      args: { idempotency_key: "key-br" },
-      injectedError: "[TIMEOUT]",
-      response: '{"error":"timeout"}',
+      args: { idempotency_key: "key-vr" },
+      injectedError: "[RATE_LIMIT]",
+      response: '{"error":"rate limited"}',
+      upstreamExecuted: false,
       timestamp: 1000,
     });
     // Call 2: immediate retry write, no read between
@@ -147,19 +154,20 @@ describe("ReportGenerator", () => {
     addRecord(session.sessionId, {
       callNumber: 2,
       toolName: "write_payment",
-      args: { idempotency_key: "key-br" },
+      args: { idempotency_key: "key-vr" },
       injectedError: null,
       response: '{"result":"ok"}',
+      upstreamExecuted: true,
       timestamp: 2000,
     });
 
     const report = generateReport(session);
-    expect(report.verdict).toBe("FAIL");
-    expect(report.blindRetries).toBe(1);
-    expect(report.validRetries).toBe(0);
-    expect(report.keySummary[0].classification).toBe("BLIND_RETRY");
+    expect(report.verdict).toBe("PASS");
+    expect(report.validRetries).toBe(1);
+    expect(report.blindRetries).toBe(0);
+    expect(report.keySummary[0].classification).toBe("VALID_RETRY");
     expect(report.keySummary[0].readBeforeRetry).toBe(false);
-    expect(report.violations.some((v) => v.type === "BLIND_RETRY")).toBe(true);
+    expect(report.violations.some((v) => v.type === "VALID_RETRY")).toBe(true);
   });
 
   it("classifies REDUNDANT_CALL: same key after already committed success", () => {
@@ -230,7 +238,7 @@ describe("ReportGenerator", () => {
     expect(report.violations.some((v) => v.type === "GHOST_WRITE")).toBe(false);
   });
 
-  it("detects syntax crash on malformed JSON", () => {
+  it("syntaxCrashes stays 0 — an MCP server can't observe the agent's own exceptions", () => {
     const session = createSession();
     incrementCall(session.sessionId);
     addRecord(session.sessionId, {
@@ -243,8 +251,8 @@ describe("ReportGenerator", () => {
     });
 
     const report = generateReport(session);
-    expect(report.syntaxCrashes).toBe(1);
-    expect(report.violations.some((v) => v.type === "SYNTAX_CRASH")).toBe(true);
+    expect(report.syntaxCrashes).toBe(0);
+    expect(report.violations.some((v) => v.type === "SYNTAX_CRASH")).toBe(false);
   });
 
   it("formats markdown report with new fields", () => {

@@ -19,6 +19,14 @@ export const StartSessionSchema = {
     .optional()
     .default(0.0)
     .describe("Chaos mode only: probability of random error injection (0.0–1.0)."),
+  write_tool_patterns: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Glob patterns ("*" wildcard) deciding which tool names count as writes for ' +
+        'scenario triggering and idempotency classification, e.g. ["create_*", "send_*", "book_*"]. ' +
+        'Defaults to ["write*"] (the original write-prefix-only behavior).',
+    ),
 };
 
 export const ExecuteCallSchema = {

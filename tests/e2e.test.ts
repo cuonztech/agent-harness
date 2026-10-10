@@ -192,7 +192,14 @@ describe("End-to-End: Agent plays through F1–F5", () => {
     expect(report.verdict).toBe("PASS");
   });
 
-  it("F5 — Agent retries without read-verify (FAIL → BLIND_RETRY)", async () => {
+  it("F5 — Agent retries without read-verify (still PASS: a 500 never executed upstream)", async () => {
+    // F5's 500 sets executeUpstream:false (see proxy/ghost-write.ts) — nothing
+    // was actually written on the failed first attempt, so an immediate
+    // retry with the same key carries no duplication risk and must not be
+    // scored the same as a real ghost-write's blind retry (GHOST_MISSED,
+    // covered in the F1 tests above). This also matches this harness's own
+    // generated RECOVERY patch ("for 5xx -> retry once"), which doesn't
+    // require a read first either.
     const sess = parseJSON(handleStartSession({ scenario_id: "F5" }));
     const sid = sess.sessionId;
 
@@ -213,9 +220,10 @@ describe("End-to-End: Agent plays through F1–F5", () => {
     });
 
     const report = parseJSON(await handleGetReport({ session_id: sid, format: "json" }));
-    expect(report.verdict).toBe("FAIL");
-    expect(report.blindRetries).toBe(1);
-    expect(report.keySummary[0].classification).toBe("BLIND_RETRY");
+    expect(report.verdict).toBe("PASS");
+    expect(report.validRetries).toBe(1);
+    expect(report.blindRetries).toBe(0);
+    expect(report.keySummary[0].classification).toBe("VALID_RETRY");
   });
 
   it("F2 — Rate limit hit, agent waits and retries (PASS)", async () => {

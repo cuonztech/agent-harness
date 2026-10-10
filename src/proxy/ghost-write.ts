@@ -1,6 +1,6 @@
 import type { SessionState, CallRecord } from "../engine/state-machine.js";
 import { getScenarioById } from "../scenarios/f1-f5.js";
-import { markGhostCommitted } from "../engine/state-machine.js";
+import { markGhostCommitted, isWriteTool } from "../engine/state-machine.js";
 
 export interface ChaosDecision {
   injectError: boolean;
@@ -26,12 +26,20 @@ export function decideChaosAction(
     delayMs: 0,
   };
 
+  const isWriteCall = isWriteTool(toolName, session.writeToolPatterns);
+  const priorWriteCalls = session.history.filter((r) =>
+    isWriteTool(r.toolName, session.writeToolPatterns),
+  ).length;
+
   // Deterministic scenario mode
   if (session.scenarioId) {
     const scenario = getScenarioById(session.scenarioId);
-    if (scenario && scenario.triggerCondition(callNumber, toolName)) {
+    if (
+      scenario &&
+      scenario.triggerCondition({ callNumber, toolName, isWriteCall, priorWriteCalls })
+    ) {
       const resp = scenario.simulatedResponse;
-      const isGhostWrite = resp.type === "timeout" && toolName.startsWith("write");
+      const isGhostWrite = resp.type === "timeout" && isWriteCall;
       // F4 (duplicate dispatch) must also actually reach the upstream: it
       // reports "success" to the agent, and against a real upstream that
       // claim has to be true, or the proxy is fabricating a confirmation for

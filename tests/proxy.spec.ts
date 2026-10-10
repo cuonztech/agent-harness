@@ -16,19 +16,48 @@ describe("Proxy & Ghost-Write", () => {
   });
 
   describe("Chaos Decision Engine", () => {
-    it("returns no chaos for non-triggered scenario", () => {
+    it("returns no chaos once past the agent's first write (F1 already triggered)", () => {
       const session = createSession("F1");
+      // F1 now triggers on the first WRITE call, not a fixed call number —
+      // simulate that first write already having happened.
+      incrementCall(session.sessionId);
+      addRecord(session.sessionId, {
+        callNumber: 1,
+        toolName: "write_payment",
+        args: {},
+        injectedError: "[TIMEOUT]",
+        response: '{"error":"timeout"}',
+        upstreamExecuted: true,
+        timestamp: Date.now(),
+      });
       const decision = decideChaosAction(session, 2, "write_payment", {});
       expect(decision.injectError).toBe(false);
       expect(decision.executeUpstream).toBe(true);
     });
 
-    it("returns ghost-write for F1 timeout on first write", () => {
+    it("returns ghost-write for F1 timeout on the agent's first write", () => {
       const session = createSession("F1");
       const decision = decideChaosAction(session, 1, "write_payment", {});
       expect(decision.injectError).toBe(true);
       expect(decision.errorType).toContain("TIMEOUT");
       expect(decision.executeUpstream).toBe(true); // Ghost-write: execute upstream
+    });
+
+    it("triggers F1 on the first write even if the agent read first", () => {
+      const session = createSession("F1");
+      incrementCall(session.sessionId);
+      addRecord(session.sessionId, {
+        callNumber: 1,
+        toolName: "read_payment_status",
+        args: {},
+        injectedError: null,
+        response: '{"result":"ok"}',
+        upstreamExecuted: true,
+        timestamp: Date.now(),
+      });
+      const decision = decideChaosAction(session, 2, "write_payment", {});
+      expect(decision.injectError).toBe(true);
+      expect(decision.errorType).toContain("TIMEOUT");
     });
 
     it("returns error-only for F5 (no upstream execution)", () => {

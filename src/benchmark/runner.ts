@@ -104,12 +104,17 @@ async function simulateAgent(
       break;
     }
     case "F2": {
-      // F2: write → success → write → 429 → read → wait
-      call(sessionId, "write_payment", { amount: 10 }, key);
-      await sleep(jitterMs);
-      call(sessionId, "write_payment", { amount: 10 }, key);
-      await sleep(jitterMs);
+      // F2 triggers on call #2 — call #1 is deliberately unrelated (no key)
+      // so the triggering write is genuinely the agent's FIRST attempt at
+      // this key, not a redundant re-issue of one that already committed
+      // (the old script wrote the same key on BOTH call #1 and #2, which
+      // made call #2's 429 look like a needless resend rather than a
+      // legitimate "my first try got rate-limited" case).
       call(sessionId, "read_status", {});
+      await sleep(jitterMs);
+      call(sessionId, "write_payment", { amount: 10 }, key); // triggers F2 (429)
+      await sleep(jitterMs);
+      call(sessionId, "write_payment", { amount: 10 }, key); // retry, same key, succeeds
       break;
     }
     case "F3": {

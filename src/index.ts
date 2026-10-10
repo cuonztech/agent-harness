@@ -45,18 +45,49 @@ async function runProxyMode(): Promise<void> {
   const cwdIdx = args.indexOf("--upstream-cwd");
   const upstreamCwd = cwdIdx !== -1 ? args[cwdIdx + 1] : undefined;
 
+  const envIdx = args.indexOf("--upstream-env");
+  const upstreamEnv: Record<string, string> = {};
+  if (envIdx !== -1 && args[envIdx + 1]) {
+    for (const pair of args[envIdx + 1].split(",")) {
+      const eq = pair.indexOf("=");
+      if (eq === -1) {
+        process.stderr.write(
+          `Error: --upstream-env entry "${pair}" is not KEY=VALUE.\n`,
+        );
+        process.exit(1);
+        return;
+      }
+      upstreamEnv[pair.slice(0, eq)] = pair.slice(eq + 1);
+    }
+  }
+
+  const writeToolsIdx = args.indexOf("--write-tools");
+  const writeToolPatterns =
+    writeToolsIdx !== -1 && args[writeToolsIdx + 1]
+      ? args[writeToolsIdx + 1].split(",")
+      : undefined;
+
   const scenarioIdx = args.indexOf("--scenario");
   const scenarioId = scenarioIdx !== -1 ? args[scenarioIdx + 1] : undefined;
 
   const modeIdx = args.indexOf("--mode");
+  const chaosModeRequested = modeIdx !== -1 ? args[modeIdx + 1] : undefined;
   const chaosMode: "deterministic" | "chaos" =
-    modeIdx !== -1 && args[modeIdx + 1] === "chaos" ? "chaos" : "deterministic";
+    chaosModeRequested === "chaos" ? "chaos" : "deterministic";
 
   const errorRateIdx = args.indexOf("--error-rate");
   const errorRate =
     errorRateIdx !== -1 && args[errorRateIdx + 1]
       ? parseFloat(args[errorRateIdx + 1])
       : 0.0;
+
+  if (chaosMode === "chaos" && errorRateIdx === -1) {
+    process.stderr.write(
+      "[cuonztech-agent-harness] WARNING: --mode chaos without --error-rate defaults " +
+        "to a 0% error rate — this run will inject nothing. Pass e.g. --error-rate 0.2 " +
+        "to actually trigger stochastic failures.\n",
+    );
+  }
 
   if (scenarioId || chaosMode === "chaos") {
     process.stderr.write(
@@ -68,10 +99,16 @@ async function runProxyMode(): Promise<void> {
   }
 
   const interceptor = new ProxyInterceptor({
-    upstream: { command: upstreamCommand, args: upstreamArgs, cwd: upstreamCwd },
+    upstream: {
+      command: upstreamCommand,
+      args: upstreamArgs,
+      cwd: upstreamCwd,
+      env: upstreamEnv,
+    },
     scenarioId,
     mode: chaosMode,
     errorRate,
+    writeToolPatterns,
   });
 
   await interceptor.connectUpstream();

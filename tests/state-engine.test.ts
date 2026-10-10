@@ -7,6 +7,7 @@ import {
   resetSession,
   deleteSession,
   listSessions,
+  isWriteTool,
   type CallRecord,
 } from "../src/core/state-engine.js";
 
@@ -96,5 +97,48 @@ describe("StateEngine", () => {
     createSession();
     createSession();
     expect(listSessions().length).toBeGreaterThanOrEqual(2);
+  });
+
+  describe("write-tool detection (configurable beyond the 'write' prefix)", () => {
+    it("defaults to the write* prefix", () => {
+      const session = createSession();
+      expect(session.writeToolPatterns).toEqual(["write*"]);
+      expect(isWriteTool("write_payment")).toBe(true);
+      expect(isWriteTool("create_payment")).toBe(false);
+    });
+
+    it("accepts custom glob patterns via createSession", () => {
+      const session = createSession("F1", "deterministic", 0, [
+        "create_*",
+        "send_*",
+        "book_*",
+      ]);
+      expect(session.writeToolPatterns).toEqual(["create_*", "send_*", "book_*"]);
+      expect(isWriteTool("create_payment", session.writeToolPatterns)).toBe(true);
+      expect(isWriteTool("send_invoice", session.writeToolPatterns)).toBe(true);
+      expect(isWriteTool("write_payment", session.writeToolPatterns)).toBe(false);
+    });
+
+    it("an empty pattern list falls back to the write* default instead of matching nothing", () => {
+      const session = createSession("F1", "deterministic", 0, []);
+      expect(session.writeToolPatterns).toEqual(["write*"]);
+    });
+
+    it("addRecord uses the session's own write-tool patterns for key tracking", () => {
+      const session = createSession(null, "deterministic", 0, ["create_*"]);
+      incrementCall(session.sessionId);
+      addRecord(session.sessionId, {
+        callNumber: 1,
+        toolName: "create_payment",
+        args: { idempotency_key: "custom-write-1" },
+        injectedError: null,
+        response: '{"result":"ok"}',
+        upstreamExecuted: true,
+        timestamp: Date.now(),
+      });
+      const tracking = session.keyStates.get("custom-write-1");
+      expect(tracking?.writeCalls).toBe(1);
+      expect(tracking?.state).toBe("COMMITTED");
+    });
   });
 });

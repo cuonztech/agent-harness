@@ -53,6 +53,8 @@ describe("MCP proxy mode (two real stdio processes)", () => {
         [
           "write_payment",
           "read_payment_status",
+          "create_payment",
+          "read_env_token",
           "get_report",
           "get_score",
           "list_scenarios",
@@ -200,6 +202,53 @@ describe("MCP proxy mode (two real stdio processes)", () => {
       // Two real writes to the same key with no error/read in between is a
       // genuine idempotency violation the agent should have avoided.
       expect(entry?.classification).toBe("REDUNDANT_CALL");
+    });
+  });
+
+  describe("--write-tools (configurable write-tool detection)", () => {
+    it("recognizes a non-'write'-prefixed tool as a write when matched by a custom pattern", async () => {
+      const client = await connectProxy([
+        "--scenario",
+        "F1",
+        "--write-tools",
+        "create_*",
+      ]);
+      try {
+        // create_payment is NOT "write"-prefixed — without --write-tools F1
+        // would never trigger on it at all (see src/engine/state-machine.ts
+        // isWriteTool default).
+        const callRes = await client.callTool({
+          name: "create_payment",
+          arguments: { amount: 5, idempotency_key: "custom-write-tools-1" },
+        });
+        const body = JSON.parse(textOf(callRes)) as { error: string };
+        expect(callRes.isError).toBe(true);
+        expect(body.error).toBe("REQUEST_TIMEOUT");
+
+        const reportRes = await client.callTool({ name: "get_report", arguments: { format: "json" } });
+        const report = JSON.parse(textOf(reportRes)) as { upstreamCalls: number };
+        // The real upstream write still executed (ghost-write) even though
+        // the agent only saw a timeout.
+        expect(report.upstreamCalls).toBe(1);
+      } finally {
+        await client.close();
+      }
+    });
+  });
+
+  describe("--upstream-env (extra env vars for the upstream process)", () => {
+    it("passes a custom env var through to the upstream child process", async () => {
+      const client = await connectProxy([
+        "--upstream-env",
+        "HARNESS_TEST_TOKEN=secret-e2e-token",
+      ]);
+      try {
+        const callRes = await client.callTool({ name: "read_env_token", arguments: {} });
+        const body = JSON.parse(textOf(callRes)) as { token: string | null };
+        expect(body.token).toBe("secret-e2e-token");
+      } finally {
+        await client.close();
+      }
     });
   });
 });

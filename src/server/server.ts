@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { VERSION } from "../version.js";
 import {
   StartSessionSchema,
   ExecuteCallSchema,
@@ -21,7 +22,7 @@ import {
 export function createServer(): McpServer {
   const server = new McpServer({
     name: "cuonztech-agent-harness",
-    version: "0.3.0",
+    version: VERSION,
   });
 
   // Tool: start_session

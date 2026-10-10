@@ -6,8 +6,12 @@ export const F1_TIMEOUT_FIRST_WRITE: ScenarioDefinition = {
   name: "Timeout on First Write",
   description:
     "Simuliert einen Timeout beim ersten Schreibversuch. Der Agent muss den Fehler erkennen, verifizieren (Read-before-Write) und dann mit Idempotency-Key wiederholen.",
-  triggerCondition: (callNumber, toolName) =>
-    callNumber === 1 && toolName.startsWith("write"),
+  // Fires on the agent's first WRITE call specifically, regardless of its
+  // position in the overall call sequence — an agent that reads first, then
+  // writes, must still see the timeout on that write (previously gated on
+  // callNumber === 1, so a cautious read-first agent never triggered F1 at all).
+  triggerCondition: ({ priorWriteCalls, isWriteCall }) =>
+    priorWriteCalls === 0 && isWriteCall,
   simulatedResponse: {
     type: "timeout",
     statusCode: 408,
@@ -24,7 +28,7 @@ export const F2_RATE_LIMIT: ScenarioDefinition = {
   name: "Rate Limit (429)",
   description:
     "Simuliert einen HTTP 429 Rate-Limit beim zweiten Aufruf. Der Agent muss Backoff respektieren und nicht sofort retry-en.",
-  triggerCondition: (callNumber) => callNumber === 2,
+  triggerCondition: ({ callNumber }) => callNumber === 2,
   simulatedResponse: {
     type: "rate_limit",
     statusCode: 429,
@@ -44,7 +48,7 @@ export const F3_MALFORMED_JSON: ScenarioDefinition = {
   name: "Malformed JSON Response",
   description:
     "Liefert ein defektes JSON zurück. Der Agent darf nicht crashen (SyntaxError), sondern muss graceful reagieren.",
-  triggerCondition: (callNumber) => callNumber === 1,
+  triggerCondition: ({ callNumber }) => callNumber === 1,
   simulatedResponse: {
     type: "malformed",
     statusCode: 200,
@@ -60,8 +64,10 @@ export const F4_DUPLICATE_DISPATCH: ScenarioDefinition = {
   name: "Duplicate Dispatch (Ghost-Write)",
   description:
     "Beide Aufrufe erhalten Erfolg. Weder Server noch Proxy dedupen von sich aus — schreibt der Agent zweimal, landen auch zweimal echte Writes. Der Agent muss Idempotency selbst prüfen und den Duplikat-Aufruf erkennen.",
-  triggerCondition: (callNumber, toolName) =>
-    callNumber <= 2 && toolName.startsWith("write"),
+  // Fires on the agent's first TWO write calls specifically (same reasoning
+  // as F1: positional-by-callNumber would miss an agent that reads first).
+  triggerCondition: ({ priorWriteCalls, isWriteCall }) =>
+    priorWriteCalls <= 1 && isWriteCall,
   // Only used by the non-proxy session/benchmark simulation (tools/handlers.ts),
   // which has no real upstream to call. In proxy mode (proxy/ghost-write.ts +
   // proxy/interceptor.ts), "success"-typed scenarios now actually execute
@@ -87,7 +93,7 @@ export const F5_SERVER_ERROR_THEN_SUCCESS: ScenarioDefinition = {
   name: "Server Error (500) then Success",
   description:
     "Erster Aufruf: HTTP 500. Zweiter Aufruf: Erfolg. Der Agent muss den Fehler erkennen, einmal retry-en und dann stoppen.",
-  triggerCondition: (callNumber) => callNumber === 1,
+  triggerCondition: ({ callNumber }) => callNumber === 1,
   simulatedResponse: {
     type: "error",
     statusCode: 500,

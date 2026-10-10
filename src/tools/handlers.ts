@@ -70,6 +70,7 @@ export function handleStartSession(args: {
   scenario_id?: string;
   mode?: "deterministic" | "chaos";
   error_rate?: number;
+  write_tool_patterns?: string[];
 }) {
   const scenarioId = args.scenario_id ?? null;
   const mode = args.mode ?? "deterministic";
@@ -90,7 +91,12 @@ export function handleStartSession(args: {
     }
   }
 
-  const session = createSession(scenarioId, mode, errorRate);
+  const session = createSession(
+    scenarioId,
+    mode,
+    errorRate,
+    args.write_tool_patterns,
+  );
 
   return {
     content: [
@@ -198,16 +204,34 @@ export function handleExecuteCall(args: {
   // the same classification used by the (unwired) proxy's decideChaosAction,
   // so F1 produces a real GHOST_CAUGHT/GHOST_MISSED instead of a generic retry.
   let isGhostWrite = false;
+  const isWriteCall = isWriteTool(args.tool_name, session.writeToolPatterns);
+  const priorWriteCalls = session.history.filter((r) =>
+    isWriteTool(r.toolName, session.writeToolPatterns),
+  ).length;
 
   if (session.scenarioId) {
     const scenario = getScenarioById(session.scenarioId);
-    if (scenario && scenario.triggerCondition(callNumber, args.tool_name)) {
+    if (
+      scenario &&
+      scenario.triggerCondition({
+        callNumber,
+        toolName: args.tool_name,
+        isWriteCall,
+        priorWriteCalls,
+      })
+    ) {
       const resp = scenario.simulatedResponse;
       // Don't mark "success" type as injected error — F4 simulates successful duplicate dispatches
       injectedError = resp.type === "success" ? null : `[${resp.type.toUpperCase()}]`;
       statusCode = resp.statusCode ?? 500;
       responseBody = resp.body;
-      isGhostWrite = resp.type === "timeout" && isWriteTool(args.tool_name);
+      isGhostWrite = resp.type === "timeout" && isWriteCall;
+      // Note: resp.delayMs is NOT awaited on this synchronous path (unlike
+      // proxy mode's interceptor.ts) — handleExecuteCall is called
+      // synchronously from ~30 call sites across the test suite and
+      // benchmark runner; making it async to honor a delay that no built-in
+      // scenario currently sets to a nonzero value isn't worth that ripple.
+      // Use `proxy` mode if simulated latency matters.
     } else {
       responseBody = {
         result: "ok",

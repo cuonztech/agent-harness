@@ -30,13 +30,27 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description: "Reads payment status (fixture upstream).",
       inputSchema: { type: "object", properties: {} },
     },
+    {
+      name: "create_payment",
+      description: "Writes a payment under a non-'write'-prefixed name (fixture upstream, for --write-tools tests).",
+      inputSchema: {
+        type: "object",
+        properties: { amount: { type: "number" } },
+        required: ["amount"],
+      },
+    },
+    {
+      name: "read_env_token",
+      description: "Echoes an env var (fixture upstream, for --upstream-env tests).",
+      inputSchema: { type: "object", properties: {} },
+    },
   ],
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
-  if (name === "write_payment") {
+  if (name === "write_payment" || name === "create_payment") {
     return {
       content: [
         {
@@ -50,6 +64,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (name === "read_payment_status") {
     return {
       content: [{ type: "text", text: JSON.stringify({ status: "committed" }) }],
+    };
+  }
+
+  if (name === "read_env_token") {
+    return {
+      content: [
+        { type: "text", text: JSON.stringify({ token: process.env.HARNESS_TEST_TOKEN ?? null }) },
+      ],
     };
   }
 

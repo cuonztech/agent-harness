@@ -27,6 +27,10 @@ export interface SessionState {
   // back before retrying. Independent of keyStates' tool-name-based
   // readBeforeRetry heuristic — see report-generator.ts's stateDiff fields.
   stateDiff: StateDiffStore;
+  // Glob patterns (e.g. "write*", "create_*", "send_*") deciding which tool
+  // names count as writes for this session — see isWriteTool(). Defaults to
+  // ["write*"], i.e. the harness's original prefix-only behavior.
+  writeToolPatterns: string[];
 }
 
 export interface CallRecord {
@@ -50,6 +54,7 @@ export function createSession(
   scenarioId: string | null = null,
   mode: "deterministic" | "chaos" = "deterministic",
   errorRate = 0.0,
+  writeToolPatterns: string[] = ["write*"],
 ): SessionState {
   const session: SessionState = {
     sessionId: randomUUID(),
@@ -61,6 +66,8 @@ export function createSession(
     keyStates: new Map(),
     createdAt: Date.now(),
     stateDiff: new StateDiffStore(),
+    writeToolPatterns:
+      writeToolPatterns.length > 0 ? writeToolPatterns : ["write*"],
   };
   sessions.set(session.sessionId, session);
   return session;
@@ -89,7 +96,7 @@ export function addRecord(sessionId: string, record: CallRecord): void {
   const key = record.args["idempotency_key"] as string | undefined;
   if (!key) return;
 
-  const isWrite = isWriteTool(record.toolName);
+  const isWrite = isWriteTool(record.toolName, session.writeToolPatterns);
   const hasInjectedError =
     record.injectedError !== null && !record.injectedError.includes("SUCCESS");
   const hasResponseError =
@@ -191,8 +198,25 @@ export function listSessions(): SessionState[] {
   return Array.from(sessions.values());
 }
 
-export function isWriteTool(toolName: string): boolean {
-  return toolName.startsWith("write");
+// Default kept as ["write*"] for backward compatibility with every call site
+// that doesn't (yet) thread a session's own writeToolPatterns through —
+// identical behavior to the old hardcoded toolName.startsWith("write").
+export function isWriteTool(
+  toolName: string,
+  patterns: string[] = ["write*"],
+): boolean {
+  return matchesAnyGlob(toolName, patterns);
+}
+
+// Minimal glob support (only "*" as a wildcard) so a write-tool pattern like
+// "create_*" or "send_*" can be configured per session instead of hardcoding
+// a single "write" prefix — see --write-tools (proxy mode) and
+// start_session's write_tool_patterns (live sessions).
+export function matchesAnyGlob(name: string, patterns: string[]): boolean {
+  return patterns.some((pattern) => {
+    const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+    return new RegExp(`^${escaped}$`).test(name);
+  });
 }
 
 export function isReadTool(toolName: string): boolean {

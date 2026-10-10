@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { ALL_SCENARIOS, getScenarioById } from "../src/scenarios/f1-f5.js";
+import type { TriggerContext } from "../src/scenarios/types.js";
+
+function ctx(overrides: Partial<TriggerContext>): TriggerContext {
+  return { callNumber: 1, toolName: "any", isWriteCall: false, priorWriteCalls: 0, ...overrides };
+}
 
 describe("Scenarios F1-F5", () => {
   it("has exactly 5 scenarios", () => {
@@ -29,36 +34,41 @@ describe("Scenarios F1-F5", () => {
     expect(getScenarioById("F99")).toBeUndefined();
   });
 
-  it("F1 triggers on first write call", () => {
+  it("F1 triggers on the agent's first write call, regardless of call position", () => {
     const f1 = getScenarioById("F1")!;
-    expect(f1.triggerCondition(1, "write_payment")).toBe(true);
-    expect(f1.triggerCondition(2, "write_payment")).toBe(false);
-    expect(f1.triggerCondition(1, "read_data")).toBe(false);
+    expect(f1.triggerCondition(ctx({ priorWriteCalls: 0, isWriteCall: true }))).toBe(true);
+    expect(f1.triggerCondition(ctx({ priorWriteCalls: 1, isWriteCall: true }))).toBe(false);
+    expect(f1.triggerCondition(ctx({ priorWriteCalls: 0, isWriteCall: false }))).toBe(false);
+    // A read-first agent must still trigger F1 on its first write, even
+    // though that write isn't callNumber 1 overall.
+    expect(
+      f1.triggerCondition(ctx({ callNumber: 3, priorWriteCalls: 0, isWriteCall: true })),
+    ).toBe(true);
   });
 
   it("F2 triggers on second call regardless of tool", () => {
     const f2 = getScenarioById("F2")!;
-    expect(f2.triggerCondition(2, "any_tool")).toBe(true);
-    expect(f2.triggerCondition(1, "any_tool")).toBe(false);
+    expect(f2.triggerCondition(ctx({ callNumber: 2 }))).toBe(true);
+    expect(f2.triggerCondition(ctx({ callNumber: 1 }))).toBe(false);
   });
 
   it("F3 triggers on first call", () => {
     const f3 = getScenarioById("F3")!;
-    expect(f3.triggerCondition(1, "any")).toBe(true);
-    expect(f3.triggerCondition(2, "any")).toBe(false);
+    expect(f3.triggerCondition(ctx({ callNumber: 1 }))).toBe(true);
+    expect(f3.triggerCondition(ctx({ callNumber: 2 }))).toBe(false);
   });
 
-  it("F4 triggers on first two write calls", () => {
+  it("F4 triggers on the agent's first two write calls, regardless of call position", () => {
     const f4 = getScenarioById("F4")!;
-    expect(f4.triggerCondition(1, "write_payment")).toBe(true);
-    expect(f4.triggerCondition(2, "write_payment")).toBe(true);
-    expect(f4.triggerCondition(3, "write_payment")).toBe(false);
-    expect(f4.triggerCondition(1, "read_data")).toBe(false);
+    expect(f4.triggerCondition(ctx({ priorWriteCalls: 0, isWriteCall: true }))).toBe(true);
+    expect(f4.triggerCondition(ctx({ priorWriteCalls: 1, isWriteCall: true }))).toBe(true);
+    expect(f4.triggerCondition(ctx({ priorWriteCalls: 2, isWriteCall: true }))).toBe(false);
+    expect(f4.triggerCondition(ctx({ priorWriteCalls: 0, isWriteCall: false }))).toBe(false);
   });
 
   it("F5 triggers on first call", () => {
     const f5 = getScenarioById("F5")!;
-    expect(f5.triggerCondition(1, "any")).toBe(true);
-    expect(f5.triggerCondition(2, "any")).toBe(false);
+    expect(f5.triggerCondition(ctx({ callNumber: 1 }))).toBe(true);
+    expect(f5.triggerCondition(ctx({ callNumber: 2 }))).toBe(false);
   });
 });

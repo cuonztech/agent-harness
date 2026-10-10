@@ -11,6 +11,7 @@ import {
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { VERSION } from "../version.js";
 import type { ProxyInterceptor } from "./interceptor.js";
 import {
   GetReportSchema,
@@ -77,7 +78,7 @@ function isOwnTool(name: string): name is OwnToolName {
 
 export function createProxyServer(interceptor: ProxyInterceptor): Server {
   const server = new Server(
-    { name: "cuonztech-agent-harness-proxy", version: "0.3.0" },
+    { name: "cuonztech-agent-harness-proxy", version: VERSION },
     { capabilities: { tools: {} } },
   );
 

@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import { VERSION } from "../version.js";
 import {
   createSession,
   getSession,
@@ -20,17 +21,29 @@ import {
   buildCallRecord,
 } from "./ghost-write.js";
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export interface ProxyConfig {
   upstream: UpstreamConfig;
   scenarioId?: string;
   mode?: "deterministic" | "chaos";
   errorRate?: number;
+  writeToolPatterns?: string[];
 }
 
 export interface UpstreamConfig {
   command: string;
   args?: string[];
   cwd?: string;
+  // Extra/override env vars for the upstream process, e.g. an API token it
+  // reads from its environment. Without this, the MCP SDK's StdioClientTransport
+  // only passes a small OS-level allowlist (PATH, HOME, etc. — see
+  // DEFAULT_INHERITED_ENV_VARS in its stdio.js) to the child process, not the
+  // caller's full environment, so any upstream expecting credentials from env
+  // would silently start unauthenticated.
+  env?: Record<string, string>;
 }
 
 export class ProxyInterceptor {
@@ -46,6 +59,7 @@ export class ProxyInterceptor {
       config.scenarioId ?? null,
       config.mode ?? "deterministic",
       config.errorRate ?? 0.0,
+      config.writeToolPatterns,
     );
   }
 
@@ -58,11 +72,18 @@ export class ProxyInterceptor {
       command: this.config.upstream.command,
       args: this.config.upstream.args,
       cwd: this.config.upstream.cwd,
+      // Inherit the full parent environment (same as any normal child
+      // process spawn) instead of the SDK's restrictive default allowlist,
+      // then layer --upstream-env on top for additions/overrides.
+      env: {
+        ...(process.env as Record<string, string>),
+        ...this.config.upstream.env,
+      },
       stderr: "pipe",
     });
 
     this.upstreamClient = new Client(
-      { name: "cuonztech-harness-proxy", version: "0.2.0" },
+      { name: "cuonztech-harness-proxy", version: VERSION },
       { capabilities: {} },
     );
     await this.upstreamClient.connect(this.upstreamTransport);
@@ -159,6 +180,16 @@ export class ProxyInterceptor {
     let agentIsError: boolean;
 
     if (isSimulatedFailure) {
+      // Honor the scenario's configured delay before replying — previously
+      // decision.delayMs was computed but never awaited anywhere, so a
+      // scenario simulating a slow timeout behaved identically to an
+      // instant one. None of the built-in F1–F5 scenarios currently set a
+      // nonzero delayMs, so this has no effect yet, but the plumbing is now
+      // real instead of a dead field.
+      if (decision.delayMs > 0) {
+        await sleep(decision.delayMs);
+      }
+
       injectedError = decision.errorType;
       const errorText =
         typeof decision.errorBody === "string"
