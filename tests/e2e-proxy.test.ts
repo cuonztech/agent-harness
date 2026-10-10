@@ -55,6 +55,7 @@ describe("MCP proxy mode (two real stdio processes)", () => {
           "read_payment_status",
           "create_payment",
           "read_env_token",
+          "mutate_ledger",
           "get_report",
           "get_score",
           "list_scenarios",
@@ -205,33 +206,59 @@ describe("MCP proxy mode (two real stdio processes)", () => {
     });
   });
 
-  describe("--write-tools (configurable write-tool detection)", () => {
-    it("recognizes a non-'write'-prefixed tool as a write when matched by a custom pattern", async () => {
-      const client = await connectProxy([
-        "--scenario",
-        "F1",
-        "--write-tools",
-        "create_*",
-      ]);
+  describe("default write-tool detection (broadened beyond 'write*')", () => {
+    it("recognizes common write verbs like create_* out of the box, not just write*", async () => {
+      const client = await connectProxy(["--scenario", "F1"]);
       try {
-        // create_payment is NOT "write"-prefixed — without --write-tools F1
-        // would never trigger on it at all (see src/engine/state-machine.ts
-        // isWriteTool default).
         const callRes = await client.callTool({
           name: "create_payment",
+          arguments: { amount: 5, idempotency_key: "default-write-tools-1" },
+        });
+        const body = JSON.parse(textOf(callRes)) as { error: string };
+        expect(callRes.isError).toBe(true);
+        expect(body.error).toBe("REQUEST_TIMEOUT");
+      } finally {
+        await client.close();
+      }
+    });
+  });
+
+  describe("--write-tools (configurable write-tool detection)", () => {
+    it("recognizes a tool name outside the default patterns when matched by --write-tools", async () => {
+      // mutate_ledger matches NONE of the default write-tool patterns (an
+      // adversarial test against the real published tarball found exactly
+      // this: an ordinary-sounding write tool outside "write*" let two real
+      // duplicate writes land on a real upstream while get_score still
+      // reported 100/100 PASS). Without --write-tools, F1 must never trigger
+      // on it at all.
+      const withoutFlag = await connectProxy(["--scenario", "F1"]);
+      try {
+        const callRes = await withoutFlag.callTool({
+          name: "mutate_ledger",
           arguments: { amount: 5, idempotency_key: "custom-write-tools-1" },
+        });
+        expect(callRes.isError).toBe(false); // no chaos — tool name isn't recognized as a write
+      } finally {
+        await withoutFlag.close();
+      }
+
+      const withFlag = await connectProxy(["--scenario", "F1", "--write-tools", "mutate_*"]);
+      try {
+        const callRes = await withFlag.callTool({
+          name: "mutate_ledger",
+          arguments: { amount: 5, idempotency_key: "custom-write-tools-2" },
         });
         const body = JSON.parse(textOf(callRes)) as { error: string };
         expect(callRes.isError).toBe(true);
         expect(body.error).toBe("REQUEST_TIMEOUT");
 
-        const reportRes = await client.callTool({ name: "get_report", arguments: { format: "json" } });
+        const reportRes = await withFlag.callTool({ name: "get_report", arguments: { format: "json" } });
         const report = JSON.parse(textOf(reportRes)) as { upstreamCalls: number };
         // The real upstream write still executed (ghost-write) even though
         // the agent only saw a timeout.
         expect(report.upstreamCalls).toBe(1);
       } finally {
-        await client.close();
+        await withFlag.close();
       }
     });
   });

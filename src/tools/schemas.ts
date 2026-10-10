@@ -25,7 +25,10 @@ export const StartSessionSchema = {
     .describe(
       'Glob patterns ("*" wildcard) deciding which tool names count as writes for ' +
         'scenario triggering and idempotency classification, e.g. ["create_*", "send_*", "book_*"]. ' +
-        'Defaults to ["write*"] (the original write-prefix-only behavior).',
+        'Defaults to a broad set of common write-verb prefixes (write*, create_*, send_*, ' +
+        'submit_*, post_*, update_*, insert_*, book_*, pay_*, charge_*, cancel_*, delete_*, ' +
+        'confirm_*, place_*, add_*, register_*, schedule_*) — see DEFAULT_WRITE_TOOL_PATTERNS ' +
+        'in src/engine/state-machine.ts. Set this explicitly if your write tools use other naming.',
     ),
 };
 

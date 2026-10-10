@@ -37,26 +37,26 @@ describe("Tool Handlers", () => {
       expect(result.isError).toBe(true);
     });
 
-    it("write_tool_patterns makes a non-'write'-prefixed tool trigger F1", () => {
+    it("write_tool_patterns makes a tool name outside the default list trigger F1", () => {
       const withDefault = handleStartSession({ scenario_id: "F1" });
       const defaultSid = JSON.parse((withDefault.content[0] as { text: string }).text).sessionId;
       const defaultResult = handleExecuteCall({
         session_id: defaultSid,
-        tool_name: "create_payment",
+        tool_name: "mutate_ledger",
         arguments: { amount: 10 },
       });
-      // Default patterns (["write*"]) don't match "create_payment" — F1 never fires.
+      // "mutate_ledger" isn't covered by the default write-tool patterns — F1 never fires.
       const defaultBody = JSON.parse((defaultResult.content[0] as { text: string }).text);
       expect(defaultBody.injectedError).toBeNull();
 
       const withCustom = handleStartSession({
         scenario_id: "F1",
-        write_tool_patterns: ["create_*"],
+        write_tool_patterns: ["mutate_*"],
       });
       const customSid = JSON.parse((withCustom.content[0] as { text: string }).text).sessionId;
       const customResult = handleExecuteCall({
         session_id: customSid,
-        tool_name: "create_payment",
+        tool_name: "mutate_ledger",
         arguments: { amount: 10 },
       });
       const customBody = JSON.parse((customResult.content[0] as { text: string }).text);

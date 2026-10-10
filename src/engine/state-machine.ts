@@ -50,11 +50,44 @@ export interface CallRecord {
 
 const sessions = new Map<string, SessionState>();
 
+// Broader than just "write*": an adversarial self-test against a from-scratch
+// upstream with an ordinary tool name (e.g. "submit_support_ticket") found
+// that the old "write*"-only default let TWO real duplicate writes land on
+// a real upstream while get_score still reported 100/100 PASS — because the
+// tool name simply didn't start with "write", F1/F4 chaos never triggered
+// and the key never even entered keyStates. isReadTool() below already
+// matches 10 broad prefixes; this list closes the same gap for writes
+// against common real-world API/tool naming. Still just a heuristic — not
+// exhaustive, and callers should pass their own writeToolPatterns
+// (--write-tools in proxy mode, start_session's write_tool_patterns) for
+// anything unusual. See runProxyMode's startup check, which warns loudly
+// when NONE of the upstream's discovered tools match any configured pattern,
+// instead of silently staying inert.
+export const DEFAULT_WRITE_TOOL_PATTERNS: string[] = [
+  "write*",
+  "create_*",
+  "send_*",
+  "submit_*",
+  "post_*",
+  "update_*",
+  "insert_*",
+  "book_*",
+  "pay_*",
+  "charge_*",
+  "cancel_*",
+  "delete_*",
+  "confirm_*",
+  "place_*",
+  "add_*",
+  "register_*",
+  "schedule_*",
+];
+
 export function createSession(
   scenarioId: string | null = null,
   mode: "deterministic" | "chaos" = "deterministic",
   errorRate = 0.0,
-  writeToolPatterns: string[] = ["write*"],
+  writeToolPatterns: string[] = DEFAULT_WRITE_TOOL_PATTERNS,
 ): SessionState {
   const session: SessionState = {
     sessionId: randomUUID(),
@@ -67,7 +100,7 @@ export function createSession(
     createdAt: Date.now(),
     stateDiff: new StateDiffStore(),
     writeToolPatterns:
-      writeToolPatterns.length > 0 ? writeToolPatterns : ["write*"],
+      writeToolPatterns.length > 0 ? writeToolPatterns : DEFAULT_WRITE_TOOL_PATTERNS,
   };
   sessions.set(session.sessionId, session);
   return session;
@@ -203,7 +236,7 @@ export function listSessions(): SessionState[] {
 // identical behavior to the old hardcoded toolName.startsWith("write").
 export function isWriteTool(
   toolName: string,
-  patterns: string[] = ["write*"],
+  patterns: string[] = DEFAULT_WRITE_TOOL_PATTERNS,
 ): boolean {
   return matchesAnyGlob(toolName, patterns);
 }

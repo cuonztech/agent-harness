@@ -28,4 +28,27 @@ describe("CLI `benchmark` mode (real process)", () => {
     expect(stdout.toLowerCase()).toContain("reference");
     expect(stdout).toContain("CuonzTech Resilience Score");
   });
+
+  it.each([["0"], ["-5"], ["abc"], ["1.5"]])(
+    "rejects --runs %s instead of silently running zero scenarios and printing a fake 100/100",
+    (value) => {
+      const { stderr, status } = runCli(["benchmark", "--runs", value]);
+      expect(status).toBe(1);
+      expect(stderr).toContain("--runs must be a positive integer");
+    },
+  );
+
+  it("rejects a negative --jitter", () => {
+    const { stderr, status } = runCli(["benchmark", "--jitter", "-1"]);
+    expect(status).toBe(1);
+    expect(stderr).toContain("--jitter must be a non-negative integer");
+  });
+
+  it("--help prints usage and exits instead of hanging in stdio server mode", () => {
+    const { stdout, status } = runCli(["--help"]);
+    expect(status).toBe(0);
+    expect(stdout).toContain("Usage:");
+    expect(stdout).toContain("proxy");
+    expect(stdout).toContain("benchmark");
+  });
 });

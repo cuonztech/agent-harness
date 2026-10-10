@@ -44,13 +44,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description: "Echoes an env var (fixture upstream, for --upstream-env tests).",
       inputSchema: { type: "object", properties: {} },
     },
+    {
+      name: "mutate_ledger",
+      description: "Writes under a name outside the default write-tool patterns (fixture upstream, for --write-tools tests).",
+      inputSchema: {
+        type: "object",
+        properties: { amount: { type: "number" } },
+        required: ["amount"],
+      },
+    },
   ],
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
-  if (name === "write_payment" || name === "create_payment") {
+  if (name === "write_payment" || name === "create_payment" || name === "mutate_ledger") {
     return {
       content: [
         {

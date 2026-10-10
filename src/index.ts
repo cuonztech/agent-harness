@@ -7,15 +7,47 @@ import { formatCTA, buildTelemetry } from "./benchmark/cta.js";
 import { ProxyInterceptor } from "./proxy/interceptor.js";
 import { createProxyServer } from "./proxy/gateway.js";
 import { getScenarioById, ALL_SCENARIOS } from "./scenarios/f1-f5.js";
+import { DEFAULT_WRITE_TOOL_PATTERNS, matchesAnyGlob } from "./engine/state-machine.js";
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
 const args = process.argv.slice(2);
 
+function printHelp(): void {
+  process.stdout.write(
+    `cuonztech-agent-harness — chaos/idempotency test harness for MCP agents\n\n` +
+      `Usage:\n` +
+      `  cuonztech-agent-harness                   Start as an MCP server (stdio)\n` +
+      `  cuonztech-agent-harness benchmark [opts]   Run the fixed reference self-test\n` +
+      `  cuonztech-agent-harness proxy --upstream-command <cmd> [opts]\n` +
+      `                                             Run as a transparent chaos proxy\n` +
+      `                                             in front of a real upstream MCP server\n\n` +
+      `benchmark options:\n` +
+      `  --scenarios F1,F2,...   Which scenarios to run (default: all)\n` +
+      `  --runs <n>              Runs per scenario, positive integer (default: 1)\n` +
+      `  --jitter <ms>           Random delay between scripted calls (default: 0)\n\n` +
+      `proxy options:\n` +
+      `  --upstream-command <cmd>       Command to spawn the upstream MCP server (required)\n` +
+      `  --upstream-args <a,b,c>        Comma-separated args for the upstream command\n` +
+      `  --upstream-cwd <dir>           Working directory for the upstream process\n` +
+      `  --upstream-env KEY=VAL,...     Extra/override env vars for the upstream process\n` +
+      `  --scenario F1..F5              Activate one deterministic scenario\n` +
+      `  --mode chaos                   Stochastic error injection instead of a scenario\n` +
+      `  --error-rate <0..1>             Error probability in chaos mode (default: 0)\n` +
+      `  --write-tools pat1,pat2,...    Glob patterns ("*") for which tool names count as\n` +
+      `                                  writes (default covers common verbs: write*,\n` +
+      `                                  create_*, send_*, submit_*, post_*, update_*, ...\n` +
+      `                                  — see DEFAULT_WRITE_TOOL_PATTERNS). Set this if\n` +
+      `                                  your upstream's write tools use other naming.\n`,
+  );
+}
+
 async function main(): Promise<void> {
   const mode = args[0];
 
-  if (mode === "benchmark" || mode === "evaluate") {
+  if (mode === "--help" || mode === "-h" || mode === "help") {
+    printHelp();
+  } else if (mode === "benchmark" || mode === "evaluate") {
     await runBenchmarkMode();
   } else if (mode === "proxy") {
     await runProxyMode();
@@ -69,6 +101,13 @@ async function runProxyMode(): Promise<void> {
 
   const scenarioIdx = args.indexOf("--scenario");
   const scenarioId = scenarioIdx !== -1 ? args[scenarioIdx + 1] : undefined;
+  if (scenarioId && !getScenarioById(scenarioId)) {
+    process.stderr.write(
+      `Error: unknown scenario "${scenarioId}". Valid: ${ALL_SCENARIOS.map((s) => s.id).join(", ")}\n`,
+    );
+    process.exit(1);
+    return;
+  }
 
   const modeIdx = args.indexOf("--mode");
   const chaosModeRequested = modeIdx !== -1 ? args[modeIdx + 1] : undefined;
@@ -113,6 +152,33 @@ async function runProxyMode(): Promise<void> {
 
   await interceptor.connectUpstream();
 
+  // If NOT ONE of the upstream's real tools matches any configured
+  // write-tool pattern, ghost-write/duplicate-dispatch detection (F1/F4) and
+  // idempotency-key tracking will NEVER trigger for this upstream — the
+  // session stays silently inert while get_report/get_score can still print
+  // a misleadingly clean 100/100. An adversarial test against the published
+  // package found exactly this against a realistically-named tool. Warn
+  // loudly instead of staying silent, even though DEFAULT_WRITE_TOOL_PATTERNS
+  // is now broader than just "write*".
+  const effectivePatterns =
+    writeToolPatterns && writeToolPatterns.length > 0
+      ? writeToolPatterns
+      : DEFAULT_WRITE_TOOL_PATTERNS;
+  const upstreamTools = interceptor.getUpstreamTools();
+  const anyToolMatches = upstreamTools.some((t) =>
+    matchesAnyGlob(t.name, effectivePatterns),
+  );
+  if (upstreamTools.length > 0 && !anyToolMatches) {
+    process.stderr.write(
+      `[cuonztech-agent-harness] WARNING: none of the upstream's ${upstreamTools.length} ` +
+        `tool(s) (${upstreamTools.map((t) => t.name).join(", ")}) match any write-tool ` +
+        `pattern (currently: ${effectivePatterns.join(", ")}). Ghost-write/duplicate-dispatch ` +
+        `detection will NEVER trigger for this upstream, and real duplicate writes will go ` +
+        `completely undetected. If your write tools use different naming, pass e.g. ` +
+        `--write-tools "yourprefix_*".\n`,
+    );
+  }
+
   const shutdown = async (): Promise<void> => {
     await interceptor.disconnectUpstream();
     process.exit(0);
@@ -127,14 +193,44 @@ async function runProxyMode(): Promise<void> {
 async function runBenchmarkMode(): Promise<void> {
   const config = defaultConfig();
 
+  // Strict integer parsing: parseInt() alone is too lenient (parseInt("1.5")
+  // silently truncates to 1 instead of being rejected) — only a string
+  // matching /^-?\d+$/ counts as a valid integer here.
+  function parseStrictInt(raw: string): number | null {
+    return /^-?\d+$/.test(raw) ? parseInt(raw, 10) : null;
+  }
+
   // Parse optional flags
   const runsIdx = args.indexOf("--runs");
   if (runsIdx !== -1 && args[runsIdx + 1]) {
-    config.runsPerScenario = parseInt(args[runsIdx + 1], 10);
+    const parsed = parseStrictInt(args[runsIdx + 1]);
+    if (parsed === null || parsed < 1) {
+      // A non-positive/NaN/non-integer value used to silently run ZERO
+      // scenarios while still printing a fake "Overall: 100/100 [EXCELLENT]"
+      // (computeScore's "no data = perfect" default, which is correct for a
+      // real session with genuinely nothing to flag, but dishonest here —
+      // nothing was ever tested) and persisting that 100/100 into
+      // .cuonztech/benchmark-report.json for anything (e.g. a CI gate) to
+      // pick up as real.
+      process.stderr.write(
+        `Error: --runs must be a positive integer, got "${args[runsIdx + 1]}".\n`,
+      );
+      process.exit(1);
+      return;
+    }
+    config.runsPerScenario = parsed;
   }
   const jitterIdx = args.indexOf("--jitter");
   if (jitterIdx !== -1 && args[jitterIdx + 1]) {
-    config.jitterMs = parseInt(args[jitterIdx + 1], 10);
+    const parsed = parseStrictInt(args[jitterIdx + 1]);
+    if (parsed === null || parsed < 0) {
+      process.stderr.write(
+        `Error: --jitter must be a non-negative integer (ms), got "${args[jitterIdx + 1]}".\n`,
+      );
+      process.exit(1);
+      return;
+    }
+    config.jitterMs = parsed;
   }
   const scenariosIdx = args.indexOf("--scenarios");
   if (scenariosIdx !== -1 && args[scenariosIdx + 1]) {

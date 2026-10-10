@@ -146,9 +146,11 @@ Flags:
 | `--upstream-command` | ja | Befehl, der den echten Upstream-MCP-Server startet |
 | `--upstream-args` | nein | Kommagetrennte Argumente für den Upstream-Befehl |
 | `--upstream-cwd` | nein | Arbeitsverzeichnis für den Upstream-Prozess |
+| `--upstream-env` | nein | Kommagetrennte `KEY=VALUE`-Paare als zusätzliche/überschreibende Env-Vars für den Upstream-Prozess (z. B. ein API-Token, das der Upstream aus der Umgebung liest) |
 | `--scenario` | nein | F1–F5 (deterministisch), sonst Passthrough |
 | `--mode` | nein | `deterministic` (default) oder `chaos` |
 | `--error-rate` | nein | Chaos-Modus: Fehlerwahrscheinlichkeit 0.0–1.0 |
+| `--write-tools` | nein | Kommagetrennte Glob-Patterns (`*`), die festlegen, welche Tool-Namen als Schreib-Tools zählen. Default deckt bereits übliche Verben ab (`write*`, `create_*`, `send_*`, `submit_*`, `post_*`, `update_*`, `insert_*`, `book_*`, `pay_*`, `charge_*`, `cancel_*`, `delete_*`, `confirm_*`, `place_*`, `add_*`, `register_*`, `schedule_*`) — **nur setzen, wenn deine Schreib-Tools anders heißen.** Ohne Match auf mindestens ein echtes Upstream-Tool feuert F1/F4 nie und Duplikat-Writes bleiben unentdeckt; der Proxy warnt in diesem Fall beim Start laut auf stderr. |
 
 Der Agent sieht die **echten Tools des Upstreams** (Name, Beschreibung, Input-Schema unverändert) plus 5 Audit-Tools (`get_report`, `get_score`, `list_scenarios`, `reset_session`, `delete_session`), die ohne `session_id` die eine Proxy-Session dieser Verbindung auditieren. `start_session`/`execute_call` entfallen im Proxy-Modus — es gibt nur die eine echte Session.
 

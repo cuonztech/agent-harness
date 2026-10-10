@@ -100,11 +100,22 @@ describe("StateEngine", () => {
   });
 
   describe("write-tool detection (configurable beyond the 'write' prefix)", () => {
-    it("defaults to the write* prefix", () => {
+    it("defaults to a broad set of common write-verb prefixes, not just 'write'", () => {
       const session = createSession();
-      expect(session.writeToolPatterns).toEqual(["write*"]);
+      expect(session.writeToolPatterns).toContain("write*");
+      expect(session.writeToolPatterns).toContain("create_*");
+      expect(session.writeToolPatterns).toContain("submit_*");
       expect(isWriteTool("write_payment")).toBe(true);
-      expect(isWriteTool("create_payment")).toBe(false);
+      // An ordinary, realistic tool name that doesn't start with "write" —
+      // the old write*-only default silently missed this entirely (an
+      // adversarial test found two real duplicate writes landing on a real
+      // upstream via a tool named "submit_support_ticket" while the score
+      // still read 100/100 PASS).
+      expect(isWriteTool("submit_support_ticket")).toBe(true);
+      expect(isWriteTool("create_payment")).toBe(true);
+      // Still not every conceivable write verb — unusual naming needs
+      // --write-tools / write_tool_patterns.
+      expect(isWriteTool("mutate_ledger")).toBe(false);
     });
 
     it("accepts custom glob patterns via createSession", () => {
@@ -119,9 +130,10 @@ describe("StateEngine", () => {
       expect(isWriteTool("write_payment", session.writeToolPatterns)).toBe(false);
     });
 
-    it("an empty pattern list falls back to the write* default instead of matching nothing", () => {
+    it("an empty pattern list falls back to the default instead of matching nothing", () => {
       const session = createSession("F1", "deterministic", 0, []);
-      expect(session.writeToolPatterns).toEqual(["write*"]);
+      expect(session.writeToolPatterns).toContain("write*");
+      expect(session.writeToolPatterns.length).toBeGreaterThan(1);
     });
 
     it("addRecord uses the session's own write-tool patterns for key tracking", () => {
