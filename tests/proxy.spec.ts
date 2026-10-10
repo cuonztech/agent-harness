@@ -39,6 +39,17 @@ describe("Proxy & Ghost-Write", () => {
       expect(decision.executeUpstream).toBe(false);
     });
 
+    it("executes upstream for real on F4 duplicate dispatch (no fabricated success)", () => {
+      const session = createSession("F4");
+      const first = decideChaosAction(session, 1, "write_payment", {});
+      expect(first.errorType).toBeNull(); // "success" type: not a simulated failure
+      expect(first.executeUpstream).toBe(true);
+
+      const second = decideChaosAction(session, 2, "write_payment", {});
+      expect(second.errorType).toBeNull();
+      expect(second.executeUpstream).toBe(true); // the duplicate call reaches upstream too
+    });
+
     it("returns chaos injection in chaos mode at 100% rate", () => {
       const session = createSession(null, "chaos", 1.0);
       const decision = decideChaosAction(session, 1, "any_tool", {});

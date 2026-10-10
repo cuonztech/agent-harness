@@ -32,13 +32,21 @@ export function decideChaosAction(
     if (scenario && scenario.triggerCondition(callNumber, toolName)) {
       const resp = scenario.simulatedResponse;
       const isGhostWrite = resp.type === "timeout" && toolName.startsWith("write");
+      // F4 (duplicate dispatch) must also actually reach the upstream: it
+      // reports "success" to the agent, and against a real upstream that
+      // claim has to be true, or the proxy is fabricating a confirmation for
+      // a write that never happened (silent data loss if ever pointed at a
+      // production backend). F2/F3/F5 stay executeUpstream:false — those are
+      // genuine failures (rate-limit/malformed/500), so nothing should land
+      // upstream for them, matching what the agent is told.
+      const executeUpstream = isGhostWrite || resp.type === "success";
 
       return {
         injectError: true,
         errorType: resp.type === "success" ? null : `[${resp.type.toUpperCase()}]`,
         statusCode: resp.statusCode ?? 500,
         errorBody: resp.body,
-        executeUpstream: isGhostWrite, // F1: execute upstream but return timeout
+        executeUpstream,
         delayMs: resp.delayMs ?? 0,
       };
     }

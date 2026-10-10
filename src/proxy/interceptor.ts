@@ -92,7 +92,7 @@ export class ProxyInterceptor {
     toolName: string,
     args: Record<string, unknown>,
   ): Promise<{
-    content: Array<{ type: "text"; text: string }>;
+    content: Array<Record<string, unknown>>;
     isError: boolean;
   }> {
     const callNumber = incrementCall(this.session.sessionId);
@@ -110,9 +110,12 @@ export class ProxyInterceptor {
     );
 
     let upstreamResponse: Record<string, unknown> | null = null;
+    let upstreamContent: Array<Record<string, unknown>> | null = null;
+    let upstreamIsError = false;
     let upstreamExecuted = false;
+    // responseText only ever feeds the audit trail (buildCallRecord/history),
+    // never the agent — see agentContent below.
     let responseText = "";
-    let statusCode = 200;
     let injectedError: string | null = null;
 
     if (decision.executeUpstream && this.upstreamClient) {
@@ -122,9 +125,12 @@ export class ProxyInterceptor {
           name: toolName,
           arguments: mergedArgs,
         });
-        const content = result.content as Array<{ type: string; text?: string }>;
-        const textPart = content.find((c) => c.type === "text");
-        responseText = textPart?.text ?? JSON.stringify(result.content);
+        upstreamContent = result.content as Array<Record<string, unknown>>;
+        upstreamIsError = Boolean(result.isError);
+        const textPart = upstreamContent.find((c) => c.type === "text") as
+          | { text?: string }
+          | undefined;
+        responseText = textPart?.text ?? JSON.stringify(upstreamContent);
         upstreamExecuted = true;
 
         try {
@@ -141,27 +147,51 @@ export class ProxyInterceptor {
       }
     }
 
-    // Apply chaos decision (after upstream execution for ghost-writes)
+    // A genuine simulated failure (timeout/rate_limit/malformed/error) must
+    // replace whatever the agent sees, even if the upstream really executed
+    // (F1's ghost-write). A "success"-typed match (F4) is NOT a failure —
+    // once it actually ran upstream above, the agent must see that REAL
+    // response, not a canned one, or the proxy is lying about what happened.
+    const isSimulatedFailure = decision.injectError && decision.errorType !== null;
+
     let isGhostWrite = false;
-    if (decision.injectError) {
+    let agentContent: Array<Record<string, unknown>>;
+    let agentIsError: boolean;
+
+    if (isSimulatedFailure) {
       injectedError = decision.errorType;
-      statusCode = decision.statusCode;
-      responseText =
+      const errorText =
         typeof decision.errorBody === "string"
           ? decision.errorBody
           : JSON.stringify(decision.errorBody);
+      responseText = errorText;
+      agentContent = [{ type: "text", text: errorText }];
+      agentIsError = true;
 
       isGhostWrite = decision.executeUpstream && upstreamExecuted && Boolean(key);
+    } else if (upstreamExecuted) {
+      // Real passthrough: forward the upstream's actual content unchanged
+      // (all blocks — text, images, structured content — not just the first
+      // text block) and its real isError, instead of wrapping it in an
+      // audit envelope. Audit-only facts (upstreamExecuted, injectedError,
+      // callNumber) are recorded via buildCallRecord()/addRecord() below and
+      // surfaced through get_report/get_score — never in the tool response
+      // itself, so an agent reading the response can't trivially infer the
+      // harness's internal chaos state.
+      agentContent = upstreamContent ?? [{ type: "text", text: responseText }];
+      agentIsError = upstreamIsError;
+    } else if (injectedError === "[UPSTREAM_ERROR]") {
+      agentContent = [{ type: "text", text: responseText }];
+      agentIsError = true;
     } else {
-      statusCode = 200;
-      if (!upstreamExecuted) {
-        // No upstream, no error — passthrough mock
-        responseText = JSON.stringify({
-          result: "ok",
-          callNumber,
-          timestamp: new Date().toISOString(),
-        });
-      }
+      // No scenario triggered and no real upstream call was attempted
+      // (shouldn't normally happen once connected) — synthetic ok mock.
+      responseText = JSON.stringify({
+        result: "ok",
+        timestamp: new Date().toISOString(),
+      });
+      agentContent = [{ type: "text", text: responseText }];
+      agentIsError = false;
     }
 
     // Record the call
@@ -185,29 +215,8 @@ export class ProxyInterceptor {
     }
 
     return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            {
-              callNumber,
-              statusCode,
-              injectedError,
-              upstreamExecuted,
-              response: (() => {
-                try {
-                  return JSON.parse(responseText);
-                } catch {
-                  return responseText;
-                }
-              })(),
-            },
-            null,
-            2,
-          ),
-        },
-      ],
-      isError: statusCode >= 400,
+      content: agentContent,
+      isError: agentIsError,
     };
   }
 }

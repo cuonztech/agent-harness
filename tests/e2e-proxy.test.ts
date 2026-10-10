@@ -70,21 +70,23 @@ describe("MCP proxy mode (two real stdio processes)", () => {
       });
     });
 
-    it("forwards a real tool call to the real upstream and tracks it", async () => {
+    it("forwards a real tool call to the real upstream and returns its real response unchanged", async () => {
       const callRes = await client.callTool({
         name: "write_payment",
         arguments: { amount: 42 },
       });
+      // The agent must see the upstream's real response verbatim — no
+      // callNumber/statusCode/upstreamExecuted/injectedError audit envelope.
       const body = JSON.parse(textOf(callRes)) as {
-        upstreamExecuted: boolean;
-        statusCode: number;
-        response: { result: string; amount: number; written: boolean };
+        result: string;
+        amount: number;
+        written: boolean;
       };
       expect(callRes.isError).toBe(false);
-      expect(body.upstreamExecuted).toBe(true);
-      expect(body.statusCode).toBe(200);
-      expect(body.response.amount).toBe(42);
-      expect(body.response.written).toBe(true);
+      expect(body.amount).toBe(42);
+      expect(body.written).toBe(true);
+      expect(body).not.toHaveProperty("upstreamExecuted");
+      expect(body).not.toHaveProperty("callNumber");
 
       const reportRes = await client.callTool({ name: "get_report", arguments: { format: "json" } });
       const report = JSON.parse(textOf(reportRes)) as { totalCalls: number; upstreamCalls: number };
@@ -104,18 +106,24 @@ describe("MCP proxy mode (two real stdio processes)", () => {
       await client?.close();
     });
 
-    it("executes the real upstream write but reports a timeout to the caller", async () => {
+    it("executes the real upstream write but reports a timeout to the caller, without leaking audit metadata", async () => {
       const callRes = await client.callTool({
         name: "write_payment",
         arguments: { amount: 10, idempotency_key: "proxy-ghost-1" },
       });
-      const body = JSON.parse(textOf(callRes)) as {
-        upstreamExecuted: boolean;
-        injectedError: string;
-      };
+      // The agent must see a realistic timeout error body — not the real
+      // upstream response, and not an envelope revealing that upstream
+      // actually executed the write behind the scenes.
+      const body = JSON.parse(textOf(callRes)) as { error: string; message: string };
       expect(callRes.isError).toBe(true);
-      expect(body.upstreamExecuted).toBe(true);
-      expect(body.injectedError).toContain("TIMEOUT");
+      expect(body.error).toBe("REQUEST_TIMEOUT");
+      expect(body).not.toHaveProperty("upstreamExecuted");
+      expect(body).not.toHaveProperty("injectedError");
+
+      // The real execution IS tracked internally, just not shown to the agent.
+      const reportRes = await client.callTool({ name: "get_report", arguments: { format: "json" } });
+      const report = JSON.parse(textOf(reportRes)) as { upstreamCalls: number };
+      expect(report.upstreamCalls).toBe(1);
 
       const scoreRes = await client.callTool({ name: "get_score", arguments: { format: "json" } });
       const score = JSON.parse(textOf(scoreRes)) as { score: { overall: number } };
@@ -146,6 +154,52 @@ describe("MCP proxy mode (two real stdio processes)", () => {
       expect(entry?.state).toBe("GHOST_COMMITTED");
       expect(entry?.writeCalls).toBe(2);
       expect(entry?.classification).toBe("GHOST_CAUGHT");
+    });
+  });
+
+  describe("F4 scenario (duplicate dispatch through a real upstream)", () => {
+    let client: Client;
+
+    beforeAll(async () => {
+      client = await connectProxy(["--scenario", "F4"]);
+    }, 15_000);
+
+    afterAll(async () => {
+      await client?.close();
+    });
+
+    it("really executes BOTH duplicate writes upstream instead of fabricating a transaction id", async () => {
+      const first = await client.callTool({
+        name: "write_payment",
+        arguments: { amount: 77, idempotency_key: "proxy-dup-1" },
+      });
+      const firstBody = JSON.parse(textOf(first)) as { amount: number; written: boolean };
+      expect(first.isError).toBe(false);
+      expect(firstBody.amount).toBe(77);
+      expect(firstBody.written).toBe(true);
+      // No fabricated "txn-fixed-001" — the fixture upstream never returns
+      // a transaction_id at all, so the real response must not have one.
+      expect(firstBody).not.toHaveProperty("transaction_id");
+
+      const second = await client.callTool({
+        name: "write_payment",
+        arguments: { amount: 77, idempotency_key: "proxy-dup-1" },
+      });
+      expect(second.isError).toBe(false);
+
+      // Both calls really reached the upstream — the proxy never silently
+      // drops a write while telling the agent it succeeded.
+      const reportRes = await client.callTool({ name: "get_report", arguments: { format: "json" } });
+      const report = JSON.parse(textOf(reportRes)) as {
+        upstreamCalls: number;
+        keySummary: Array<{ key: string; writeCalls: number; classification: string }>;
+      };
+      expect(report.upstreamCalls).toBe(2);
+      const entry = report.keySummary.find((k) => k.key === "proxy-dup-1");
+      expect(entry?.writeCalls).toBe(2);
+      // Two real writes to the same key with no error/read in between is a
+      // genuine idempotency violation the agent should have avoided.
+      expect(entry?.classification).toBe("REDUNDANT_CALL");
     });
   });
 });

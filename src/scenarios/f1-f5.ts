@@ -59,9 +59,15 @@ export const F4_DUPLICATE_DISPATCH: ScenarioDefinition = {
   id: "F4",
   name: "Duplicate Dispatch (Ghost-Write)",
   description:
-    "Beide Aufrufe erhalten Erfolg. Der Server hat aber nur den ersten tatsächlich ausgeführt. Der Agent muss Idempotency prüfen und den Duplikat-Aufruf erkennen.",
+    "Beide Aufrufe erhalten Erfolg. Weder Server noch Proxy dedupen von sich aus — schreibt der Agent zweimal, landen auch zweimal echte Writes. Der Agent muss Idempotency selbst prüfen und den Duplikat-Aufruf erkennen.",
   triggerCondition: (callNumber, toolName) =>
     callNumber <= 2 && toolName.startsWith("write"),
+  // Only used by the non-proxy session/benchmark simulation (tools/handlers.ts),
+  // which has no real upstream to call. In proxy mode (proxy/ghost-write.ts +
+  // proxy/interceptor.ts), "success"-typed scenarios now actually execute
+  // against the real upstream and forward its real response/id instead of
+  // this canned body — a fabricated transaction_id for a write that never
+  // happened would be a real data-loss risk against a production backend.
   simulatedResponse: {
     type: "success",
     statusCode: 200,

@@ -6,6 +6,7 @@ import { runBenchmark, defaultConfig } from "./benchmark/runner.js";
 import { formatCTA, buildTelemetry } from "./benchmark/cta.js";
 import { ProxyInterceptor } from "./proxy/interceptor.js";
 import { createProxyServer } from "./proxy/gateway.js";
+import { getScenarioById, ALL_SCENARIOS } from "./scenarios/f1-f5.js";
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -57,6 +58,15 @@ async function runProxyMode(): Promise<void> {
       ? parseFloat(args[errorRateIdx + 1])
       : 0.0;
 
+  if (scenarioId || chaosMode === "chaos") {
+    process.stderr.write(
+      "[cuonztech-agent-harness] WARNING: chaos/scenario injection is active — " +
+        "the agent will sometimes receive errors or duplicate successes that do " +
+        "NOT reflect what actually happened upstream. Only point --upstream-command " +
+        "at a disposable test/staging backend, never production.\n",
+    );
+  }
+
   const interceptor = new ProxyInterceptor({
     upstream: { command: upstreamCommand, args: upstreamArgs, cwd: upstreamCwd },
     scenarioId,
@@ -94,7 +104,24 @@ async function runBenchmarkMode(): Promise<void> {
     config.scenarios = args[scenariosIdx + 1].split(",");
   }
 
+  const unknown = config.scenarios.filter((id) => !getScenarioById(id));
+  if (unknown.length > 0) {
+    process.stderr.write(
+      `Error: unknown scenario(s) "${unknown.join(", ")}". ` +
+        `Valid: ${ALL_SCENARIOS.map((s) => s.id).join(", ")}\n`,
+    );
+    process.exit(1);
+    return;
+  }
+
   process.stdout.write(`CuonzTech Agent-Harness Benchmark\n`);
+  process.stdout.write(
+    "NOTE: this replays a fixed built-in reference call sequence — it does NOT\n" +
+      "connect to or measure your own agent. It is a self-test of the harness's\n" +
+      "scenario/scoring logic, useful as a reference point, not a verdict on your\n" +
+      "system. To score YOUR agent, connect it to `proxy` mode or the MCP server's\n" +
+      "`start_session`/`execute_call`/`get_score` tools instead.\n\n",
+  );
   process.stdout.write(`Scenarios: ${config.scenarios.join(", ")}\n`);
   process.stdout.write(`Runs per scenario: ${config.runsPerScenario}\n`);
   process.stdout.write(`Jitter: ${config.jitterMs}ms\n\n`);

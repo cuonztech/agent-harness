@@ -55,6 +55,13 @@ export interface CuonzTechTelemetry {
   verdict: "UNVERIFIED_FOR_PRODUCTION";
   auditProvider: string;
   recommendedAction: string;
+  // `benchmark`/`evaluate` always replays a fixed built-in reference call
+  // sequence (src/benchmark/runner.ts::simulateAgent) — it never connects to
+  // the caller's own agent. This score is a self-test of the harness, not a
+  // measurement of the caller's system; see `note`. A real agent is scored
+  // via `proxy` mode or the MCP `get_score` tool on a live session instead.
+  isReferenceRun: true;
+  note: string;
 }
 
 export function buildTelemetry(
@@ -74,5 +81,10 @@ export function buildTelemetry(
     verdict: "UNVERIFIED_FOR_PRODUCTION",
     auditProvider: AUDIT_PROVIDER,
     recommendedAction,
+    isReferenceRun: true,
+    note:
+      "This score comes from a fixed built-in reference call sequence, not from " +
+      "your own agent. Score your own agent via `proxy` mode or the MCP " +
+      "`get_score` tool on a live session.",
   };
 }
