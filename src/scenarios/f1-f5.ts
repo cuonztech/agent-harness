@@ -74,7 +74,7 @@ export const F3_MALFORMED_JSON: ScenarioDefinition = {
 // F4: Duplicate Dispatch
 export const F4_DUPLICATE_DISPATCH: ScenarioDefinition = {
   id: "F4",
-  name: "Duplicate Dispatch (Ghost-Write)",
+  name: "Duplicate Dispatch (no injected failure)",
   description:
     "Es wird nichts injiziert: die ersten beiden Schreibversuche gehen unverändert durch. Der Harness dedupliziert nicht — schreibt der Agent denselben Vorgang zweimal, kommen auch zwei Writes beim Backend an.",
   triggerCondition: ({ priorWriteCalls, isWriteCall }) =>

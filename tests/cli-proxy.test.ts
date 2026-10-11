@@ -4,7 +4,7 @@
 // functions. Needs a fresh `dist/` — see "pretest" in package.json.
 import { describe, it, expect } from "vitest";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -148,6 +148,35 @@ describe("CLI `proxy` mode (real process)", () => {
       ]);
       expect(failedStart.code).toBe(1);
       expect((JSON.parse(await readFile(file, "utf-8")) as { verdict: string }).verdict).toBe("NOT_TESTED");
+    });
+
+    it("rejects an option that is followed by another option instead of a value", async () => {
+      const { code, stderr } = await runProxy([...UPSTREAM, "--report-file", "--scenario", "F1"]);
+      expect(code).toBe(1);
+      expect(stderr).toContain("--report-file needs a value");
+      // ... and must not have created a file called "--scenario".
+      await expect(stat("--scenario")).rejects.toThrow();
+    });
+
+    it("rejects a misspelled option where a value is expected, and creates no file of that name", async () => {
+      const { code, stderr } = await runProxy([...UPSTREAM, "--report-file", "--audit-tool", "off"]);
+      expect(code).toBe(1);
+      expect(stderr).toContain("--report-file needs a value");
+      await expect(stat("--audit-tool")).rejects.toThrow();
+    });
+
+    it("does not take the value of another option for the report file", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "harness-peek-"));
+      const file = join(dir, "other.json");
+      await writeFile(file, "untouched", "utf-8");
+      // "--report-file=<file>" is the VALUE of --upstream-arg here; the start
+      // fails (node rejects the option) and must leave that file alone.
+      const { code } = await runProxy([
+        "--upstream-command", process.execPath,
+        "--upstream-arg", `--report-file=${file}`,
+      ]);
+      expect(code).toBe(1);
+      expect(await readFile(file, "utf-8")).toBe("untouched");
     });
 
     it("requires --upstream-command", async () => {

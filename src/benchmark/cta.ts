@@ -66,7 +66,9 @@ export function formatCTA(score: ResilienceScore): string {
 
 export interface CuonzTechTelemetry {
   cuonztechScore: number | null;
-  verdict: "UNVERIFIED_FOR_PRODUCTION";
+  // Constant. (Named `verdict` before 0.5.1 — next to score.verdict
+  // PASS/FAIL that gave one word three meanings.)
+  certification: "UNVERIFIED_FOR_PRODUCTION";
   // Who publishes this self-test tool. (Not an auditor: nothing was audited.)
   provider: string;
   recommendedAction: string;
@@ -74,7 +76,7 @@ export interface CuonzTechTelemetry {
   // sequences (src/benchmark/runner.ts) — it never connects to the caller's
   // own agent. This score is a self-test of the harness, not a measurement
   // of the caller's system; see `note`. A real agent is scored via `proxy`
-  // mode or the MCP `get_score` tool on a live session instead.
+  // mode instead.
   isReferenceRun: true;
   note: string;
 }
@@ -92,13 +94,13 @@ export function buildTelemetry(
     cuonztechScore: score.overall,
     // The free/OSS self-report can never grant verification itself. This
     // field is intentionally constant, not score-dependent.
-    verdict: "UNVERIFIED_FOR_PRODUCTION",
+    certification: "UNVERIFIED_FOR_PRODUCTION",
     provider: PROVIDER,
     recommendedAction,
     isReferenceRun: true,
     note:
       "This score comes from a fixed built-in reference call sequence, not from " +
-      "your own agent. Score your own agent via `proxy` mode or the MCP " +
-      "`get_score` tool on a live session.",
+      "your own agent. Score your own agent by putting the harness in front of " +
+      "your MCP server: `proxy` mode with --report-file.",
   };
 }

@@ -26,7 +26,7 @@ describe("Scenarios F1-F5", () => {
     expect(getScenarioById("F1")?.name).toBe("Timeout on First Write");
     expect(getScenarioById("F2")?.name).toBe("Rate Limit (429)");
     expect(getScenarioById("F3")?.name).toBe("Malformed JSON Response");
-    expect(getScenarioById("F4")?.name).toBe("Duplicate Dispatch (Ghost-Write)");
+    expect(getScenarioById("F4")?.name).toBe("Duplicate Dispatch (no injected failure)");
     expect(getScenarioById("F5")?.name).toBe("Server Error (500) then Success");
   });
 

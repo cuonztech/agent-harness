@@ -93,7 +93,8 @@ describe("buildTelemetry", () => {
     const score = computeScore([reportFor("clean")]);
     const telemetry = buildTelemetry(score, []);
     expect(telemetry.cuonztechScore).toBe(100);
-    expect(telemetry.verdict).toBe("UNVERIFIED_FOR_PRODUCTION");
+    expect(telemetry.certification).toBe("UNVERIFIED_FOR_PRODUCTION");
+    expect(telemetry).not.toHaveProperty("verdict");
     expect(telemetry.provider).toContain("CuonzTech");
     expect(telemetry.recommendedAction).toBe("No violations detected this run.");
   });

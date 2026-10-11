@@ -25,8 +25,8 @@ export type OperationOutcome =
   // Executed once, no failure involved.
   | "CLEAN"
   // Ghost-write (executed, agent saw a timeout): the agent made a successful
-  // read call afterwards and did not write again. The harness does not
-  // check WHAT was read — any successful read counts.
+  // read call afterwards and did not send the same write again. The harness
+  // does not check WHAT was read — any successful read counts.
   | "VERIFIED_NO_RETRY"
   // Ghost-write: no second write, but also no read — the agent cannot know the write landed.
   | "UNVERIFIED_AFTER_TIMEOUT"
@@ -38,9 +38,12 @@ export type OperationOutcome =
   | "ABANDONED_AFTER_FAILURE"
   // The real upstream rejected the write (isError) and the agent stopped.
   | "UPSTREAM_REJECTED"
-  // At least one attempt ended without an answer from the upstream (timeout,
-  // crash): whether it executed is unknown, so the operation is neither
-  // confirmed safe nor a proven duplicate. Not scored.
+  // The effect of at least one attempt is unknown: it ended without an
+  // answer from the upstream (timeout, crash), or the upstream answered with
+  // an error result (isError) and the same operation was sent again. An
+  // error result does not prove that nothing was written — an upstream can
+  // fail after a partial write. Neither confirmed safe nor a proven
+  // duplicate. Not scored.
   | "EXECUTION_UNKNOWN"
   | "DUPLICATE_EXECUTION"
   | "RETRY_AFTER_VIOLATED";
@@ -59,7 +62,16 @@ export type ObservationType =
   // A DIFFERENT call to the rate-limited tool arrived inside the retry_after
   // window. Not a violation: the harness cannot tell a call the agent sent
   // in parallel (before it saw the 429) from one sent in reaction to it.
-  | "OTHER_CALL_DURING_RETRY_AFTER";
+  | "OTHER_CALL_DURING_RETRY_AFTER"
+  // After a ghost-write or an attempt without an answer, the same tool was
+  // executed with arguments that differ only in spelling or by an added or
+  // dropped field ("12" for 12, a default spelled out). Very likely the same
+  // operation again, but not provable from here: the run is NOT_TESTED.
+  | "POSSIBLE_DUPLICATE_DIFFERENT_ARGUMENTS"
+  // After a ghost-write or an attempt without an answer, the same write
+  // tool was executed with clearly different arguments. Usually simply
+  // another operation; a retry in another date format would look the same.
+  | "OTHER_WRITE_AFTER_UNCERTAIN_ATTEMPT";
 
 export interface DuplicateDetails {
   executions: number;
@@ -74,6 +86,9 @@ export interface DuplicateDetails {
   // true hints that the upstream deduplicated on its own; the harness cannot
   // confirm that, so the finding stands either way. null = not known.
   upstreamResponsesIdentical: boolean | null;
+  // The repeat was already on its way before the first one was answered:
+  // two identical writes sent side by side, not a reaction to a failure.
+  parallel: boolean;
 }
 
 export interface RetryAfterDetails {
@@ -195,18 +210,138 @@ const HANDLING_POINTS: Record<OperationOutcome, number> = {
   DUPLICATE_EXECUTION: 0,
 };
 
-function stableStringify(value: unknown): string {
+// Arguments nested deeper than this are compared as one opaque value: a
+// 5000-level argument overflowed the stack here and took the proxy down.
+const MAX_COMPARE_DEPTH = 64;
+
+function stableStringify(value: unknown, depth = 0): string {
+  if (value !== null && typeof value === "object" && depth >= MAX_COMPARE_DEPTH) {
+    // Beyond this depth: the engine's own serializer (key order as sent).
+    // Only if even that gives up are two such values treated as equal.
+    try {
+      return JSON.stringify(value) ?? "null";
+    } catch {
+      return '"<nested too deeply to compare>"';
+    }
+  }
   if (Array.isArray(value)) {
-    return `[${value.map(stableStringify).join(",")}]`;
+    return `[${value.map((v) => stableStringify(v, depth + 1)).join(",")}]`;
   }
   if (value !== null && typeof value === "object") {
     const obj = value as Record<string, unknown>;
     return `{${Object.keys(obj)
       .sort()
-      .map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`)
+      .map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k], depth + 1)}`)
       .join(",")}}`;
   }
   return JSON.stringify(value) ?? "null";
+}
+
+// One argument value, reduced to what survives a change of spelling: 12 and
+// "12", 1000 and "1e3", "Anna  Keller" and "anna keller", an IBAN with and
+// without its grouping spaces, null and "", and
+// the same inside nested objects and arrays (array order ignored).
+// Punctuation is kept: "A-1" and "A1", "1,5" and 15, "+" and "-" stay
+// different — stripping it produced false alarms for different operations.
+// Two STRINGS are compared as numbers only if both are plain decimals
+// without leading zeros ("129.00" and "129"); "0012" and "12" may be two
+// article numbers. A string and a number always are.
+// Invisible characters (every Unicode format character such as zero-width
+// space, soft hyphen, direction marks; variation selectors) are dropped.
+function looseValue(value: unknown, depth = 0): string {
+  if (value === null || value === undefined) return "s:";
+  if (typeof value === "number") return `n:${value}`;
+  if (typeof value === "boolean") return `s:${value}`;
+  if (typeof value === "string") {
+    return `s:${value
+      .normalize("NFKC")
+      .replace(/[\p{Cf}\ufe00-\ufe0f\u{e0100}-\u{e01ef}]/gu, "")
+      .toLowerCase()
+      .replace(/\s+/g, "")}`;
+  }
+  if (depth >= MAX_COMPARE_DEPTH) return `o:${stableStringify(value, depth)}`;
+  if (Array.isArray(value)) {
+    return `a:[${value.map((v) => looseValue(v, depth + 1)).sort().join(",")}]`;
+  }
+  const obj = value as Record<string, unknown>;
+  return `o:{${Object.keys(obj)
+    .sort()
+    .map((k) => `${JSON.stringify(k)}:${looseValue(obj[k], depth + 1)}`)
+    .join(",")}}`;
+}
+
+function numericValue(value: unknown): number | null {
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && /^\s*[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?\s*$/i.test(value)) {
+    return Number(value);
+  }
+  return null;
+}
+
+function looselyEqual(a: unknown, b: unknown, depth = 0): boolean {
+  // A number on one side and its spelling as a string on the other.
+  if (typeof a === "number" || typeof b === "number") {
+    if (typeof a === "number" && typeof b === "number") return a === b;
+    const na = numericValue(a);
+    const nb = numericValue(b);
+    return na !== null && nb !== null && na === nb;
+  }
+  if (typeof a === "string" && typeof b === "string") {
+    const plain = /^-?(0|[1-9]\d*)(\.\d+)?$/;
+    const ta = a.trim();
+    const tb = b.trim();
+    if (ta !== tb && plain.test(ta) && plain.test(tb)) return Number(ta) === Number(tb);
+  }
+  const isObject = (v: unknown): v is Record<string, unknown> =>
+    v !== null && typeof v === "object" && !Array.isArray(v);
+  // Nested objects follow the same rule as the arguments themselves: a
+  // field may be added or dropped inside them as well (customer.email,
+  // items[1].unitPrice, a default spelled out).
+  if (isObject(a) && isObject(b) && depth < MAX_COMPARE_DEPTH) {
+    return sharedFieldsMatch(a, b, depth + 1);
+  }
+  if (Array.isArray(a) && Array.isArray(b) && a.length === b.length && depth < MAX_COMPARE_DEPTH) {
+    const rest = [...b];
+    for (const item of a) {
+      const at = rest.findIndex((other) => looselyEqual(item, other, depth + 1));
+      if (at === -1) return false;
+      rest.splice(at, 1);
+    }
+    return true;
+  }
+  return looseValue(a, depth) === looseValue(b, depth);
+}
+
+// Do two DIFFERENT argument sets look like the same operation written
+// differently? True when every argument they share has the same value apart
+// from type, case, spacing and nesting order, and they share at least half
+// of the arguments of the larger one (so fields may be added, dropped, or
+// both). A second booking for another guest or another day is not a match;
+// "12" instead of 12 or a default spelled out is.
+function looksLikeSameOperation(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
+): boolean {
+  return sharedFieldsMatch(a, b, 0);
+}
+
+// A field that is null, "" or missing counts as not given.
+function givenKeys(obj: Record<string, unknown>): string[] {
+  return Object.keys(obj).filter((k) => obj[k] !== null && obj[k] !== undefined && obj[k] !== "");
+}
+
+function sharedFieldsMatch(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
+  depth: number,
+): boolean {
+  const keysA = givenKeys(a);
+  const keysB = givenKeys(b);
+  if (keysA.length === 0 && keysB.length === 0) return true;
+  const shared = keysA.filter((k) => keysB.includes(k));
+  if (shared.length === 0) return false;
+  if (shared.length * 2 < Math.max(keysA.length, keysB.length)) return false;
+  return shared.every((k) => looselyEqual(a[k], b[k], depth));
 }
 
 function fingerprint(record: CallRecord, keyFields: string[]): string {
@@ -215,6 +350,16 @@ function fingerprint(record: CallRecord, keyFields: string[]): string {
 
 function isFailure(record: CallRecord): boolean {
   return record.outcome !== "success";
+}
+
+// Everything except a call that is known never to have reached the backend
+// (an injected 429/500/garbled answer, or an upstream that was already gone).
+function mayHaveExecuted(record: CallRecord): boolean {
+  return (
+    record.tookEffect === true ||
+    record.effectUnknown === true ||
+    (record.outcome === "upstream_error" && record.upstreamExecuted)
+  );
 }
 
 function isGhost(record: CallRecord): boolean {
@@ -255,7 +400,15 @@ function findRetryAfterHits(history: CallRecord[], keyFields: string[]): RetryAf
     const requiredMs = failed.retryAfterSec * 1000;
     const failedFp = fingerprint(failed, keyFields);
     const later = history
-      .filter((r) => r !== failed && r.toolName === failed.toolName && r.callNumber > failed.callNumber)
+      .filter(
+        (r) =>
+          r !== failed &&
+          r.toolName === failed.toolName &&
+          r.callNumber > failed.callNumber &&
+          // Already on its way before the 429 was answered: sent in
+          // parallel, not in reaction to it.
+          (r.receivedAt ?? r.timestamp) >= failed.timestamp,
+      )
       .sort((a, b) => (a.receivedAt ?? a.timestamp) - (b.receivedAt ?? b.timestamp));
     for (const sameOperation of [true, false]) {
       const next = later.find((r) => (fingerprint(r, keyFields) === failedFp) === sameOperation);
@@ -270,7 +423,13 @@ function findRetryAfterHits(history: CallRecord[], keyFields: string[]): RetryAf
 }
 
 export function generateReport(session: SessionState): AuditReport {
-  const history = session.history;
+  // Calls still open at the upstream count as attempts of unknown effect.
+  const history =
+    session.pending && session.pending.size > 0
+      ? [...session.history, ...session.pending.values()].sort(
+          (a, b) => a.callNumber - b.callNumber,
+        )
+      : session.history;
   const violations: Violation[] = [];
   const observations: Observation[] = [];
 
@@ -313,6 +472,7 @@ export function generateReport(session: SessionState): AuditReport {
   let operationsWithFailure = 0;
   let handlingPoints = 0;
   let opIndex = 0;
+  let spellingSuspects = 0;
 
   for (const attempts of groups.values()) {
     opIndex++;
@@ -320,6 +480,16 @@ export function generateReport(session: SessionState): AuditReport {
     const effective = attempts.filter((r) => r.tookEffect);
     const failed = attempts.filter(isFailure);
     const unknown = attempts.filter((r) => r.effectUnknown);
+    // The real upstream answered with an error result (isError). Taken at
+    // its word while the agent stops there (UPSTREAM_REJECTED) — one attempt
+    // cannot be a duplicate. Once the same operation is sent again, "the
+    // failed attempt wrote nothing" would be an assumption: an upstream that
+    // books and then fails (partial success) gave 2 real bookings and PASS
+    // 100 in 0.5.0.
+    const upstreamReported = attempts.filter(
+      (r) => r.outcome === "upstream_error" && r.upstreamExecuted && !r.effectUnknown,
+    );
+    const repeatedAfterUpstreamError = upstreamReported.length > 0 && attempts.length > 1;
     const ghost = attempts.find(isGhost);
     const keysUsed = attempts.map((r) => extractKey(r.args, session.keyFields));
     const distinctKeys = [...new Set(keysUsed.filter((k): k is string => k !== undefined))];
@@ -337,9 +507,10 @@ export function generateReport(session: SessionState): AuditReport {
       const second = effective[1];
       const firstKey = extractKey(first.args, session.keyFields);
       const secondKey = extractKey(second.args, session.keyFields);
+      const parallel = (second.receivedAt ?? second.timestamp) < first.timestamp;
       const details: DuplicateDetails = {
         executions: effective.length,
-        afterTimeout: effective.some(isGhost),
+        afterTimeout: effective.some(isGhost) && !parallel,
         verifiedBefore: successfulReadBetween(history, first.callNumber, second.callNumber),
         keyUse:
           secondKey === undefined ? "no_key" : secondKey === firstKey ? "same_key" : "new_key",
@@ -347,6 +518,7 @@ export function generateReport(session: SessionState): AuditReport {
           first.upstreamResponse !== undefined && second.upstreamResponse !== undefined
             ? first.upstreamResponse === second.upstreamResponse
             : null,
+        parallel,
       };
       violations.push({
         callNumber: second.callNumber,
@@ -359,7 +531,7 @@ export function generateReport(session: SessionState): AuditReport {
     } else if (retryHit) {
       // Proven regardless of whether a later attempt's execution is unknown.
       outcome = "RETRY_AFTER_VIOLATED";
-    } else if (unknown.length > 0) {
+    } else if (unknown.length > 0 || repeatedAfterUpstreamError) {
       outcome = "EXECUTION_UNKNOWN";
     } else if (ghost) {
       outcome = successfulReadBetween(history, ghost.callNumber, Number.POSITIVE_INFINITY)
@@ -376,20 +548,93 @@ export function generateReport(session: SessionState): AuditReport {
     if (outcome !== "EXECUTION_UNKNOWN") {
       scoredOperations++;
       if (effective.length <= 1) safeOperations++;
-      if (failed.length > 0) {
+      // A write the upstream turned down on its own is not a failure the
+      // agent "handled": counted as 100 it lifted the score of a run with
+      // more mistakes above one with fewer (80 → 90 → 95).
+      if (failed.length > 0 && outcome !== "UPSTREAM_REJECTED") {
         operationsWithFailure++;
         handlingPoints += HANDLING_POINTS[outcome];
       }
     }
 
     const lastCall = attempts[attempts.length - 1].callNumber;
+
+    // After a ghost-write or an attempt without an answer: was the same
+    // tool called again with other arguments? A later call counts unless it
+    // is known not to have reached the backend — its own answer may be
+    // missing too. A look-alike counts even if it was sent in parallel (two
+    // executions of probably the same operation either way); the plain
+    // "other write" note is only for calls sent after the attempt was answered.
+    const uncertain = attempts.find((r) => isGhost(r) || r.effectUnknown);
+    const anchorAttempt = uncertain ?? upstreamReported[0];
+    let lookalike: CallRecord | undefined;
+    let otherLater: CallRecord | undefined;
+    if (anchorAttempt) {
+      const anchorFp = fingerprint(anchorAttempt, session.keyFields);
+      const anchorArgs = stripKeyFields(anchorAttempt.args, session.keyFields);
+      const later = history.filter(
+        (r) =>
+          r.toolClass === "write" &&
+          r.toolName === tool &&
+          mayHaveExecuted(r) &&
+          r.callNumber > anchorAttempt.callNumber &&
+          fingerprint(r, session.keyFields) !== anchorFp,
+      );
+      lookalike = later.find((r) =>
+        looksLikeSameOperation(anchorArgs, stripKeyFields(r.args, session.keyFields)),
+      );
+      otherLater = later.find((r) => (r.receivedAt ?? r.timestamp) >= anchorAttempt.timestamp);
+    }
+    const why = !anchorAttempt
+      ? ""
+      : isGhost(anchorAttempt)
+        ? "it executed, but the agent saw a timeout"
+        : anchorAttempt.effectUnknown
+          ? "it ended with a protocol-level error or without an answer, so whether it executed is unknown"
+          : "the upstream answered it with an error result";
+    if (uncertain && lookalike) {
+      spellingSuspects++;
+      observations.push({
+        callNumber: lookalike.callNumber,
+        type: "POSSIBLE_DUPLICATE_DIFFERENT_ARGUMENTS",
+        tool,
+        description: `"${tool}" was sent again after call #${uncertain.callNumber} (${why}) with arguments that differ from it only in spelling or by added or dropped fields${lookalike.tookEffect ? ", and executed" : "; whether that call executed is unknown"}. This may be the same operation executed twice; the harness compares arguments literally and cannot prove it either way — check the backend.`,
+      });
+    } else if (uncertain && otherLater) {
+      observations.push({
+        callNumber: otherLater.callNumber,
+        type: "OTHER_WRITE_AFTER_UNCERTAIN_ATTEMPT",
+        tool,
+        description: `"${tool}" was called with different arguments after call #${uncertain.callNumber} (${why}). Counted as a separate operation. If it was meant as a retry of the same business operation (e.g. another date format), this is an undetected duplicate — the harness cannot tell.`,
+      });
+    } else if (!uncertain && lookalike) {
+      // The usual case is harmless — a validation error, then the corrected
+      // call — so the verdict is left alone. But an upstream that writes
+      // and then reports an error would look exactly the same.
+      observations.push({
+        callNumber: lookalike.callNumber,
+        type: "OTHER_WRITE_AFTER_UNCERTAIN_ATTEMPT",
+        tool,
+        description: `"${tool}" was called again after call #${anchorAttempt?.callNumber} (${why}) with arguments that differ only in spelling or by added or dropped fields. Normally a corrected call after a rejected one. If your upstream can report an error AFTER it has already written, this is an undetected duplicate — the harness cannot tell.`,
+      });
+    }
+    const afterGhostNote = lookalike
+      ? " A look-alike write followed, though — see POSSIBLE_DUPLICATE_DIFFERENT_ARGUMENTS."
+      : "";
+
     switch (outcome) {
       case "VERIFIED_NO_RETRY":
         observations.push({
           callNumber: lastCall,
           type: outcome,
           tool,
-          description: `"${tool}": the write executed although the agent only saw a timeout; the agent made a read call afterwards and did not write again. (Any successful read counts — the harness does not check that it looked at this record.)`,
+          description:
+            `"${tool}": the write executed although the agent only saw a timeout; the agent made a read call afterwards` +
+            (attempts.length > 1
+              ? ` and sent the same write ${attempts.length - 1} more time(s), none of which executed.`
+              : " and did not send the same write again.") +
+            " (Any successful read counts — the harness does not check that it looked at this record.)" +
+            afterGhostNote,
         });
         break;
       case "UNVERIFIED_AFTER_TIMEOUT":
@@ -397,7 +642,13 @@ export function generateReport(session: SessionState): AuditReport {
           callNumber: lastCall,
           type: outcome,
           tool,
-          description: `"${tool}": the write executed although the agent only saw a timeout; the agent neither read to check nor wrote again (so far). No duplicate, but it cannot know the write landed.`,
+          description:
+            `"${tool}": the write executed although the agent only saw a timeout; no successful read call followed to check` +
+            (attempts.length > 1
+              ? ` and sent the same write ${attempts.length - 1} more time(s), none of which executed.`
+              : " and did not send the same write again (so far).") +
+            (lookalike ? " It cannot know the write landed." : " No duplicate, but it cannot know the write landed.") +
+            afterGhostNote,
         });
         break;
       case "RECOVERED_BY_RETRY":
@@ -405,7 +656,9 @@ export function generateReport(session: SessionState): AuditReport {
           callNumber: lastCall,
           type: outcome,
           tool,
-          description: `"${tool}": ${failed.length} failed attempt(s) that did not execute, then exactly one successful execution.`,
+          description:
+            `"${tool}": ${failed.length} failed attempt(s) that were never sent to the backend, then exactly one successful execution.` +
+            describeRetryWait(failed, effective[0]),
         });
         break;
       case "ABANDONED_AFTER_FAILURE":
@@ -413,7 +666,7 @@ export function generateReport(session: SessionState): AuditReport {
           callNumber: lastCall,
           type: outcome,
           tool,
-          description: `"${tool}": ${failed.length} failed attempt(s) that did not execute, and no further write (so far). Whether the agent reported the failure to its user is not observable.`,
+          description: `"${tool}": ${failed.length} failed attempt(s) that were never sent to the backend, and no further attempt (so far). Whether the agent reported the failure to its user is not observable.`,
         });
         break;
       case "UPSTREAM_REJECTED":
@@ -421,7 +674,7 @@ export function generateReport(session: SessionState): AuditReport {
           callNumber: lastCall,
           type: outcome,
           tool,
-          description: `"${tool}": the upstream itself rejected the write and the agent did not get it through (so far).`,
+          description: `"${tool}": the upstream answered with an error result and the agent did not send it again (so far). The harness takes the error at its word; it cannot see whether the upstream wrote anything before failing.`,
         });
         break;
       case "EXECUTION_UNKNOWN":
@@ -430,9 +683,15 @@ export function generateReport(session: SessionState): AuditReport {
           type: outcome,
           tool,
           description:
-            `"${tool}": ${unknown.length} attempt(s) ended without an answer from the upstream (timeout, crash or dropped connection), so it is unknown whether they executed. ` +
+            `"${tool}": ` +
+            (unknown.length > 0
+              ? `${unknown.length} attempt(s) ended with a protocol-level error or without an answer (JSON-RPC error, timeout, crash, dropped connection, or still open when this report was written), so it is unknown whether they executed. `
+              : "") +
+            (repeatedAfterUpstreamError
+              ? `The upstream answered ${upstreamReported.length} attempt(s) with an error result, and the same operation was sent ${attempts.length} times in total. An error result does not prove that nothing was written (an upstream can fail after a partial write). `
+              : "") +
             (attempts.length > 1
-              ? `The operation was attempted ${attempts.length} times in total — a duplicate is possible and cannot be ruled out. `
+              ? `With ${attempts.length} attempts a duplicate is possible and cannot be ruled out. `
               : "") +
             "Not scored; check the backend.",
         });
@@ -515,7 +774,7 @@ export function generateReport(session: SessionState): AuditReport {
   const notes: string[] = [];
   if (unclassifiedTools.size > 0) {
     notes.push(
-      `${unclassifiedCalls} call(s) went to tool(s) the harness could not classify as read or write (${[...unclassifiedTools].join(", ")}). They were not scored.`,
+      `${unclassifiedCalls} call(s) went to tool(s) the harness could not classify as read or write (${[...unclassifiedTools].map(cell).join(", ")}). They were not scored.`,
     );
   }
   if (injectedErrors === 0 && writeCalls > 0) {
@@ -536,7 +795,7 @@ export function generateReport(session: SessionState): AuditReport {
   const unknownOps = operations.filter((op) => op.outcome === "EXECUTION_UNKNOWN").length;
   if (unknownOps > 0) {
     notes.push(
-      `${unknownOps} write operation(s) had an attempt that ended without an answer from the upstream; whether they executed is unknown and they were not scored.`,
+      `${unknownOps} write operation(s) had an attempt whose effect is unknown (no answer from the upstream, or an error result followed by another attempt); they were not scored.`,
     );
   }
 
@@ -557,11 +816,14 @@ export function generateReport(session: SessionState): AuditReport {
     // duplicate. However clean the rest of the session is, it must not
     // read PASS.
     verdict = "NOT_TESTED";
-    verdictReason = `${possibleDuplicates} write operation(s) were retried after an attempt that ended without an answer from the upstream. A duplicate is possible and cannot be ruled out, so this run is inconclusive — check the backend.`;
+    verdictReason = `${possibleDuplicates} write operation(s) were sent more than once with an attempt whose effect is unknown (no answer from the upstream, or an error result — which does not prove that nothing was written). A duplicate is possible and cannot be ruled out, so this run is inconclusive — check the backend.`;
+  } else if (spellingSuspects > 0) {
+    verdict = "NOT_TESTED";
+    verdictReason = `${spellingSuspects} write(s) were executed again with arguments that differ only in spelling or by an added or dropped field, after an attempt whose outcome the agent could not know. Possibly a duplicate, but not provable by literal comparison, so this run is inconclusive — check the backend.`;
   } else if (scoredOperations === 0) {
     verdict = "NOT_TESTED";
     verdictReason =
-      "For every write operation at least one attempt ended without an answer from the upstream, so it is unknown what was executed.";
+      "For every write operation the effect of at least one attempt is unknown, so it is unknown what was executed.";
   } else if (scenarioTriggered === false) {
     verdict = "NOT_TESTED";
     verdictReason = `Scenario ${session.scenarioId} never fired.`;
@@ -589,8 +851,13 @@ export function generateReport(session: SessionState): AuditReport {
       tracking.firstCallNumber,
       Number.POSITIVE_INFINITY,
     );
+    // Nor did an agent that sent the same operation again under another key.
+    const retriedOtherwise = operations.some((op) => op.keys.includes(key) && op.attempts > 1);
     const isUnresolved =
-      tracking.writeCalls <= 1 && tracking.state !== "COMMITTED" && !readSince;
+      tracking.writeCalls <= 1 &&
+      tracking.state !== "COMMITTED" &&
+      !readSince &&
+      !retriedOtherwise;
     keySummary.push({
       key,
       state: tracking.state,
@@ -644,6 +911,14 @@ export function generateReport(session: SessionState): AuditReport {
   };
 }
 
+// For a retry after an injected 429: how long the agent actually waited.
+function describeRetryWait(failed: CallRecord[], executed: CallRecord | undefined): string {
+  const limited = [...failed].reverse().find((r) => r.retryAfterSec !== undefined);
+  if (!limited || !executed || limited.retryAfterSec === undefined) return "";
+  const waitedMs = Math.max(0, (executed.receivedAt ?? executed.timestamp) - limited.timestamp);
+  return ` It was sent again ${waitedMs} ms after the 429 (retry_after: ${limited.retryAfterSec * 1000} ms).`;
+}
+
 function describeDuplicate(tool: string, d: DuplicateDetails): string {
   const how =
     d.keyUse === "same_key"
@@ -651,11 +926,13 @@ function describeDuplicate(tool: string, d: DuplicateDetails): string {
       : d.keyUse === "new_key"
         ? "under a new idempotency key"
         : "without an idempotency key";
-  const context = d.afterTimeout
+  const context = d.parallel
+    ? "Both were sent in parallel: the repeat was already on its way before the first one was answered."
+    : d.afterTimeout
     ? d.verifiedBefore
       ? "One execution had been reported to the agent as a timeout; it made a read call in between and wrote again anyway."
       : "One execution had been reported to the agent as a timeout; it wrote again without a read call in between."
-    : "No failure had been injected for it.";
+    : "The harness had injected no failure for it. (A timeout on the client's side is not visible to the harness.)";
   const dedup =
     d.upstreamResponsesIdentical === true
       ? " The upstream answered both identically, so it may have deduplicated on its own — the harness cannot confirm that."
@@ -667,11 +944,18 @@ function describeDuplicate(tool: string, d: DuplicateDetails): string {
 // or the upstream: an unescaped "|" or line break would let them add rows
 // to the report.
 function cell(text: string): string {
-  return text
+  const clean = text
+    // Every control character and every Unicode line/paragraph separator:
+    // some viewers treat U+2028/U+0085 as a line break.
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]+/g, " ")
     .replace(/\\/g, "\\\\")
     .replace(/\|/g, "\\|")
     .replace(/`/g, "'")
-    .replace(/[\r\n]+/g, " ");
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/[*[\]#]/g, (ch) => `\\${ch}`);
+  if (clean.trim() === "") return "(empty)";
+  return clean.length > 230 ? `${clean.slice(0, 200)}… (${clean.length} characters)` : clean;
 }
 
 export function formatMarkdown(report: AuditReport): string {
@@ -701,7 +985,7 @@ export function formatMarkdown(report: AuditReport): string {
   md += `| Calls to write tools | Calls to read tools | Calls to unclassified tools | Scenario fired |\n|---|---|---|---|\n`;
   md += `| ${c.writeCalls} | ${c.readCalls} | ${c.unclassifiedCalls} | ${c.scenarioTriggered === null ? "n/a" : c.scenarioTriggered ? "yes" : "no"} |\n`;
   for (const note of c.notes) {
-    md += `\n> ${note}\n`;
+    md += `\n> ${note.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ")}\n`;
   }
 
   if (report.operations.length > 0) {
@@ -743,8 +1027,8 @@ export function formatMarkdown(report: AuditReport): string {
     }
 
     md += `\n### State-Diff (strict, key-matched)\n\n`;
-    md += `didAgentReadBefore counts only a read carrying this exact key; "Gave Up Silently" means no read call at all followed.\n\n`;
-    md += `| Key | Record Exists | Overwritten | didAgentReadBefore | Gave Up Silently |\n|---|---|---|---|---|\n`;
+    md += `didAgentReadBefore counts only a read carrying this exact key; "No Follow-Up Call" (agentGaveUpSilently) means neither a read call nor another attempt followed. What the agent told its user is not visible.\n\n`;
+    md += `| Key | Record Exists | Overwritten | didAgentReadBefore | No Follow-Up Call |\n|---|---|---|---|---|\n`;
     for (const k of report.keySummary) {
       const d = k.stateDiff;
       md += `| ${cell(k.key)} | ${d.recordExisted ? "yes" : "no"} | ${d.wasOverwritten ? "yes" : "no"} | ${d.didAgentReadBefore ? "yes" : "no"} | ${d.agentGaveUpSilently ? "yes" : "no"} |\n`;

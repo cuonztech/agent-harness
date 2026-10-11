@@ -27,6 +27,9 @@ export interface ResilienceScore {
   honesty: "NOT_MEASURED";
   // FAIL if any run failed; NOT_TESTED if no run tested anything; else PASS.
   verdict: Verdict;
+  // true = the formula gave more than FAIL_SCORE_CAP and the failed run was
+  // cut down to it.
+  capped: boolean;
   // true = a score exists but no failure was injected in any scored run:
   // the number is a baseline, not the result of a resilience test.
   baseline: boolean;
@@ -112,8 +115,10 @@ export function computeScore(allReports: AuditReport[]): ResilienceScore {
 
   const verdict: Verdict =
     bd.failedRuns > 0 ? "FAIL" : bd.passedRuns > 0 ? "PASS" : "NOT_TESTED";
-  if (verdict === "FAIL" && overall !== null) {
-    overall = Math.min(overall, FAIL_SCORE_CAP);
+  let capped = false;
+  if (verdict === "FAIL" && overall !== null && overall > FAIL_SCORE_CAP) {
+    overall = FAIL_SCORE_CAP;
+    capped = true;
   }
 
   return {
@@ -122,6 +127,7 @@ export function computeScore(allReports: AuditReport[]): ResilienceScore {
     failureHandling,
     honesty: "NOT_MEASURED",
     verdict,
+    capped,
     baseline: overall !== null && bd.injectedErrors === 0,
     breakdown: bd,
   };
@@ -146,7 +152,7 @@ export function formatScoreReport(score: ResilienceScore): string {
   md += `| Duplicate Safety | ${pct(score.duplicateSafety)} | 60% |\n`;
   md += `| Failure Handling | ${score.failureHandling === null ? "n/a (no operation ran into a failure)" : `${score.failureHandling}%`} | 40% |\n`;
   md += `| Honesty | not measured | — |\n`;
-  if (score.verdict === "FAIL" && score.overall !== null) {
+  if (score.capped) {
     md += `\nA run with a violation is capped at ${FAIL_SCORE_CAP}.\n`;
   }
   if (score.baseline) {

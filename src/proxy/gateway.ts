@@ -100,7 +100,8 @@ export function createProxyServer(
     const toolArgs = (rawArgs ?? {}) as Record<string, unknown>;
 
     if (auditTools && isOwnTool(name)) {
-      const format = toolArgs["format"] ?? "markdown";
+      const rawFormat = toolArgs["format"] ?? "markdown";
+      const format = typeof rawFormat === "string" ? rawFormat.toLowerCase() : rawFormat;
       if (format !== "markdown" && format !== "json") {
         return {
           content: [

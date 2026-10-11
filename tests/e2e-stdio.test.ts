@@ -30,6 +30,30 @@ describe("MCP stdio server (real process, real protocol)", () => {
     await client?.close();
   });
 
+  // An external test lost 69 of 100 real-LLM runs because its tool-calling
+  // stack could not compile these keywords.
+  it("lists tool schemas without $schema, pattern, format, propertyNames or an execution block", async () => {
+    const tools = await client.listTools();
+    expect(tools.tools).toHaveLength(7);
+    for (const tool of tools.tools) {
+      const raw = JSON.stringify(tool.inputSchema);
+      expect(raw).not.toContain("$schema");
+      expect(raw).not.toContain('"pattern"');
+      expect(raw).not.toContain("propertyNames");
+      expect(raw).not.toContain('"format":"uuid"');
+      expect(tool).not.toHaveProperty("execution");
+      expect(tool.description).toBeTruthy();
+    }
+    // The argument NAMED "format" must survive, and stay optional.
+    const getReport = tools.tools.find((t) => t.name === "get_report");
+    const schema = getReport?.inputSchema as { properties: Record<string, unknown>; required: string[] };
+    expect(Object.keys(schema.properties).sort()).toEqual(["format", "session_id"]);
+    expect(schema.required).toEqual(["session_id"]);
+    // Validation still happens at call time.
+    const bad = await client.callTool({ name: "get_report", arguments: { session_id: "not-a-uuid" } });
+    expect(bad.isError).toBe(true);
+  });
+
   it("completes the MCP handshake and lists all registered tools", async () => {
     const tools = await client.listTools();
     const names = tools.tools.map((t) => t.name).sort();

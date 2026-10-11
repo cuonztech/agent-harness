@@ -56,7 +56,7 @@ export const StartSessionSchema = {
 };
 
 export const ExecuteCallSchema = {
-  session_id: z.string().uuid().describe("Active session ID."),
+  session_id: z.string().uuid().describe("Active session ID (the UUID returned by start_session)."),
   tool_name: z.string().describe("Name of the tool the agent is calling."),
   arguments: z
     .record(z.string(), z.unknown())
@@ -68,7 +68,7 @@ export const ExecuteCallSchema = {
 };
 
 export const GetReportSchema = {
-  session_id: z.string().uuid().describe("Session ID to audit."),
+  session_id: z.string().uuid().describe("Session ID to audit (the UUID returned by start_session)."),
   format: z
     .enum(["json", "markdown"])
     .optional()
@@ -77,7 +77,7 @@ export const GetReportSchema = {
 };
 
 export const GetScoreSchema = {
-  session_id: z.string().uuid().describe("Session ID to score."),
+  session_id: z.string().uuid().describe("Session ID to score (the UUID returned by start_session)."),
   format: z
     .enum(["json", "markdown"])
     .optional()
@@ -88,9 +88,9 @@ export const GetScoreSchema = {
 export const ListScenariosSchema = {};
 
 export const ResetSessionSchema = {
-  session_id: z.string().uuid().describe("Session ID to reset."),
+  session_id: z.string().uuid().describe("Session ID to reset (the UUID returned by start_session)."),
 };
 
 export const DeleteSessionSchema = {
-  session_id: z.string().uuid().describe("Session ID to delete."),
+  session_id: z.string().uuid().describe("Session ID to delete (the UUID returned by start_session)."),
 };

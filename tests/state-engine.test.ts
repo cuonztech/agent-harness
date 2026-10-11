@@ -153,4 +153,30 @@ describe("StateEngine", () => {
       expect(tracking?.state).toBe("COMMITTED");
     });
   });
+
+  describe("glob patterns for tool names", () => {
+    it.each([
+      ["create_*", "create_booking", true],
+      ["create_*", "recreate_booking", false],
+      ["*_order", "place_order", true],
+      ["*_order", "place_orders", false],
+      ["a*b*c", "a-b-c", true],
+      ["a*b*c", "a-c-b", false],
+      ["ab*ba", "aba", false],
+      ["*", "", true],
+      ["exact", "exact", true],
+      ["exact", "exactly", false],
+      ["a.b", "axb", false],
+      ["**pay**", "repay_now", true],
+    ])("%s on %s → %s", (pattern, name, expected) => {
+      expect(isWriteTool(name, [pattern])).toBe(expected);
+    });
+
+    // As a regular expression this pattern took 25 s on one tool name.
+    it("answers at once for a pattern with many wildcards", () => {
+      const started = Date.now();
+      expect(isWriteTool("a".repeat(40) + "b", ["*a".repeat(30) + "*c"])).toBe(false);
+      expect(Date.now() - started).toBeLessThan(200);
+    });
+  });
 });

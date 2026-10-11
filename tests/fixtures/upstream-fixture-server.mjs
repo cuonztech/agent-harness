@@ -148,6 +148,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case "create_booking": {
       ledger.push({ tool: name, args });
       const bookings = ledger.filter((e) => e.tool === "create_booking").length;
+      // FIXTURE_SLOW_SECOND_BOOKING_MS: from the second booking on, the write
+      // is executed at once but the answer is held back — a call that is
+      // still open when the client goes away.
+      const slowMs = Number(process.env.FIXTURE_SLOW_SECOND_BOOKING_MS ?? 0);
+      if (slowMs > 0 && bookings >= 2) {
+        await new Promise((resolve) => setTimeout(resolve, slowMs));
+      }
       return text({ status: "confirmed", booking_id: `B-${bookings}`, error: null });
     }
 

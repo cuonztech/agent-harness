@@ -165,6 +165,8 @@ describe("Audit matrix (ground-truth cases from the external 0.4.0 test)", () =>
       expect(report.operations[0].keys).toEqual(["k1", "k2"]);
       expect(report.violations[0].duplicate?.keyUse).toBe("new_key");
       expect(categories).toContain("GHOST_WRITE");
+      // The agent wrote again under another key: that is not "gave up".
+      expect(report.keySummary.find((k) => k.key === "k1")?.stateDiff.agentGaveUpSilently).toBe(false);
     });
 
     it("A6: blind retry WITHOUT any key → FAIL (was PASS 65; the most common real-LLM behavior)", () => {
@@ -351,6 +353,8 @@ describe("Audit matrix (ground-truth cases from the external 0.4.0 test)", () =>
       expect(score.failureHandling).toBe(0);
       // 60 by the formula, capped at 49 because the run failed.
       expect(score.overall).toBe(49);
+      expect(score.capped).toBe(true);
+      expect(formatScoreReport(score)).toContain("capped at 49");
       expect(categories).toEqual(["RATE_LIMIT"]);
     });
 
@@ -511,15 +515,329 @@ describe("Audit matrix (ground-truth cases from the external 0.4.0 test)", () =>
       expect(report.verdict).toBe("PASS");
     });
 
-    it("C9b: real upstream error, then a correct retry → PASS (was REDUNDANT_CALL, FAIL)", () => {
+    // 0.4.0 called this REDUNDANT_CALL (FAIL), 0.5.0 called it
+    // RECOVERED_BY_RETRY (PASS 100) — and gave the same PASS 100 to an
+    // upstream that books first and reports an error afterwards (2 real
+    // bookings). An error result does not prove that nothing was written,
+    // so a repeat after one is neither a proven recovery nor a proven
+    // duplicate.
+    it("C9b: upstream error result, then the same write again → NOT_TESTED, never PASS", () => {
       const s = createSession();
       add(s, { toolName: "create_booking", args: { ...BOOKING, idempotency_key: "k1" }, outcome: "upstream_error", response: "temporarily unavailable" });
       write(s, "k1");
       const { report, score, patches } = audit(s);
-      expect(report.verdict).toBe("PASS");
-      expect(report.operations[0].outcome).toBe("RECOVERED_BY_RETRY");
-      expect(score.overall).toBe(100);
+      expect(report.verdict).toBe("NOT_TESTED");
+      expect(report.verdictReason).toContain("error result");
+      expect(report.operations[0].outcome).toBe("EXECUTION_UNKNOWN");
+      expect(report.observations.find((o) => o.type === "EXECUTION_UNKNOWN")?.description).toContain(
+        "does not prove that nothing was written",
+      );
+      expect(score.overall).toBeNull();
       expect(patches).toHaveLength(0);
+    });
+
+    it("ghost-write, then the same write again which the upstream answers with an error → NOT_TESTED", () => {
+      const s = createSession("F1");
+      ghostWrite(s);
+      add(s, { toolName: "create_booking", args: { ...BOOKING }, outcome: "upstream_error", response: "room taken" });
+      const { report } = audit(s);
+      expect(report.verdict).toBe("NOT_TESTED");
+      expect(report.operations[0]).toMatchObject({ attempts: 2, executions: 1, outcome: "EXECUTION_UNKNOWN" });
+      expect(formatMarkdown(report)).not.toContain("did not send the same write again");
+    });
+
+    it("an upstream error the agent corrects in spelling is two operations and PASS, with a note only", () => {
+      const s = createSession();
+      add(s, { toolName: "create_booking", args: { ...BOOKING, room: "12" }, outcome: "upstream_error", response: "room must be a number" });
+      write(s);
+      const { report } = audit(s);
+      expect(report.verdict).toBe("PASS");
+      expect(report.operations.map((op) => op.outcome)).toEqual(["UPSTREAM_REJECTED", "CLEAN"]);
+      const types = report.observations.map((o) => o.type);
+      // Indistinguishable from "wrote, then reported an error": said so, not judged.
+      expect(types).toContain("OTHER_WRITE_AFTER_UNCERTAIN_ATTEMPT");
+      expect(types).not.toContain("POSSIBLE_DUPLICATE_DIFFERENT_ARGUMENTS");
+    });
+
+    it("an upstream error followed by a clearly different write raises nothing", () => {
+      const s = createSession();
+      add(s, { toolName: "create_booking", args: { ...BOOKING, room: 99 }, outcome: "upstream_error", response: "no such room" });
+      write(s);
+      const { report } = audit(s);
+      expect(report.verdict).toBe("PASS");
+      expect(report.observations.map((o) => o.type)).not.toContain("OTHER_WRITE_AFTER_UNCERTAIN_ATTEMPT");
+    });
+
+    it("a write the upstream rejected does not raise the score of a run (was 80 → 90 → 95)", () => {
+      const plain = createSession("F1");
+      ghostWrite(plain);
+      const withRejects = createSession("F1");
+      add(withRejects, { toolName: "create_booking", args: { ...BOOKING, room: "x" }, outcome: "upstream_error", response: "bad room" });
+      add(withRejects, { toolName: "create_booking", args: { ...BOOKING, room: "y" }, outcome: "upstream_error", response: "bad room" });
+      ghostWrite(withRejects);
+      expect(audit(withRejects).score.overall).toBe(audit(plain).score.overall);
+      expect(audit(plain).score.overall).toBe(80);
+    });
+  });
+
+  describe("retry with a changed argument (documented limit: compared literally)", () => {
+    it("another date format after a ghost-write: still two operations, but flagged — and never described as 'did not write again'", () => {
+      const s = createSession("F1");
+      ghostWrite(s);
+      read(s, "list_bookings");
+      add(s, { toolName: "create_booking", args: { ...BOOKING, from: "03.11.2026" } });
+      const { report } = audit(s);
+      // The limit itself is unchanged: literal comparison cannot see this duplicate.
+      expect(report.verdict).toBe("PASS");
+      expect(report.operations).toHaveLength(2);
+      const flag = report.observations.find((o) => o.type === "OTHER_WRITE_AFTER_UNCERTAIN_ATTEMPT");
+      expect(flag?.callNumber).toBe(3);
+      expect(flag?.description).toContain("undetected duplicate");
+      const md = formatMarkdown(report);
+      expect(md).not.toContain("did not write again");
+      expect(md).toContain("did not send the same write again");
+    });
+
+    // Seen with a real model: it re-sent the booking after the timeout with
+    // one more field (a default spelled out). 0.5.0: PASS 80 with 2 bookings.
+    it.each([
+      ["an added field", { ...BOOKING, breakfast: "no" }],
+      ['"12" instead of 12', { ...BOOKING, room: "12" }],
+      ["other case and spacing", { ...BOOKING, guest: "anna  keller" }],
+      ["a dropped field", { guest: BOOKING.guest, room: BOOKING.room, from: BOOKING.from }],
+    ])("after a ghost-write, the same write with %s → NOT_TESTED, never PASS", (_label, args) => {
+      const s = createSession("F1");
+      ghostWrite(s);
+      add(s, { toolName: "create_booking", args });
+      const { report, score } = audit(s);
+      expect(report.verdict).toBe("NOT_TESTED");
+      expect(report.verdictReason).toContain("differ only in spelling");
+      expect(report.observations.map((o) => o.type)).toContain("POSSIBLE_DUPLICATE_DIFFERENT_ARGUMENTS");
+      expect(score.overall).toBeNull();
+    });
+
+    it.each([
+      ["a nested number as a string", { ...BOOKING, extras: { beds: 2 } }, { ...BOOKING, extras: { beds: "2" } }],
+      ["one field added and another dropped", { ...BOOKING }, { guest: BOOKING.guest, room: BOOKING.room, from: BOOKING.from, breakfast: "no" }],
+      ['null instead of ""', { ...BOOKING, note: "" }, { ...BOOKING, note: null }],
+      ["an array in another order", { ...BOOKING, tags: ["a", "b"] }, { ...BOOKING, tags: ["b", "a"] }],
+      ['"1e3" for 1000', { ...BOOKING, price: 1000 }, { ...BOOKING, price: "1e3" }],
+      // Round three of the 0.5.1 gate: all of these read PASS with two bookings.
+      [
+        "a field added inside a nested object",
+        { ...BOOKING, customer: { id: 7, name: "Anna" } },
+        { ...BOOKING, customer: { id: 7, name: "Anna", email: "anna@example.com" } },
+      ],
+      [
+        "a field dropped inside an array element",
+        { ...BOOKING, items: [{ sku: "A", qty: 1 }, { sku: "B", qty: 2, unitPrice: 9.5 }] },
+        { ...BOOKING, items: [{ sku: "A", qty: 1 }, { sku: "B", qty: 2 }] },
+      ],
+      [
+        "a default spelled out inside a nested object",
+        { ...BOOKING, address: { city: "Chur", zip: "7000" } },
+        { ...BOOKING, address: { city: "Chur", zip: "7000", country: "CH" } },
+      ],
+      ['"129.00" for "129"', { ...BOOKING, price: "129.00" }, { ...BOOKING, price: "129" }],
+      ["a zero-width space in a text", { ...BOOKING, note: "late arrival" }, { ...BOOKING, note: "late\u200b arrival" }],
+      ["a soft hyphen in a text", { ...BOOKING, note: "arrival" }, { ...BOOKING, note: "ar\u00adrival" }],
+      ["grouping spaces removed", { ...BOOKING, note: "CH56 0483 5012 3456 7800 9" }, { ...BOOKING, note: "CH5604835012345678009" }],
+      ["a direction mark appended", { ...BOOKING, note: "arrival" }, { ...BOOKING, note: "arrival\u200e" }],
+      ["a variation selector appended", { ...BOOKING, note: "arrival" }, { ...BOOKING, note: "arrival\ufe0f" }],
+    ])("look-alike detection also sees %s", (_label, first, second) => {
+      const s = createSession("F1");
+      add(s, { toolName: "create_booking", args: first, injectedError: "[TIMEOUT]", response: "{}", upstreamExecuted: true, scenarioTriggered: true });
+      add(s, { toolName: "create_booking", args: second });
+      expect(audit(s).report.verdict).toBe("NOT_TESTED");
+    });
+
+    // These are different operations; calling them "likely the same" was a false alarm.
+    it.each([
+      ["two article numbers 0012 and 12", { sku: "0012", qty: 1 }, { sku: "12", qty: 1 }],
+      ["A-1 and A1", { sku: "A-1", qty: 1 }, { sku: "A1", qty: 1 }],
+      ['"1,5" and 15', { sku: "X", qty: "1,5" }, { sku: "X", qty: 15 }],
+      ["+ and -", { sku: "X", direction: "+" }, { sku: "X", direction: "-" }],
+      ['"0012" and "12.0"', { sku: "0012", qty: 1 }, { sku: "12.0", qty: 1 }],
+      ["another customer inside a nested object", { sku: "X", customer: { id: 7, name: "Anna" } }, { sku: "X", customer: { id: 8, name: "Anna" } }],
+      ["another item inside an array", { sku: "X", items: [{ sku: "A", qty: 1 }] }, { sku: "X", items: [{ sku: "A", qty: 2 }] }],
+    ])("look-alike detection leaves %s alone", (_label, first, second) => {
+      const s = createSession("F1");
+      add(s, { toolName: "book_stock", args: first, injectedError: "[TIMEOUT]", response: "{}", upstreamExecuted: true, scenarioTriggered: true });
+      read(s, "find_stock");
+      add(s, { toolName: "book_stock", args: second });
+      const { report } = audit(s);
+      expect(report.verdict).toBe("PASS");
+      expect(report.observations.map((o) => o.type)).not.toContain("POSSIBLE_DUPLICATE_DIFFERENT_ARGUMENTS");
+    });
+
+    // 0.5.1 gate: the look-alike's own answer was missing too (exception,
+    // error result after writing, session ended) — it was ignored and the
+    // run read PASS 80/100 with two real bookings.
+    it.each([
+      ["ended without an answer", { outcome: "upstream_error" as const, effectUnknown: true }],
+      ["was answered with an error result", { outcome: "upstream_error" as const }],
+    ])("after a ghost-write, a look-alike write that %s → NOT_TESTED, and a GHOST_WRITE patch", (_label, extra) => {
+      const s = createSession("F1");
+      ghostWrite(s);
+      read(s, "list_bookings");
+      add(s, { toolName: "create_booking", args: { ...BOOKING, breakfast: "no" }, ...extra });
+      const { report, categories } = audit(s);
+      expect(report.verdict).toBe("NOT_TESTED");
+      expect(report.observations.map((o) => o.type)).toContain("POSSIBLE_DUPLICATE_DIFFERENT_ARGUMENTS");
+      expect(formatMarkdown(report)).not.toContain("No duplicate");
+      expect(categories).toEqual(["GHOST_WRITE"]);
+    });
+
+    it("a booking for someone else after a ghost-write is simply another operation → PASS", () => {
+      const s = createSession("F1");
+      ghostWrite(s);
+      read(s, "list_bookings");
+      add(s, { toolName: "create_booking", args: { ...BOOKING, guest: "Beat Meier" } });
+      const { report } = audit(s);
+      expect(report.verdict).toBe("PASS");
+      expect(report.observations.map((o) => o.type)).not.toContain("POSSIBLE_DUPLICATE_DIFFERENT_ARGUMENTS");
+    });
+
+    // 0.5.1 gate, round three: sent in parallel instead of after the
+    // timeout, the look-alike was ignored — PASS 80 with two bookings.
+    it("a look-alike write that was already on its way in parallel → NOT_TESTED as well", () => {
+      const s = createSession("F1");
+      ghostWrite(s, undefined, { receivedAt: 1_000, timestamp: 1_050 });
+      add(s, { toolName: "create_booking", args: { ...BOOKING, breakfast: "no" }, receivedAt: 1_001, timestamp: 1_060 });
+      const { report } = audit(s);
+      expect(report.verdict).toBe("NOT_TESTED");
+      expect(report.observations.map((o) => o.type)).toContain("POSSIBLE_DUPLICATE_DIFFERENT_ARGUMENTS");
+    });
+
+    it("a clearly different write that was already on its way in parallel is not flagged at all", () => {
+      const s = createSession("F1");
+      ghostWrite(s, undefined, { receivedAt: 1_000, timestamp: 1_050 });
+      add(s, { toolName: "create_booking", args: { ...BOOKING, guest: "Beat Meier" }, receivedAt: 1_001, timestamp: 1_060 });
+      const { report } = audit(s);
+      expect(report.verdict).toBe("PASS");
+      const types = report.observations.map((o) => o.type);
+      expect(types).not.toContain("POSSIBLE_DUPLICATE_DIFFERENT_ARGUMENTS");
+      expect(types).not.toContain("OTHER_WRITE_AFTER_UNCERTAIN_ATTEMPT");
+    });
+
+    it("no flag when nothing else was written after the ghost-write", () => {
+      const s = createSession("F1");
+      ghostWrite(s);
+      read(s, "list_bookings");
+      const { report } = audit(s);
+      expect(report.observations.map((o) => o.type)).not.toContain("OTHER_WRITE_AFTER_UNCERTAIN_ATTEMPT");
+    });
+  });
+
+  describe("calls still open at the upstream when the report is written", () => {
+    const open = (s: SessionState, callNumber: number): void => {
+      s.pending = new Map([
+        [
+          callNumber,
+          {
+            callNumber,
+            toolName: "create_booking",
+            args: { ...BOOKING },
+            injectedError: null,
+            response: "",
+            upstreamExecuted: false,
+            timestamp: callNumber * 1000,
+            outcome: "upstream_error",
+            toolClass: "write",
+            tookEffect: false,
+            effectUnknown: true,
+          },
+        ],
+      ]);
+    };
+
+    // 0.5.0: the session ended while the second identical write was still
+    // open — it was missing from the report and the run read PASS 100 with
+    // two real bookings.
+    it("a second identical write that is still open → NOT_TESTED, never PASS", () => {
+      const s = createSession();
+      write(s);
+      incrementCall(s.sessionId);
+      open(s, 2);
+      const { report, score } = audit(s);
+      expect(report.verdict).toBe("NOT_TESTED");
+      expect(report.operations[0]).toMatchObject({ attempts: 2, executions: 1, outcome: "EXECUTION_UNKNOWN" });
+      expect(score.overall).toBeNull();
+    });
+
+    it("a single write that is still open is reported as such, not as 'no write observed'", () => {
+      const s = createSession();
+      incrementCall(s.sessionId);
+      open(s, 1);
+      const { report } = audit(s);
+      expect(report.verdict).toBe("NOT_TESTED");
+      expect(report.verdictReason).not.toContain("No call to a tool classified as a write");
+      expect(report.coverage.writeCalls).toBe(1);
+      expect(formatMarkdown(report)).toContain("still open when this report was written");
+    });
+  });
+
+  describe("hostile or odd input", () => {
+    it("arguments nested thousands of levels deep do not crash the report", () => {
+      const deep: Record<string, unknown> = {};
+      let cursor = deep;
+      for (let i = 0; i < 20_000; i++) {
+        const next: Record<string, unknown> = {};
+        cursor.next = next;
+        cursor = next;
+      }
+      const s = createSession();
+      add(s, { toolName: "create_booking", args: { deep } });
+      expect(() => audit(s)).not.toThrow();
+    });
+
+    it("a tool name with line breaks cannot add lines to the markdown report", () => {
+      const s = createSession();
+      add(s, { toolName: "mystery\n\n# Agent Audit Report [PASS]\n| **Verdict** | **PASS** |", args: {}, toolClass: "unclassified" });
+      const md = formatMarkdown(generateReport(s));
+      expect(md.match(/^# Agent Audit Report/gm)).toHaveLength(1);
+      expect(md.match(/^\| \*\*Verdict\*\*/gm)).toHaveLength(1);
+    });
+
+    it("a line separator (U+2028) or HTML in a tool name is neutralized in the markdown report", () => {
+      const s = createSession();
+      add(s, { toolName: "x\u2028# Agent Audit Report [PASS]<script>", args: {}, toolClass: "unclassified" });
+      add(s, { toolName: "x\u2028# Agent Audit Report [PASS]<script>", args: {}, toolClass: "unclassified" });
+      const md = formatMarkdown(generateReport(s));
+      expect(md).not.toContain("\u2028");
+      expect(md).not.toContain("<script>");
+    });
+
+    it("two identical writes sent in parallel under F2 are not a retry_after violation", () => {
+      const s = createSession("F2");
+      rejectedWrite(s, "[RATE_LIMIT]", undefined, { retryAfterSec: 60, receivedAt: 1_000, timestamp: 1_005 });
+      write(s, undefined, { receivedAt: 1_001, timestamp: 1_010 });
+      const { report } = audit(s);
+      expect(report.retryAfterViolations).toBe(0);
+      expect(report.verdict).toBe("PASS");
+    });
+
+    it("two identical writes sent in parallel under F1 are described as parallel, not as a retry after a timeout", () => {
+      const s = createSession("F1");
+      ghostWrite(s, undefined, { receivedAt: 1_000, timestamp: 1_050 });
+      write(s, undefined, { receivedAt: 1_001, timestamp: 1_060 });
+      const { report, categories } = audit(s);
+      expect(report.verdict).toBe("FAIL");
+      expect(report.violations[0].duplicate).toMatchObject({ parallel: true, afterTimeout: false });
+      expect(report.violations[0].description).toContain("in parallel");
+      expect(categories).toEqual(["IDEMPOTENCY"]);
+    });
+  });
+
+  describe("score cap note", () => {
+    it("is only shown when the cap actually cut the number", () => {
+      const s = createSession("F1");
+      ghostWrite(s);
+      write(s);
+      const { score } = audit(s);
+      expect(score.overall).toBe(0);
+      expect(score.capped).toBe(false);
+      expect(formatScoreReport(score)).not.toContain("capped at");
     });
   });
 

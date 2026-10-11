@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { VERSION } from "../version.js";
+import { readFileSync, readdirSync } from "node:fs";
 import {
   createSession,
   incrementCall,
@@ -70,7 +71,7 @@ export interface ToolClassification {
 // ...), not just content/isError.
 export type InterceptResult = Record<string, unknown> & {
   content: Array<Record<string, unknown>>;
-  isError: boolean;
+  isError?: boolean;
 };
 
 // Decides once, at startup, what each upstream tool is. Order of precedence:
@@ -104,7 +105,14 @@ export function classifyUpstreamTool(
   }
 
   // Explicit --write-tools replaces the default pattern list (documented).
-  if (explicitWrite.length === 0 && matchesAnyGlob(name, DEFAULT_WRITE_TOOL_PATTERNS)) {
+  // The defaults are snake_case ("create_*"); a camelCase name is matched
+  // through its snake_case form, so "createAppointment" is a write too.
+  const snake = name.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+  if (
+    explicitWrite.length === 0 &&
+    (matchesAnyGlob(name, DEFAULT_WRITE_TOOL_PATTERNS) ||
+      matchesAnyGlob(snake, DEFAULT_WRITE_TOOL_PATTERNS))
+  ) {
     return { name, class: "write", source: "default write pattern" };
   }
   if (isReadTool(name)) {
@@ -116,6 +124,62 @@ export function classifyUpstreamTool(
 const STDERR_TAIL_CHARS = 2000;
 const MAX_TOOL_LIST_PAGES = 1000;
 
+interface ProcessRef {
+  pid: number;
+  startTime: string;
+}
+
+// Linux only (/proc). [ppid, starttime] of a process, or null if it is gone.
+function procStat(pid: number): { ppid: number; startTime: string } | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf-8");
+    // The command name (field 2) may contain spaces and parentheses.
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return { ppid: Number(fields[1]), startTime: fields[19] };
+  } catch {
+    return null;
+  }
+}
+
+function listDescendants(root: number | null): ProcessRef[] {
+  if (root === null || process.platform !== "linux") return [];
+  try {
+    const children = new Map<number, ProcessRef[]>();
+    for (const entry of readdirSync("/proc")) {
+      if (!/^\d+$/.test(entry)) continue;
+      const pid = Number(entry);
+      const stat = procStat(pid);
+      if (!stat) continue;
+      const list = children.get(stat.ppid) ?? [];
+      list.push({ pid, startTime: stat.startTime });
+      children.set(stat.ppid, list);
+    }
+    const found: ProcessRef[] = [];
+    const queue = [root];
+    while (queue.length > 0 && found.length < 1000) {
+      for (const child of children.get(queue.shift() as number) ?? []) {
+        found.push(child);
+        queue.push(child.pid);
+      }
+    }
+    return found;
+  } catch {
+    return [];
+  }
+}
+
+function killSurvivors(processes: ProcessRef[]): void {
+  for (const ref of processes) {
+    // Same pid AND same start time: never a process that reused the number.
+    if (procStat(ref.pid)?.startTime !== ref.startTime) continue;
+    try {
+      process.kill(ref.pid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
+}
+
 export class ProxyInterceptor {
   private upstreamClient: Client | null = null;
   private upstreamTransport: StdioClientTransport | null = null;
@@ -126,8 +190,10 @@ export class ProxyInterceptor {
   private upstreamAlive = false;
   private closing = false;
   private stderrTail = "";
-  // Called after every intercepted call has been recorded (--report-file).
-  onCallRecorded: (() => void) | null = null;
+  // Called when a call is forwarded upstream and again once it has been
+  // recorded (--report-file). The answer to the agent waits for the second
+  // one, so the file is never behind what the agent has already seen.
+  onCallRecorded: (() => Promise<void> | void) | null = null;
   // Called once if the upstream connection drops while the proxy is running.
   onUpstreamLost: ((stderrTail: string) => void) | null = null;
 
@@ -183,7 +249,25 @@ export class ProxyInterceptor {
         this.onUpstreamLost?.(this.stderrTail);
       }
     };
-    await this.upstreamClient.connect(this.upstreamTransport);
+    // connect() spawns the process before its first await.
+    const connecting = this.upstreamClient.connect(this.upstreamTransport);
+    const pid = this.upstreamTransport.pid;
+    try {
+      await connecting;
+    } catch (err) {
+      // The SDK starts closing the transport on its own but does not wait
+      // for it; this process is about to exit, which left an upstream that
+      // never answered (a hanging start) running. It is our own child and
+      // has not been collected yet, so the pid is certainly still its own.
+      if (pid !== null) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+      throw err;
+    }
     this.upstreamAlive = true;
 
     // Discover upstream tools (full definitions, including inputSchema, so
@@ -201,6 +285,7 @@ export class ProxyInterceptor {
     this.upstreamTools = discovered;
     this.session.knownToolsOnly = true;
     this.session.kind = "proxy";
+    this.session.pending = new Map();
 
     this.toolClassification = this.upstreamTools.map((tool) =>
       classifyUpstreamTool(tool, this.config),
@@ -218,10 +303,18 @@ export class ProxyInterceptor {
 
   async disconnectUpstream(): Promise<void> {
     this.closing = true;
+    // A wrapper command ("sh -c ...", "npx ...") ends on its own, but the
+    // server it started may not: note its descendants first, and end those
+    // that are still there afterwards.
+    const descendants = listDescendants(this.upstreamTransport?.pid ?? null);
     if (this.upstreamClient) {
-      await this.upstreamClient.close();
+      await this.upstreamClient.close().catch(() => undefined);
       this.upstreamClient = null;
     }
+    // After a failed start the client never took over the transport.
+    await this.upstreamTransport?.close().catch(() => undefined);
+    this.upstreamTransport = null;
+    killSurvivors(descendants);
   }
 
   getUpstreamTools(): Tool[] {
@@ -254,6 +347,19 @@ export class ProxyInterceptor {
     toolName: string,
     args: Record<string, unknown>,
   ): Promise<InterceptResult> {
+    const result = await this.handleToolCall(toolName, args);
+    try {
+      await this.onCallRecorded?.();
+    } catch {
+      // Reporting must never change what the agent gets back.
+    }
+    return result;
+  }
+
+  private async handleToolCall(
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<InterceptResult> {
     // Everything up to the first await runs synchronously, so two calls
     // dispatched in parallel still get distinct, ordered write positions —
     // only one of them can be "the first write" a scenario fires on.
@@ -261,15 +367,10 @@ export class ProxyInterceptor {
     const callNumber = incrementCall(this.session.sessionId);
     const mergedArgs = { ...args };
     const key = extractKey(mergedArgs, this.session.keyFields);
-    // A tool the upstream executes but did not list: an explicit
-    // --write-tools/--read-tools pattern still applies to it.
-    if (!this.session.toolClassOverrides.has(toolName)) {
-      if (matchesAnyGlob(toolName, this.config.writeToolPatterns ?? [])) {
-        this.session.toolClassOverrides.set(toolName, "write");
-      } else if (matchesAnyGlob(toolName, this.config.readToolPatterns ?? [])) {
-        this.session.toolClassOverrides.set(toolName, "read");
-      }
-    }
+    // A tool the upstream did not list is unclassified whatever its name
+    // and whatever --write-tools says: F2/F3/F5 answer without asking the
+    // upstream, so a call to a tool that does not exist would otherwise use
+    // up the scenario and the real write would never see a failure.
     const toolClass = classifyTool(this.session, toolName);
 
     // A dead upstream is reported as exactly that. No scenario is applied:
@@ -307,6 +408,28 @@ export class ProxyInterceptor {
     let upstreamFailure: string | null = null;
 
     if (decision.executeUpstream) {
+      // Until the upstream answers, this call is "sent, effect unknown". A
+      // report written in the meantime — the session ends, the proxy is
+      // killed — must not leave it out: 0.5.0 gave PASS for a duplicate
+      // whose second write was still open when the client disconnected.
+      this.session.pending?.set(callNumber, {
+        ...buildCallRecord(callNumber, toolName, mergedArgs, null, "", false, {
+          receivedAt,
+          outcome: "upstream_error",
+          toolClass,
+          tookEffect: false,
+          effectUnknown: true,
+        }),
+        timestamp: receivedAt,
+      });
+      // Waited for: if the proxy is killed the moment the upstream executes
+      // this call, the report file must already show it as open. (Not
+      // waiting left a 1-2 ms window in which the file still read PASS.)
+      try {
+        await this.onCallRecorded?.();
+      } catch {
+        // see interceptToolCall
+      }
       try {
         const result = (await this.upstreamClient.callTool({
           name: toolName,
@@ -329,7 +452,12 @@ export class ProxyInterceptor {
           upstreamResponse = { raw: upstreamText };
         }
       } catch (err) {
-        upstreamFailure = err instanceof Error ? err.message : String(err);
+        // An upstream that throws an McpError gets its "MCP error <code>: "
+        // prefix added a second time by the SDK client.
+        upstreamFailure = (err instanceof Error ? err.message : String(err)).replace(
+          /^(MCP error -?\d+: )\1+/,
+          "$1",
+        );
       }
     }
 
@@ -442,7 +570,9 @@ export class ProxyInterceptor {
           scenarioTriggered: decision.scenarioTriggered && !ghostRejected,
           upstreamResponse: upstreamText ?? "",
         }),
-        { ...upstreamResult, content, isError: upstreamIsError },
+        // isError is passed on only if the upstream sent one: adding
+        // "isError: false" to a success would change the upstream's answer.
+        { ...upstreamResult, content },
       );
     }
 
@@ -469,11 +599,11 @@ export class ProxyInterceptor {
     result: InterceptResult,
     ghostUpstreamResponse: Record<string, unknown> | null = null,
   ): InterceptResult {
+    this.session.pending?.delete(record.callNumber);
     addRecord(this.session.sessionId, record);
     if (ghostUpstreamResponse) {
       handleGhostWrite(this.session, record.args, ghostUpstreamResponse);
     }
-    this.onCallRecorded?.();
     return result;
   }
 }

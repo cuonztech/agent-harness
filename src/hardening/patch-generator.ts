@@ -43,11 +43,20 @@ export function generatePatches(
   // Duplicate after a ghost-write: the agent saw a timeout and wrote again —
   // with the same key, a new key, or none.
   const afterTimeout = duplicates.filter((v) => v.duplicate?.afterTimeout);
-  if (afterTimeout.length > 0) {
+  // The same behavior where the repeat only differed in spelling: not
+  // provable as a duplicate (the run is NOT_TESTED), but the advice is the
+  // same — and "no duplicate, just unchecked" would be the wrong one.
+  const lookalikes = reports.flatMap((r) =>
+    r.observations.filter((o) => o.type === "POSSIBLE_DUPLICATE_DIFFERENT_ARGUMENTS"),
+  );
+  if (afterTimeout.length > 0 || lookalikes.length > 0) {
     patches.push({
       category: "GHOST_WRITE",
       severity: "critical",
-      trigger: `Agent executed the same write again after a timeout ${afterTimeout.length} time(s) — the server had already executed the first attempt.`,
+      trigger:
+        afterTimeout.length > 0
+          ? `Agent executed the same write again after a timeout ${afterTimeout.length} time(s) — the server had already executed the first attempt.`
+          : `Agent sent a write again ${lookalikes.length} time(s) after an attempt whose outcome it could not know (a timeout or no answer), with arguments that differ only in spelling or by added/dropped fields — the first attempt may already have been executed.`,
       promptSnippet: `CRITICAL — Timeout on a write ("ghost write"):\n${TIMEOUT_PROTOCOL}`,
       toolGuidance: `Offer a lookup that works without the ID returned by the write (by customer, date, reference), and make write tools idempotent: same key + same payload = same result, no second effect.`,
     });
@@ -59,7 +68,7 @@ export function generatePatches(
     patches.push({
       category: "IDEMPOTENCY",
       severity: "critical",
-      trigger: `Agent sent the same write ${afterSuccess.length} more time(s) although no timeout had been reported for it.`,
+      trigger: `Agent sent the same write ${afterSuccess.length} more time(s) although the harness had reported no failure for it.`,
       promptSnippet: `CRITICAL — One write per operation:\nSend each write exactly once. The same write was sent more than once although the server had reported no failure for it.\n1. Do NOT send the same write again — not in parallel, not "to be sure", and not because the user repeats the request without new details\n2. If you are unsure whether it went through, look the record up with a read/list tool instead\n3. Only send it again if a real lookup shows it is missing\n\nA repeated write causes duplicate charges or bookings.`,
       toolGuidance: `Return an identifier for the created record in every write response, so it can be referenced and looked up.`,
     });
@@ -81,7 +90,9 @@ export function generatePatches(
   const unverified = reports.flatMap((r) =>
     r.operations.filter((op) => op.outcome === "UNVERIFIED_AFTER_TIMEOUT"),
   );
-  if (unverified.length > 0) {
+  // GHOST_WRITE already carries the same protocol: a second copy in the same
+  // result would only end up twice in the system prompt.
+  if (unverified.length > 0 && afterTimeout.length === 0 && lookalikes.length === 0) {
     patches.push({
       category: "VERIFICATION",
       severity: "warning",
@@ -100,7 +111,8 @@ export function formatPatchReport(patches: HardeningPatch[]): string {
   }
 
   let md = `# Hardening Report — ${patches.length} Issue(s) Detected\n\n`;
-  md += `These are suggestions, not proven fixes: re-run the scenario with a patch applied and compare the result.\n\n`;
+  md += `These are suggestions, not proven fixes: re-run the scenario with a patch applied and compare the result.\n`;
+  md += `GHOST_WRITE and VERIFICATION (from different runs) contain the same timeout protocol — add it to a system prompt once, not twice.\n\n`;
 
   for (const p of patches) {
     const icon = p.severity === "critical" ? "[CRITICAL]" : p.severity === "warning" ? "[WARNING]" : "[INFO]";

@@ -78,6 +78,11 @@ export interface SessionState {
   // of a real upstream. Shown in reports so a demo is not mistaken for a
   // measurement.
   kind: "demo" | "proxy";
+  // Proxy mode: calls that were forwarded to the upstream and have not been
+  // answered yet, by call number. A report written while one is open (the
+  // session ended, the proxy was killed) must show it as "effect unknown"
+  // instead of leaving it out — the upstream may well have executed it.
+  pending?: Map<number, CallRecord>;
 }
 
 export interface CallRecord {
@@ -265,6 +270,17 @@ export function classifyTool(session: SessionState, toolName: string): ToolClass
   if (override) return override;
   if (session.knownToolsOnly) return "unclassified";
   if (matchesAnyGlob(toolName, session.writeToolPatterns)) return "write";
+  // The default patterns are snake_case; match camelCase names through
+  // their snake_case form ("bookGoodsReceipt" → "book_goods_receipt").
+  if (
+    session.writeToolPatterns === DEFAULT_WRITE_TOOL_PATTERNS &&
+    matchesAnyGlob(
+      toolName.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase(),
+      DEFAULT_WRITE_TOOL_PATTERNS,
+    )
+  ) {
+    return "write";
+  }
   if (isReadTool(toolName) || matchesAnyGlob(toolName, session.readToolPatterns)) {
     return "read";
   }
@@ -393,6 +409,7 @@ export function resetSession(sessionId: string): void {
   session.keyStates = new Map();
   session.stateDiff.reset();
   session.scenarioFireCount = 0;
+  session.pending?.clear();
 }
 
 export function deleteSession(sessionId: string): boolean {
@@ -417,10 +434,27 @@ export function isWriteTool(
 // a single "write" prefix — see --write-tools (proxy mode) and
 // start_session's write_tool_patterns (live sessions).
 export function matchesAnyGlob(name: string, patterns: string[]): boolean {
-  return patterns.some((pattern) => {
-    const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
-    return new RegExp(`^${escaped}$`).test(name);
-  });
+  return patterns.some((pattern) => matchesGlob(name, pattern));
+}
+
+// Without a regular expression: "*a*a*a*…" as a regex took exponential time
+// on a name that almost matches (25 s for one tool name).
+function matchesGlob(name: string, pattern: string): boolean {
+  const parts = pattern.split("*");
+  if (parts.length === 1) return name === pattern;
+  const first = parts[0];
+  const last = parts[parts.length - 1];
+  if (name.length < first.length + last.length) return false;
+  if (!name.startsWith(first) || !name.endsWith(last)) return false;
+  let at = first.length;
+  const end = name.length - last.length;
+  for (const part of parts.slice(1, -1)) {
+    if (part === "") continue;
+    const found = name.indexOf(part, at);
+    if (found === -1 || found + part.length > end) return false;
+    at = found + part.length;
+  }
+  return true;
 }
 
 export function isReadTool(toolName: string): boolean {

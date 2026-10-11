@@ -12,7 +12,8 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, mkdir } from "node:fs/promises";
+import { openSync, closeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -164,6 +165,8 @@ describe("MCP proxy mode (two real stdio processes)", () => {
       // The agent must see the upstream's real response verbatim — no
       // callNumber/statusCode/upstreamExecuted/injectedError audit envelope.
       expect(callRes.isError).toBeFalsy();
+      // The fixture sends no isError on success; the proxy must not add one.
+      expect(callRes).not.toHaveProperty("isError");
       expect(jsonOf(callRes)).toEqual({ result: "ok", amount: 42, written: true });
 
       const report = await getReport(client);
@@ -585,6 +588,90 @@ describe("MCP proxy mode (two real stdio processes)", () => {
         expect(report.operations[0]).toMatchObject({ executions: 0, outcome: "UPSTREAM_REJECTED" });
       });
     });
+  });
+
+  describe("a write that is still open at the upstream", () => {
+    // 0.5.0: the client disconnected while the second identical booking was
+    // still open. The upstream had executed it (2 real bookings), the report
+    // did not contain it and read PASS 100.
+    it("is in the report file as 'effect unknown' while open and after the session ended — never PASS", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "harness-open-"));
+      const reportFile = join(dir, "report.json");
+      const readVerdict = async (): Promise<{ verdict: string; report: Report }> =>
+        JSON.parse(await readFile(reportFile, "utf-8")) as { verdict: string; report: Report };
+
+      const client = await connectProxy([
+        "--upstream-env-var", "FIXTURE_SLOW_SECOND_BOOKING_MS=20000",
+        "--audit-tools", "off",
+        "--report-file", reportFile,
+      ]);
+      try {
+        const first = await client.callTool({ name: "create_booking", arguments: BOOKING });
+        expect(first.isError).toBeFalsy();
+        // The file is up to date the moment the agent has its answer.
+        const afterFirst = await readVerdict();
+        expect(afterFirst.report.totalCalls).toBe(1);
+        expect(afterFirst.verdict).toBe("PASS");
+
+        void client.callTool({ name: "create_booking", arguments: BOOKING }).catch(() => undefined);
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        const whileOpen = await readVerdict();
+        expect(whileOpen.verdict).toBe("NOT_TESTED");
+        expect(whileOpen.report.operations[0]).toMatchObject({
+          attempts: 2,
+          executions: 1,
+          outcome: "EXECUTION_UNKNOWN",
+        });
+      } finally {
+        await client.close();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const afterEnd = await readVerdict();
+      expect(afterEnd.verdict).toBe("NOT_TESTED");
+      expect(afterEnd.report.operations[0].attempts).toBe(2);
+      // No temp file left behind by a write that the exit cut off.
+      expect(await readdir(dir)).toEqual(["report.json"]);
+    }, 30_000);
+  });
+
+  describe("a report file that is in someone else's hands", () => {
+    // 0.5.1 gate, round three (Windows): with the file held open by a
+    // reader, 120 of 120 answers went out while the file still read
+    // NOT_TESTED / 0 calls.
+    it("stays current while another process holds it open", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "harness-held-"));
+      const reportFile = join(dir, "report.json");
+      const client = await connectProxy(["--audit-tools", "off", "--report-file", reportFile]);
+      const handle = openSync(reportFile, "r");
+      try {
+        await client.callTool({ name: "create_booking", arguments: BOOKING });
+        await client.callTool({ name: "create_booking", arguments: BOOKING });
+        const now = JSON.parse(await readFile(reportFile, "utf-8")) as { verdict: string; report: Report };
+        expect(now.report.totalCalls).toBe(2);
+        expect(now.verdict).toBe("FAIL");
+      } finally {
+        closeSync(handle);
+        await client.close();
+      }
+    }, 30_000);
+
+    it("ends the run before the next answer if it can no longer be written", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "harness-stale-"));
+      const reportFile = join(dir, "report.json");
+      const client = await connectProxy(["--audit-tools", "off", "--report-file", reportFile]);
+      try {
+        const first = await client.callTool({ name: "create_booking", arguments: BOOKING });
+        expect(first.isError).toBeFalsy();
+        // From now on the path is a directory: neither way of writing works.
+        await rm(reportFile);
+        await mkdir(reportFile);
+        await expect(
+          client.callTool({ name: "create_booking", arguments: BOOKING }),
+        ).rejects.toThrow();
+      } finally {
+        await client.close().catch(() => undefined);
+      }
+    }, 30_000);
   });
 
   describe("--audit-tools off / --report-file", () => {

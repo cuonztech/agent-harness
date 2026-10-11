@@ -11,9 +11,10 @@ import { ProxyInterceptor } from "./proxy/interceptor.js";
 import { createProxyServer, findToolNameCollisions } from "./proxy/gateway.js";
 import { getScenarioById, ALL_SCENARIOS } from "./scenarios/f1-f5.js";
 import { VERSION } from "./version.js";
-import { writeFile, mkdir, rename, stat } from "node:fs/promises";
-import { writeFileSync, mkdirSync, statSync } from "node:fs";
-import { dirname, basename } from "node:path";
+import { writeFile, mkdir, rename, stat, realpath, unlink } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { writeFileSync, mkdirSync, statSync, lstatSync, existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 
 const args = process.argv.slice(2);
 
@@ -22,7 +23,8 @@ function printHelp(): void {
     `cuonztech-agent-harness — chaos/idempotency test harness for MCP agents\n\n` +
       `Usage:\n` +
       `  cuonztech-agent-harness                   Start as an MCP server (stdio, demo/self-test sessions)\n` +
-      `  cuonztech-agent-harness --version         Print the version\n` +
+      `  cuonztech-agent-harness --version         Print the version (also: -v)\n` +
+      `  cuonztech-agent-harness --help            Print this help (also: -h, help)\n` +
       `  cuonztech-agent-harness benchmark [opts]   Run the harness self-test (two fixed reference agents;\n` +
       `                                             "evaluate" is an alias)\n` +
       `  cuonztech-agent-harness proxy --upstream-command <cmd> [opts]\n` +
@@ -45,7 +47,7 @@ function printHelp(): void {
       `                                  The value may contain commas.\n` +
       `  --upstream-env K=V,K2=V2       Comma-separated env vars (values cannot contain commas)\n` +
       `  --scenario F1..F5              Activate one deterministic scenario\n` +
-      `  --mode deterministic|chaos     chaos = stochastic error injection (needs --error-rate)\n` +
+      `  --mode deterministic|chaos     chaos = stochastic error injection (set --error-rate)\n` +
       `  --error-rate <0..1>            Error probability in chaos mode\n` +
       `  --retry-after <seconds>        retry_after announced by F2's 429 (default: 60;\n` +
       `                                  only with --scenario F2)\n` +
@@ -56,15 +58,20 @@ function printHelp(): void {
       `  --key-fields a,b               Argument names that carry an idempotency key\n` +
       `                                  (default: idempotency_key, any case/separator)\n` +
       `  --audit-tools on|off           Expose cuonztech__get_report / cuonztech__get_score\n` +
-      `                                  to the connected agent (default: on)\n` +
-      `  --report-file <path>           Write report + score as JSON to this file after every\n` +
-      `                                  call and on shutdown (for CI)\n\n` +
+      `                                  to the connected agent (default: on). For a\n` +
+      `                                  measurement use off: their descriptions tell the\n` +
+      `                                  agent that it is being tested.\n` +
+      `  --report-file <path>           Write report + score as JSON to this file: before a\n` +
+      `                                  call goes upstream, before its answer goes to the\n` +
+      `                                  agent, and on shutdown. If the file cannot be\n` +
+      `                                  written, the proxy stops with exit code 1.\n\n` +
       `Options may be written as "--flag value" or "--flag=value".\n\n` +
       `Tool classification in proxy mode: explicit flags first, then the upstream's own\n` +
       `MCP annotations (readOnlyHint/destructiveHint), then name patterns. The result is\n` +
       `printed to stderr at startup; unclassified tools are passed through but not scored.\n\n` +
       `The proxy is a long-running server: its exit code says nothing about the verdict.\n` +
-      `Read the verdict from --report-file.\n\n` +
+      `Read the verdict from --report-file. Exit code 1 means the run itself broke\n` +
+      `(bad arguments, upstream did not start, report file not writable).\n\n` +
       `${COMING_SOON_NOTICE}\n`,
   );
 }
@@ -111,6 +118,19 @@ function parseFlags(
     if (value === undefined) {
       return { error: `option ${token} needs a value.` };
     }
+    // "--report-file --scenario F1": the next option is not a value. (Not
+    // for --upstream-arg, whose values are handed on and may look like ours.)
+    if (inlineValue === undefined && token !== "--upstream-arg" && spec[value]) {
+      return { error: `option ${token} needs a value, but is followed by the option ${value}.` };
+    }
+    // "--report-file --audit-tool off" (a typo) created a file called
+    // "--audit-tool". Values for the upstream may start with "--"; use
+    // "--flag=--value" if one of ours really has to.
+    if (inlineValue === undefined && !token.startsWith("--upstream-") && value.startsWith("--")) {
+      return {
+        error: `option ${token} needs a value, but is followed by "${value}". (If that is the value, write ${token}=${value}.)`,
+      };
+    }
     // An empty value is almost always a broken shell variable; treating it
     // as "flag not given" would silently change what the run tests.
     // (--upstream-arg is the exception: an empty string is a legitimate
@@ -136,11 +156,47 @@ function parseFlags(
 // over from an earlier run instead of leaving its old PASS in place.
 let startupReportFile: string | null = null;
 
+// mkdir -p without { recursive: true }: on Linux pseudo file systems
+// (/proc/…) Node's recursive mkdir never returns and spins at full CPU.
+// Here every level is created once and the first error ends it.
+function ensureDirSync(dir: string): void {
+  const missing: string[] = [];
+  let current = resolve(dir);
+  while (!existsSync(current)) {
+    missing.push(current);
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  for (const path of missing.reverse()) {
+    try {
+      mkdirSync(path);
+    } catch (err) {
+      // Created by someone else in the meantime is fine.
+      if (!statSync(path, { throwIfNoEntry: false })?.isDirectory()) throw err;
+    }
+  }
+}
+
+// What the file holds until the first real report: a run that is killed
+// while the upstream is still starting must not leave an older PASS behind.
+function writeStartingPlaceholderSync(): void {
+  writeStartupStateSync({ status: "starting" });
+}
+
 function writeStartupFailureSync(reason: string): void {
+  writeStartupStateSync({ startupError: reason });
+}
+
+function writeStartupStateSync(extra: Record<string, string>): void {
   if (!startupReportFile) return;
   try {
-    if (statSync(startupReportFile, { throwIfNoEntry: false })?.isDirectory()) return;
-    mkdirSync(dirname(startupReportFile), { recursive: true });
+    // Only ever a regular file (or nothing yet): writing "the report" over
+    // a directory, a device node or a pipe is never what was meant.
+    const existing = statSync(startupReportFile, { throwIfNoEntry: false });
+    if (existing && !existing.isFile()) return;
+    if (!existing && lstatSync(startupReportFile, { throwIfNoEntry: false })) return;
+    ensureDirSync(dirname(startupReportFile));
     writeFileSync(
       startupReportFile,
       JSON.stringify(
@@ -148,7 +204,7 @@ function writeStartupFailureSync(reason: string): void {
           harnessVersion: VERSION,
           certification: "UNVERIFIED_FOR_PRODUCTION",
           verdict: "NOT_TESTED",
-          startupError: reason,
+          ...extra,
           generatedAt: new Date().toISOString(),
         },
         null,
@@ -161,6 +217,22 @@ function writeStartupFailureSync(reason: string): void {
   }
 }
 
+// On Windows a rename over a file that a reader has open fails with
+// EPERM/EACCES/EBUSY; the reader is usually gone a moment later.
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  const waits = [10, 25, 50, 100];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (attempt >= waits.length || !["EPERM", "EACCES", "EBUSY"].includes(code ?? "")) throw err;
+      await new Promise((resolve) => setTimeout(resolve, waits[attempt]));
+    }
+  }
+}
+
 function fail(message: string): never {
   writeStartupFailureSync(message);
   process.stderr.write(`Error: ${message}\nRun with --help for usage.\n`);
@@ -169,19 +241,36 @@ function fail(message: string): never {
 
 // Windows device names: writing to "NUL" or "CON" as a relative path can
 // create a real file of that name (or block on a device).
+// Checked for every path segment ("C:\\NUL\\x.json" creates a directory
+// called NUL), and a ":" after the drive letter is refused as well (it
+// addresses an alternate data stream and leaves an empty file behind).
 function isReservedFileName(path: string): boolean {
-  return (
-    process.platform === "win32" &&
-    /^(nul|con|prn|aux|com[1-9]|lpt[1-9])(\..*)?$/i.test(basename(path))
-  );
+  if (process.platform !== "win32") return false;
+  // "\\?\C:\dir\file" is an ordinary long-path spelling.
+  const withoutDrive = path.replace(/^\\\\\?\\/, "").replace(/^[a-zA-Z]:/, "");
+  if (withoutDrive.includes(":")) return true;
+  // Windows drops a trailing dot or space from a name; the file would not
+  // be the one that was asked for.
+  if (/[. ]$/.test(withoutDrive)) return true;
+  return withoutDrive
+    .split(/[\\/]+/)
+    .some((segment) => /^(nul|con|prn|aux|com[1-9]|lpt[1-9])(\..*)?$/i.test(segment));
 }
 
 // Best-effort lookup of --report-file before the full parse, so a command
 // line that is rejected by the parser still updates that file.
-function peekReportFile(argv: string[]): string | null {
+// Walks the arguments the way the parser does, so that the VALUE of another
+// option ("--upstream-arg --report-file=x") is never mistaken for ours.
+function peekReportFile(argv: string[], spec: Record<string, FlagKind>): string | null {
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--report-file" && argv[i + 1]) return argv[i + 1];
-    if (argv[i].startsWith("--report-file=")) return argv[i].slice("--report-file=".length) || null;
+    const token = argv[i];
+    if (token.startsWith("--report-file=")) return token.slice("--report-file=".length) || null;
+    if (token === "--report-file") {
+      const value = argv[i + 1];
+      // Followed by another option: there is no path (the parser rejects it).
+      return value === undefined || value.startsWith("--") ? null : value;
+    }
+    if (spec[token]) i++;
   }
   return null;
 }
@@ -209,6 +298,8 @@ async function main(): Promise<void> {
   } else if (mode === undefined) {
     // Default: MCP server mode (stdio)
     const server = createServer();
+    // See the proxy: the SDK closes the transport itself on an oversized message.
+    server.server.onclose = () => process.exit(0);
     await startStdio(server);
   } else {
     fail(`unknown command "${mode}". Commands: benchmark, proxy, --help (no command = MCP server).`);
@@ -248,7 +339,7 @@ async function runProxyMode(argv: string[]): Promise<void> {
     printHelp();
     return;
   }
-  const peeked = peekReportFile(argv);
+  const peeked = peekReportFile(argv, PROXY_FLAGS);
   if (peeked && peeked.trim() !== "" && !isReservedFileName(peeked)) {
     startupReportFile = peeked;
   }
@@ -325,13 +416,13 @@ async function runProxyMode(argv: string[]): Promise<void> {
     retryAfterSec = value;
   }
 
-  const auditToolsRaw = one("--audit-tools");
+  const auditToolsRaw = one("--audit-tools")?.toLowerCase();
   if (auditToolsRaw !== undefined && auditToolsRaw !== "on" && auditToolsRaw !== "off") {
     fail(`--audit-tools must be "on" or "off", got "${auditToolsRaw}".`);
   }
   const auditTools = auditToolsRaw !== "off";
 
-  const reportFile = one("--report-file");
+  let reportFile = one("--report-file");
   const writeToolPatterns = splitList(one("--write-tools"), "--write-tools");
   const readToolPatterns = splitList(one("--read-tools"), "--read-tools");
   const keyFields = splitList(one("--key-fields"), "--key-fields");
@@ -345,19 +436,45 @@ async function runProxyMode(argv: string[]): Promise<void> {
   }
   if (reportFile !== undefined) {
     if (isReservedFileName(reportFile)) {
-      fail(`--report-file "${reportFile}" is a reserved device name, not a usable file.`);
+      fail(
+        `--report-file "${reportFile}" contains a reserved device name or a ":", or ends in a dot or space, and is not a usable file.`,
+      );
     }
     const info = await stat(reportFile).catch(() => null);
     if (info?.isDirectory()) {
       fail(`--report-file "${reportFile}" is a directory, not a file.`);
     }
+    // The report is written to a temp file and renamed over the target —
+    // which would replace a device node such as /dev/null by a regular file.
+    if (info && !info.isFile()) {
+      fail(`--report-file "${reportFile}" exists and is not a regular file.`);
+    }
+    let dangling = false;
+    try {
+      dangling = !info && lstatSync(reportFile, { throwIfNoEntry: false }) !== undefined;
+    } catch (err) {
+      fail(`--report-file "${reportFile}" is not a usable path: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (dangling) {
+      fail(`--report-file "${reportFile}" is a symbolic link to a path that does not exist.`);
+    }
+    // Write through a symlink instead of replacing the link itself.
+    if (info) {
+      reportFile = await realpath(reportFile).catch(() => reportFile);
+    }
   }
+  const reportTarget = reportFile;
 
   const log = (line: string): void => {
     process.stderr.write(`[cuonztech-agent-harness] ${line}\n`);
   };
+  // A tool name comes from the upstream: a line break in it must not be
+  // able to fake further lines of this log.
+  const shown = (name: string): string =>
+    name.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, "?");
 
-  if (chaosMode === "chaos" && errorRate === 0) {
+  const chaosInjectsNothing = chaosMode === "chaos" && errorRate === 0;
+  if (chaosInjectsNothing) {
     log(
       "WARNING: --mode chaos with a 0% error rate — this run will inject nothing. " +
         "Pass e.g. --error-rate 0.2 to actually trigger stochastic failures.",
@@ -370,7 +487,7 @@ async function runProxyMode(argv: string[]): Promise<void> {
         "reports a timeout to the agent. Only point --upstream-command at a disposable " +
         "test/staging backend, never production.",
     );
-  } else if (scenarioId || chaosMode === "chaos") {
+  } else if (scenarioId || (chaosMode === "chaos" && !chaosInjectsNothing)) {
     log(
       "WARNING: failure injection is active — the agent will receive errors for calls " +
         "that were never sent upstream. Every other write is executed for real. Only " +
@@ -400,9 +517,33 @@ async function runProxyMode(argv: string[]): Promise<void> {
     retryAfterSec,
   });
 
+  // From here on a signal must end the upstream child as well, and the
+  // report file must not keep an older run's verdict while we are starting.
+  let onSignal = async (): Promise<void> => {
+    await interceptor.disconnectUpstream().catch(() => undefined);
+    process.exit(1);
+  };
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.on(signal, () => void onSignal());
+  }
+  // The client stopped reading (it closed its end or was killed while
+  // answers were on their way). Unhandled, that EPIPE crashed the proxy with
+  // a stack trace and could leave the upstream running.
+  process.stdout.on("error", () => void onSignal());
+  // The client going away while the upstream is still starting. A
+  // "readable" listener notices the end of stdin without consuming what the
+  // client has already sent (its initialize request arrives during startup).
+  const onEarlyReadable = (): void => undefined;
+  const onEarlyEnd = (): void => void onSignal();
+  process.stdin.on("readable", onEarlyReadable);
+  process.stdin.on("end", onEarlyEnd);
+  writeStartingPlaceholderSync();
+
   try {
     await interceptor.connectUpstream();
   } catch (err) {
+    // A hanging upstream is still running at this point.
+    await interceptor.disconnectUpstream().catch(() => undefined);
     const tail = interceptor.getUpstreamStderrTail().trim();
     const reason =
       `could not start or connect to the upstream MCP server ` +
@@ -433,20 +574,20 @@ async function runProxyMode(argv: string[]): Promise<void> {
   const classification = interceptor.getToolClassification();
   log(`Upstream tools (${classification.length}):`);
   for (const entry of classification) {
-    log(`  ${entry.class.padEnd(12)} ${entry.name}  (${entry.source})`);
+    log(`  ${entry.class.padEnd(12)} ${shown(entry.name)}  (${entry.source})`);
   }
   for (const entry of classification.filter((c) => c.class === "unclassified")) {
     log(
-      `WARNING: tool "${entry.name}" could not be classified as read or write. Its calls ` +
+      `WARNING: tool "${shown(entry.name)}" could not be classified as read or write. Its calls ` +
         "are passed through but never trigger a scenario and are not scored — if it writes, " +
-        `duplicates through it stay undetected. Classify it with --write-tools "${entry.name}" ` +
-        `or --read-tools "${entry.name}".`,
+        `duplicates through it stay undetected. Classify it with --write-tools "${shown(entry.name)}" ` +
+        `or --read-tools "${shown(entry.name)}".`,
     );
   }
   if (upstreamTools.length > 0 && !classification.some((c) => c.class === "write")) {
     log(
       `WARNING: none of the upstream's ${upstreamTools.length} tool(s) ` +
-        `(${upstreamTools.map((t) => t.name).join(", ")}) is classified as a write. ` +
+        `(${upstreamTools.map((t) => shown(t.name)).join(", ")}) is classified as a write. ` +
         "Scenarios will NEVER trigger for this upstream and every report will read NOT_TESTED. " +
         'If your write tools use different naming, pass e.g. --write-tools "yourprefix_*".',
     );
@@ -454,7 +595,7 @@ async function runProxyMode(argv: string[]): Promise<void> {
   const keyCapable = interceptor.getKeyCapableTools();
   log(
     keyCapable.length > 0
-      ? `Idempotency-key argument recognized on: ${keyCapable.join(", ")}`
+      ? `Idempotency-key argument recognized on: ${keyCapable.map(shown).join(", ")}`
       : "NOTE: no upstream tool has an argument recognized as an idempotency key " +
           "(looked for: " +
           (keyFields ?? ["idempotency_key"]).join(", ") +
@@ -485,11 +626,29 @@ async function runProxyMode(argv: string[]): Promise<void> {
   // not shut down politely, so waiting for exit would lose the result).
   // Writes are chained so they cannot overlap, and go through a temp file
   // so a reader never sees a half-written report.
-  let pendingWrite: Promise<void> = Promise.resolve();
+  // Rewrites requested while one is running are folded into a single
+  // follow-up (after 4000 quick calls the old one-rewrite-per-call queue
+  // took 89 s to drain on shutdown).
+  let writing: Promise<void> | null = null;
+  let dirty = false;
   let reportWriteFailed = false;
-  const writeReportFile = (): Promise<void> => {
-    if (!reportFile) return Promise.resolve();
-    pendingWrite = pendingWrite.then(async () => {
+  // Once the proxy is serving: a report that cannot be written ends the run
+  // BEFORE the agent gets the next answer. Carrying on left a file that
+  // still said PASS while duplicates were being executed (a reader holding
+  // the file open on Windows, a full disk, a read-only directory).
+  let stopOnWriteFailure = false;
+  let stopping = false;
+  const stopForStaleReport = async (): Promise<never> => {
+    if (!stopping) {
+      stopping = true;
+      await interceptor.disconnectUpstream().catch(() => undefined);
+      process.exit(1);
+    }
+    return new Promise<never>(() => undefined);
+  };
+  const writeOnce = async (): Promise<void> => {
+    if (!reportTarget) return;
+    try {
       const report = generateReport(interceptor.getSession());
       const score = computeScore([report]);
       const patches = generatePatches([report], score);
@@ -509,29 +668,66 @@ async function runProxyMode(argv: string[]): Promise<void> {
         null,
         2,
       );
+      ensureDirSync(dirname(reportTarget));
+      // A fresh, unpredictable temp name, created exclusively: a fixed
+      // "<file>.tmp" was followed if someone had put a symlink there, and
+      // was shared by two proxies writing to the same file.
+      const tmp = `${reportTarget}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
       try {
-        await mkdir(dirname(reportFile), { recursive: true });
-        const tmp = `${reportFile}.tmp`;
-        await writeFile(tmp, body, "utf-8");
-        await rename(tmp, reportFile);
-      } catch (err) {
-        if (!reportWriteFailed) {
-          reportWriteFailed = true;
-          log(`WARNING: could not write --report-file "${reportFile}": ${err}`);
+        await writeFile(tmp, body, { encoding: "utf-8", flag: "wx" });
+        await renameWithRetry(tmp, reportTarget);
+      } catch {
+        await unlink(tmp).catch(() => undefined);
+        // Second way in: write the file itself. Not atomic (a reader may
+        // catch it half-written), but current — and it works where the
+        // rename does not: a reader holding the file open on Windows, a
+        // directory that takes no new files, a name too long for the temp
+        // file. Only ever into a regular file.
+        const target = lstatSync(reportTarget, { throwIfNoEntry: false });
+        if (target && !target.isFile()) {
+          throw new Error("the target is no longer a regular file");
         }
+        await writeFile(reportTarget, body, "utf-8");
       }
-    });
-    return pendingWrite;
+      if (reportWriteFailed) {
+        reportWriteFailed = false;
+        log(`--report-file "${reportTarget}" is being written again and is up to date.`);
+      }
+    } catch (err) {
+      if (!reportWriteFailed) {
+        reportWriteFailed = true;
+        log(
+          `ERROR: could not write --report-file "${reportTarget}": ${err}. The file is now ` +
+            "STALE: it still shows an earlier state of this run (or none). Do not use its verdict." +
+            (stopOnWriteFailure ? " Stopping with exit code 1; no further answer goes to the agent." : ""),
+        );
+      }
+      if (stopOnWriteFailure) await stopForStaleReport();
+    }
+  };
+  const writeReportFile = (): Promise<void> => {
+    if (!reportTarget) return Promise.resolve();
+    dirty = true;
+    if (!writing) {
+      writing = (async () => {
+        while (dirty) {
+          dirty = false;
+          await writeOnce();
+        }
+      })().finally(() => {
+        writing = null;
+      });
+    }
+    return writing;
   };
   if (reportFile) {
-    interceptor.onCallRecorded = () => {
-      void writeReportFile();
-    };
+    interceptor.onCallRecorded = () => writeReportFile();
     await writeReportFile();
     if (reportWriteFailed) {
       await interceptor.disconnectUpstream();
       fail(`cannot write --report-file "${reportFile}".`);
     }
+    stopOnWriteFailure = true;
   }
 
   interceptor.onUpstreamLost = (stderrTail) => {
@@ -551,10 +747,18 @@ async function runProxyMode(argv: string[]): Promise<void> {
     shuttingDown = true;
     await writeReportFile();
     await interceptor.disconnectUpstream();
-    process.exit(0);
+    // Calls that were still open have just been ended by the disconnect and
+    // are recording themselves; let that finish and write once more, so no
+    // write is cut off by the exit (it left an empty temp file behind).
+    await new Promise((resolve) => setImmediate(resolve));
+    await writeReportFile();
+    // A report file that could not be written at the end is stale; that
+    // must not look like a clean exit.
+    process.exit(reportWriteFailed ? 1 : 0);
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  onSignal = shutdown;
+  process.stdin.off("readable", onEarlyReadable);
+  process.stdin.off("end", onEarlyEnd);
   // The client closing our stdin is the normal way an MCP stdio session
   // ends; without this the proxy (and its upstream child) would linger.
   process.stdin.on("end", shutdown);
@@ -562,6 +766,13 @@ async function runProxyMode(argv: string[]): Promise<void> {
 
   startupReportFile = null;
   const server = createProxyServer(interceptor, { auditTools });
+  // The SDK closes the transport on its own when a single message exceeds
+  // its buffer (about 10 MB). Without this the proxy stayed alive, deaf,
+  // with its upstream child still running.
+  server.onclose = () => {
+    log("The connection to the client was closed (stdin ended, or a message was too large for the MCP transport). Shutting down.");
+    void shutdown();
+  };
   await startStdio(server);
 }
 
@@ -689,10 +900,9 @@ async function runBenchmarkMode(argv: string[]): Promise<void> {
     jsonPath,
     JSON.stringify(
       {
-        // Same constant under both names: `certification` matches the
-        // proxy's report file, `verdict` is kept for readers of older reports.
+        // Constant, as in the proxy's report file. PASS/FAIL per reference
+        // agent is in careful.score.verdict / naive.score.verdict.
         certification: "UNVERIFIED_FOR_PRODUCTION",
-        verdict: "UNVERIFIED_FOR_PRODUCTION",
         isReferenceRun: true,
         note:
           "Self-test of the harness with two built-in reference agents. Neither score " +
