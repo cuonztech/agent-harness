@@ -1,6 +1,12 @@
 import type { SessionState, CallRecord } from "../engine/state-machine.js";
+import type { ScenarioDefinition } from "../scenarios/types.js";
 import { getScenarioById } from "../scenarios/f1-f5.js";
-import { markGhostCommitted, isWriteTool } from "../engine/state-machine.js";
+import {
+  markGhostCommitted,
+  classifyTool,
+  reserveScenarioFire,
+  extractKey,
+} from "../engine/state-machine.js";
 
 export interface ChaosDecision {
   injectError: boolean;
@@ -9,13 +15,39 @@ export interface ChaosDecision {
   errorBody: Record<string, unknown> | string | null;
   executeUpstream: boolean; // true = ghost-write mode
   delayMs: number;
+  // The session's scenario fired on this call.
+  scenarioTriggered: boolean;
+  // Set for an injected 429: the retry_after (seconds) the agent is told.
+  retryAfterSec: number | null;
 }
 
+// The response body a scenario hands to the agent. Only the 429 body depends
+// on the session: its retry_after is configurable (--retry-after /
+// retry_after_sec), because that is the value the audit later measures the
+// agent's next call against.
+export function resolveScenarioBody(
+  scenario: ScenarioDefinition,
+  session: SessionState,
+): Record<string, unknown> | string {
+  const resp = scenario.simulatedResponse;
+  if (resp.type === "rate_limit" && typeof resp.body !== "string") {
+    return {
+      ...resp.body,
+      retry_after: session.retryAfterSec,
+      message: `Too many requests. Retry after ${session.retryAfterSec} seconds.`,
+    };
+  }
+  return resp.body;
+}
+
+// Must be called synchronously on receipt of a call (before any await): if
+// the scenario fires, that is reserved right here — see
+// reserveScenarioFire().
 export function decideChaosAction(
   session: SessionState,
   callNumber: number,
   toolName: string,
-  args: Record<string, unknown>,
+  _args: Record<string, unknown>,
 ): ChaosDecision {
   const noChaos: ChaosDecision = {
     injectError: false,
@@ -24,12 +56,12 @@ export function decideChaosAction(
     errorBody: null,
     executeUpstream: true,
     delayMs: 0,
+    scenarioTriggered: false,
+    retryAfterSec: null,
   };
 
-  const isWriteCall = isWriteTool(toolName, session.writeToolPatterns);
-  const priorWriteCalls = session.history.filter((r) =>
-    isWriteTool(r.toolName, session.writeToolPatterns),
-  ).length;
+  const isWriteCall = classifyTool(session, toolName) === "write";
+  const priorWriteCalls = session.scenarioFireCount;
 
   // Deterministic scenario mode
   if (session.scenarioId) {
@@ -38,6 +70,7 @@ export function decideChaosAction(
       scenario &&
       scenario.triggerCondition({ callNumber, toolName, isWriteCall, priorWriteCalls })
     ) {
+      reserveScenarioFire(session);
       const resp = scenario.simulatedResponse;
       const isGhostWrite = resp.type === "timeout" && isWriteCall;
       // F4 (duplicate dispatch) must also actually reach the upstream: it
@@ -53,9 +86,11 @@ export function decideChaosAction(
         injectError: true,
         errorType: resp.type === "success" ? null : `[${resp.type.toUpperCase()}]`,
         statusCode: resp.statusCode ?? 500,
-        errorBody: resp.body,
+        errorBody: resolveScenarioBody(scenario, session),
         executeUpstream,
         delayMs: resp.delayMs ?? 0,
+        scenarioTriggered: true,
+        retryAfterSec: resp.type === "rate_limit" ? session.retryAfterSec : null,
       };
     }
     return noChaos;
@@ -67,12 +102,16 @@ export function decideChaosAction(
       injectError: true,
       errorType: "[CHAOS_INJECTED]",
       statusCode: 500,
+      // Worded like a real server error: a message naming the injection
+      // would tell the agent under test that it is being tested.
       errorBody: {
-        error: "CHAOS_ERROR",
-        message: "Stochastically injected failure.",
+        error: "INTERNAL_SERVER_ERROR",
+        message: "The server encountered an internal error.",
       },
       executeUpstream: false,
       delayMs: 0,
+      scenarioTriggered: false,
+      retryAfterSec: null,
     };
   }
 
@@ -89,7 +128,7 @@ export function handleGhostWrite(
   args: Record<string, unknown>,
   upstreamResponse: Record<string, unknown> | null,
 ): GhostWriteResult {
-  const key = (args["idempotency_key"] as string) ?? null;
+  const key = extractKey(args, session.keyFields) ?? null;
   if (key && upstreamResponse) {
     markGhostCommitted(session.sessionId, key);
   }
@@ -103,6 +142,7 @@ export function buildCallRecord(
   injectedError: string | null,
   response: string,
   upstreamExecuted: boolean,
+  extra: Partial<CallRecord> = {},
 ): CallRecord {
   return {
     callNumber,
@@ -112,5 +152,6 @@ export function buildCallRecord(
     response,
     upstreamExecuted,
     timestamp: Date.now(),
+    ...extra,
   };
 }

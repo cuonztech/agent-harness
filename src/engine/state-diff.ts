@@ -84,7 +84,10 @@ export class StateDiffStore {
       recordExisted: record !== undefined,
       valueBeforeRetry: record?.value ?? null,
       valueAfterRetry: record?.value ?? null,
-      wasOverwritten: record?.overwrittenAt !== null,
+      // A key that was never written cannot have been overwritten:
+      // `record?.overwrittenAt !== null` alone is true for a missing record
+      // (undefined !== null).
+      wasOverwritten: record !== undefined && record.overwrittenAt !== null,
       agentCheckedBeforeRetry: agentRead,
       agentGaveUpSilently: !agentRead && !agentHadWarning,
     };

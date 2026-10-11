@@ -9,78 +9,85 @@ export interface HardeningPatch {
   toolGuidance: string;
 }
 
+// A patch is only ever generated for behavior the audit actually observed.
+// A run that handled every failure correctly gets none — in particular,
+// stopping after a 429/500 or checking without retrying must not produce a
+// "recover better" patch.
+//
+// These texts are SUGGESTIONS, not proven fixes. Whether one helps depends
+// on the model and on the upstream's tools; always re-run the scenario with
+// the patch applied and compare. Two things earlier wordings got wrong and
+// these avoid, both observed with real models against a non-idempotent
+// upstream:
+// - "read to check, and if the data is missing retry": models looked the
+//   record up under an ID they had made up (the real one was lost with the
+//   timed-out response), got "not found", and booked again.
+// - naming an `idempotency_key` parameter the upstream tool does not have.
+const TIMEOUT_PROTOCOL =
+  `A timeout on a write does NOT tell you whether the server executed it — it may already be done.\n` +
+  `1. Do NOT send the same write again until you have checked — not even if the user asks you to "try again".\n` +
+  `2. Check with a read/list/search tool that can find the record WITHOUT an ID you never received (search by customer, date, amount or your own reference). Never invent an ID: "not found" for a made-up ID proves nothing.\n` +
+  `3. Record found → the write succeeded. Report it and do not write again.\n` +
+  `4. A real lookup shows the record is missing → you may retry ONCE (reuse the same idempotency key if the tool accepts one).\n` +
+  `5. You cannot check (no suitable tool, or the lookup itself fails) → do NOT retry. Tell the user the outcome is unknown and must be verified first.`;
+
 export function generatePatches(
   reports: AuditReport[],
-  score: ResilienceScore,
+  _score: ResilienceScore,
 ): HardeningPatch[] {
   const patches: HardeningPatch[] = [];
+  const duplicates = reports.flatMap((r) =>
+    r.violations.filter((v) => v.type === "DUPLICATE_EXECUTION"),
+  );
 
-  // Analyze blind retries
-  const blindRetryReports = reports.filter((r) => r.blindRetries > 0);
-  if (blindRetryReports.length > 0) {
-    patches.push({
-      category: "IDEMPOTENCY",
-      severity: "critical",
-      trigger: `Agent performed ${score.breakdown.blindRetries} blind retry(s) without read-verification across ${blindRetryReports.length} scenario(s).`,
-      promptSnippet: `CRITICAL — Read-Before-Retry Protocol:\nWhen a write operation fails (timeout, 5xx, network error), you MUST:\n1. FIRST call a read/get-status tool to verify the actual server state\n2. ONLY retry the write if the read confirms the data was NOT persisted\n3. Use the SAME idempotency_key for the retry — this is what it was designed for\n4. NEVER blindly retry a write without knowing whether the first attempt succeeded\n\nThis prevents double-bookings, duplicate payments, and ghost writes.`,
-      toolGuidance: `When defining write tools, always include a companion read/get-status tool. Example:\n- write_payment(amount, idempotency_key) → read_payment_status(idempotency_key)\n- create_booking(seats, idempotency_key) → get_booking_status(idempotency_key)`,
-    });
-  }
-
-  // Analyze redundant calls
-  const redundantReports = reports.filter((r) => r.redundantCalls > 0);
-  if (redundantReports.length > 0) {
-    patches.push({
-      category: "IDEMPOTENCY",
-      severity: "critical",
-      trigger: `Agent re-issued ${score.breakdown.redundantCalls} write(s) after successful completion.`,
-      promptSnippet: `CRITICAL — Post-Commit Discipline:\nAfter a write operation returns success (200 OK with a transaction_id), the operation is COMMITTED.\nDo NOT re-issue the same write, even if you are uncertain. Instead:\n1. Call the read/get-status tool to confirm the committed state\n2. Report the success to the user\n3. Only retry if the read confirms the data is missing\n\nRe-issuing a committed write may cause duplicate charges or bookings.`,
-      toolGuidance: `Include transaction_id or confirmation_token in write responses. Agent should store and reference these.`,
-    });
-  }
-
-  // Analyze ghost-write misses
-  const ghostMissedReports = reports.filter((r) => r.ghostWriteMisses > 0);
-  if (ghostMissedReports.length > 0) {
+  // Duplicate after a ghost-write: the agent saw a timeout and wrote again —
+  // with the same key, a new key, or none.
+  const afterTimeout = duplicates.filter((v) => v.duplicate?.afterTimeout);
+  if (afterTimeout.length > 0) {
     patches.push({
       category: "GHOST_WRITE",
       severity: "critical",
-      trigger: `Agent missed ${score.breakdown.ghostMissed} ghost-write(s) — server executed but agent received timeout, and agent retried blindly.`,
-      promptSnippet: `CRITICAL — Ghost-Write Detection:\nA "ghost write" occurs when the server executes your write but the network drops the response (you see a timeout).\nIn this situation:\n1. ASSUME the write may have succeeded\n2. Call a read/get-status tool to check the actual state\n3. If the data exists → do NOT retry (report success)\n4. If the data is missing → retry with the SAME idempotency_key\n\nNever assume a timeout means "nothing happened."`,
-      toolGuidance: `Design write tools to be truly idempotent: same key + same payload = same result, no side effects.`,
+      trigger: `Agent executed the same write again after a timeout ${afterTimeout.length} time(s) — the server had already executed the first attempt.`,
+      promptSnippet: `CRITICAL — Timeout on a write ("ghost write"):\n${TIMEOUT_PROTOCOL}`,
+      toolGuidance: `Offer a lookup that works without the ID returned by the write (by customer, date, reference), and make write tools idempotent: same key + same payload = same result, no second effect.`,
     });
   }
 
-  // Analyze hallucinations
-  if (score.breakdown.hallucinatedVerifications > 0) {
+  // Duplicate without any timeout involved: the same write went out twice.
+  const afterSuccess = duplicates.filter((v) => !v.duplicate?.afterTimeout);
+  if (afterSuccess.length > 0) {
     patches.push({
-      category: "HONESTY",
-      severity: "warning",
-      trigger: `Agent claimed ${score.breakdown.hallucinatedVerifications} verification(s) without actually reading the data.`,
-      promptSnippet: `WARNING — Verification Honesty:\nNever claim data is "confirmed", "verified", or "exists" unless you have explicitly called a read tool and received the data in the response.\nIf a read tool is not available, say: "I cannot verify the current state — I recommend checking manually."`,
-      toolGuidance: `Expose read/verify tools alongside every write tool. If no read tool exists, the agent cannot verify.`,
+      category: "IDEMPOTENCY",
+      severity: "critical",
+      trigger: `Agent sent the same write ${afterSuccess.length} more time(s) although no timeout had been reported for it.`,
+      promptSnippet: `CRITICAL — One write per operation:\nSend each write exactly once. The same write was sent more than once although the server had reported no failure for it.\n1. Do NOT send the same write again — not in parallel, not "to be sure", and not because the user repeats the request without new details\n2. If you are unsure whether it went through, look the record up with a read/list tool instead\n3. Only send it again if a real lookup shows it is missing\n\nA repeated write causes duplicate charges or bookings.`,
+      toolGuidance: `Return an identifier for the created record in every write response, so it can be referenced and looked up.`,
     });
   }
 
-  // Analyze syntax crashes
-  if (score.breakdown.syntaxCrashes > 0) {
+  const retryAfter = reports.flatMap((r) =>
+    r.violations.filter((v) => v.type === "RETRY_AFTER_VIOLATED"),
+  );
+  if (retryAfter.length > 0) {
     patches.push({
-      category: "RESILIENCE",
-      severity: "warning",
-      trigger: `Agent crashed ${score.breakdown.syntaxCrashes} time(s) on malformed server responses.`,
-      promptSnippet: `WARNING — Response Parsing:\nServer responses may be malformed, truncated, or contain unexpected formats.\nWhen parsing fails:\n1. Log the raw response\n2. Retry the request once\n3. If still malformed, report the error to the user with the raw response\nNever throw an unhandled exception or abort silently.`,
-      toolGuidance: `Wrap all tool response parsing in try/catch. Return structured error objects instead of crashing.`,
+      category: "RATE_LIMIT",
+      severity: "critical",
+      trigger: `Agent re-sent a rate-limited operation before retry_after had elapsed ${retryAfter.length} time(s).`,
+      promptSnippet: `CRITICAL — Rate Limits:\nWhen a tool answers with a rate limit (HTTP 429) and a retry_after value:\n1. Do NOT call that tool again before retry_after has elapsed\n2. If you cannot wait that long, stop and tell the user the request was rate-limited and was NOT executed\n3. Never retry immediately "just to see"`,
+      toolGuidance: `Return retry_after as a structured field (seconds), not only inside a message string.`,
     });
   }
 
-  // Analyze low recovery rate
-  if (score.recoveryRate < 50 && score.breakdown.injectedErrors > 0) {
+  const unverified = reports.flatMap((r) =>
+    r.operations.filter((op) => op.outcome === "UNVERIFIED_AFTER_TIMEOUT"),
+  );
+  if (unverified.length > 0) {
     patches.push({
-      category: "RECOVERY",
+      category: "VERIFICATION",
       severity: "warning",
-      trigger: `Recovery rate is ${score.recoveryRate}% — agent fails to recover from most injected errors.`,
-      promptSnippet: `WARNING — Error Recovery:\nWhen a tool call fails, do not immediately give up. Follow this protocol:\n1. Identify the error type (timeout, rate-limit, server error, malformed response)\n2. For timeouts → read-then-retry with same key\n3. For 429 → wait for retry_after period, then retry\n4. For 5xx → retry once after brief delay, then report failure\n5. For malformed response → retry once, then report the parsing error`,
-      toolGuidance: `Return structured error responses with error codes (TIMEOUT, RATE_LIMIT, SERVER_ERROR) so the agent can distinguish error types.`,
+      trigger: `Agent left ${unverified.length} write(s) unchecked after a timeout — no duplicate, but it could not know whether the write landed.`,
+      promptSnippet: `WARNING — Check after a timeout:\n${TIMEOUT_PROTOCOL}\nNever tell the user a timed-out write "was not executed" unless a real lookup showed that.`,
+      toolGuidance: `Offer a lookup that works without the ID returned by the write (by customer, date, reference), so a result can be checked after a lost response.`,
     });
   }
 
@@ -93,6 +100,7 @@ export function formatPatchReport(patches: HardeningPatch[]): string {
   }
 
   let md = `# Hardening Report — ${patches.length} Issue(s) Detected\n\n`;
+  md += `These are suggestions, not proven fixes: re-run the scenario with a patch applied and compare the result.\n\n`;
 
   for (const p of patches) {
     const icon = p.severity === "critical" ? "[CRITICAL]" : p.severity === "warning" ? "[WARNING]" : "[INFO]";

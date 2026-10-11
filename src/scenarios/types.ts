@@ -1,13 +1,13 @@
 export interface TriggerContext {
   callNumber: number;
   toolName: string;
-  // Whether this call matches the session's write-tool patterns (defaults to
-  // the "write*" prefix, configurable — see isWriteTool()/writeToolPatterns).
+  // Whether this call is classified as a write for the session — see
+  // classifyTool() in engine/state-machine.ts.
   isWriteCall: boolean;
-  // How many write-tool calls were already recorded in this session BEFORE
-  // this one — lets a scenario trigger on "the agent's first write" rather
-  // than a fixed, positional call number (a session that reads before it
-  // writes must still trigger F1 on that write).
+  // How many write calls this scenario has already fired on in the session.
+  // 0 = it has not fired yet, so "fire on the first write" is
+  // `priorWriteCalls === 0 && isWriteCall` — independent of how many reads
+  // came before, and of writes the scenario could not be applied to.
   priorWriteCalls: number;
 }
 

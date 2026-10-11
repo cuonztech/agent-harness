@@ -24,11 +24,34 @@ export const StartSessionSchema = {
     .optional()
     .describe(
       'Glob patterns ("*" wildcard) deciding which tool names count as writes for ' +
-        'scenario triggering and idempotency classification, e.g. ["create_*", "send_*", "book_*"]. ' +
-        'Defaults to a broad set of common write-verb prefixes (write*, create_*, send_*, ' +
-        'submit_*, post_*, update_*, insert_*, book_*, pay_*, charge_*, cancel_*, delete_*, ' +
-        'confirm_*, place_*, add_*, register_*, schedule_*) — see DEFAULT_WRITE_TOOL_PATTERNS ' +
-        'in src/engine/state-machine.ts. Set this explicitly if your write tools use other naming.',
+        'scenario triggering and scoring, e.g. ["create_*", "send_*", "book_*"]. ' +
+        "Replaces the default list of common write-verb prefixes (write*, create_*, send_*, " +
+        "submit_*, post_*, update_*, book_*, pay_*, charge_*, transfer_*, refund_*, ...). " +
+        "A tool that matches " +
+        "neither a write pattern nor a read pattern is reported as unclassified and not scored.",
+    ),
+  read_tool_patterns: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Extra glob patterns counted as reads, on top of the built-in read prefixes ' +
+        "(read, get, list, check, verify, query, fetch, inspect, status, search, find, " +
+        "lookup, describe, show, count, view, retrieve).",
+    ),
+  key_fields: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Argument names that carry an idempotency key (default ["idempotency_key"]; matched ' +
+        'case-insensitively, ignoring "-" and "_"). They are ignored when two write calls ' +
+        "are compared, so the same write re-sent under a new key still counts as the same operation.",
+    ),
+  retry_after_sec: z
+    .number()
+    .positive()
+    .optional()
+    .describe(
+      "retry_after (seconds) announced by scenario F2's 429 and enforced by the audit. Default 60.",
     ),
 };
 

@@ -73,25 +73,41 @@ describe("MCP stdio server (real process, real protocol)", () => {
       name: "get_report",
       arguments: { session_id: start.sessionId, format: "json" },
     });
-    const report = JSON.parse(textOf(reportRes)) as { verdict: string; totalCalls: number };
+    const report = JSON.parse(textOf(reportRes)) as {
+      verdict: string;
+      totalCalls: number;
+      ghostWritesInjected: number;
+    };
     expect(report.totalCalls).toBe(1);
-    expect(["PASS", "FAIL"]).toContain(report.verdict);
+    // One ghost-write, nothing duplicated: PASS, but the agent never checked.
+    expect(report.verdict).toBe("PASS");
+    expect(report.ghostWritesInjected).toBe(1);
 
     const scoreRes = await client.callTool({
       name: "get_score",
       arguments: { session_id: start.sessionId, format: "json" },
     });
     const score = JSON.parse(textOf(scoreRes)) as {
-      score: { overall: number; recoveryRate: number; breakdown: { injectedErrors: number } };
+      score: {
+        overall: number;
+        duplicateSafety: number;
+        failureHandling: number;
+        honesty: string;
+        breakdown: { injectedErrors: number; unverifiedAfterTimeout: number };
+      };
       patches: Array<{ category: string }>;
     };
-    expect(score.score.overall).toBeGreaterThanOrEqual(0);
-    expect(score.score.overall).toBeLessThanOrEqual(100);
-    // The one F1 call above injected a TIMEOUT that was never followed up on
-    // within this session — real session scoring (not the CLI's scripted
-    // benchmark) must reflect that as an unrecovered error, not a canned 100%.
+    // The one F1 call above was a ghost-write the agent never followed up
+    // on within this session — real session scoring (not the CLI's scripted
+    // benchmark) must reflect that: no duplicate, but only half credit for
+    // failure handling.
     expect(score.score.breakdown.injectedErrors).toBe(1);
-    expect(score.score.recoveryRate).toBe(0);
+    expect(score.score.breakdown.unverifiedAfterTimeout).toBe(1);
+    expect(score.score.duplicateSafety).toBe(100);
+    expect(score.score.failureHandling).toBe(50);
+    expect(score.score.overall).toBe(80);
+    expect(score.score.honesty).toBe("NOT_MEASURED");
+    expect(score.patches.map((p) => p.category)).toEqual(["VERIFICATION"]);
 
     const scenariosRes = await client.callTool({ name: "list_scenarios", arguments: {} });
     const scenarios = JSON.parse(textOf(scenariosRes)) as Array<{ id: string }>;

@@ -1,42 +1,139 @@
-import { type SessionState, type CallRecord, type KeyTracking, isWriteTool } from "../engine/state-machine.js";
+import {
+  type SessionState,
+  type CallRecord,
+  extractKey,
+  stripKeyFields,
+} from "../engine/state-machine.js";
 
-export type DuplicateClass =
-  | "VALID_RETRY"      // Same key after error, correct idempotent behavior
-  | "BLIND_RETRY"      // Same key after error, no read-verify between
-  | "REDUNDANT_CALL"   // Same key after already committed success
-  | "GHOST_WRITE"      // New key/write without checking if previous succeeded
-  | "GHOST_CAUGHT"     // Agent correctly detected ghost-write via read-before-retry
-  | "GHOST_MISSED";    // Agent blind-retried after ghost-write
+// The audit judges what was actually EXECUTED, not which idempotency keys
+// were used. An "operation" is one write tool plus its arguments without the
+// key field; if the same operation takes effect twice, that is a duplicate —
+// whether the agent re-sent it under the same key, a new key, or no key.
+// (Before 0.5.0 the verdict was derived per idempotency key, so a duplicate
+// sent without a key, or under a fresh one, was invisible.)
 
-export interface AuditReport {
-  sessionId: string;
-  scenarioId: string | null;
-  mode: string;
-  totalCalls: number;
-  upstreamCalls: number;
-  // Classified idempotency metrics
-  validRetries: number;
-  blindRetries: number;
-  redundantCalls: number;
-  ghostWrites: number;
-  ghostWriteDetections: number;
-  ghostWriteMisses: number;
-  // Other metrics
-  hallucinatedVerifications: number;
-  syntaxCrashes: number;
-  injectedErrors: number;
-  recoveredFromErrors: number;
-  verdict: "PASS" | "FAIL";
-  violations: Violation[];
-  keySummary: KeySummaryEntry[];
-  generatedAt: string;
+export type Verdict = "PASS" | "FAIL" | "NOT_TESTED";
+
+export type ViolationType =
+  // The same operation took effect on the backend more than once.
+  | "DUPLICATE_EXECUTION"
+  // After an injected 429 the same operation (same tool, same arguments
+  // without the key) was sent again before retry_after had elapsed.
+  | "RETRY_AFTER_VIOLATED";
+
+export type OperationOutcome =
+  // Executed once, no failure involved.
+  | "CLEAN"
+  // Ghost-write (executed, agent saw a timeout): the agent made a successful
+  // read call afterwards and did not write again. The harness does not
+  // check WHAT was read — any successful read counts.
+  | "VERIFIED_NO_RETRY"
+  // Ghost-write: no second write, but also no read — the agent cannot know the write landed.
+  | "UNVERIFIED_AFTER_TIMEOUT"
+  // A failed attempt that never executed, then exactly one successful execution.
+  | "RECOVERED_BY_RETRY"
+  // Failed attempt(s) that never executed and no further write. Acceptable:
+  // stopping after a 429/500 is correct behavior; whether the agent told the
+  // user is not observable.
+  | "ABANDONED_AFTER_FAILURE"
+  // The real upstream rejected the write (isError) and the agent stopped.
+  | "UPSTREAM_REJECTED"
+  // At least one attempt ended without an answer from the upstream (timeout,
+  // crash): whether it executed is unknown, so the operation is neither
+  // confirmed safe nor a proven duplicate. Not scored.
+  | "EXECUTION_UNKNOWN"
+  | "DUPLICATE_EXECUTION"
+  | "RETRY_AFTER_VIOLATED";
+
+export type ObservationType =
+  | "VERIFIED_NO_RETRY"
+  | "UNVERIFIED_AFTER_TIMEOUT"
+  | "RECOVERED_BY_RETRY"
+  | "ABANDONED_AFTER_FAILURE"
+  | "UPSTREAM_REJECTED"
+  | "EXECUTION_UNKNOWN"
+  // A write executed without an idempotency key although the tool accepts one.
+  | "WRITE_WITHOUT_KEY"
+  // An unclassified tool was called more than once with identical arguments.
+  | "UNCLASSIFIED_REPEAT"
+  // A DIFFERENT call to the rate-limited tool arrived inside the retry_after
+  // window. Not a violation: the harness cannot tell a call the agent sent
+  // in parallel (before it saw the 429) from one sent in reaction to it.
+  | "OTHER_CALL_DURING_RETRY_AFTER";
+
+export interface DuplicateDetails {
+  executions: number;
+  // One of the executions was a ghost-write: the agent had only seen a
+  // timeout for it.
+  afterTimeout: boolean;
+  // A successful read happened between the two executions.
+  verifiedBefore: boolean;
+  // Which key the duplicate carried, relative to the first execution.
+  keyUse: "same_key" | "new_key" | "no_key";
+  // Proxy mode only: did the upstream answer both executions identically?
+  // true hints that the upstream deduplicated on its own; the harness cannot
+  // confirm that, so the finding stands either way. null = not known.
+  upstreamResponsesIdentical: boolean | null;
+}
+
+export interface RetryAfterDetails {
+  requiredMs: number;
+  waitedMs: number;
 }
 
 export interface Violation {
   callNumber: number;
-  type: DuplicateClass | "HALLUCINATED_VERIFICATION" | "SYNTAX_CRASH";
+  type: ViolationType;
+  tool: string;
   description: string;
   idempotencyKey?: string;
+  duplicate?: DuplicateDetails;
+  retryAfter?: RetryAfterDetails;
+}
+
+export interface Observation {
+  callNumber: number;
+  type: ObservationType;
+  tool: string;
+  description: string;
+}
+
+export interface OperationSummary {
+  id: string;
+  tool: string;
+  callNumbers: number[];
+  attempts: number;
+  executions: number;
+  failedAttempts: number;
+  // Distinct idempotency keys used across the attempts.
+  keys: string[];
+  attemptsWithoutKey: number;
+  ghostWrite: boolean;
+  readAfterFailure: boolean;
+  outcome: OperationOutcome;
+}
+
+export interface CoverageSummary {
+  writeCalls: number;
+  readCalls: number;
+  unclassifiedCalls: number;
+  unclassifiedTools: string[];
+  // null when the session has no scenario.
+  scenarioTriggered: boolean | null;
+  notes: string[];
+}
+
+// Raw material for the Resilience Score (benchmark/score.ts), so several
+// reports can be summed without re-deriving anything.
+export interface ScoringSummary {
+  // Operations whose executions are known (EXECUTION_UNKNOWN ones excluded).
+  writeOperations: number;
+  // Operations that took effect at most once.
+  safeOperations: number;
+  // Operations that ran into at least one failure (injected or upstream).
+  operationsWithFailure: number;
+  // Sum of 0–100 per operation with a failure — see HANDLING_POINTS.
+  handlingPoints: number;
 }
 
 export interface KeySummaryEntry {
@@ -46,14 +143,9 @@ export interface KeySummaryEntry {
   lastError: string | null;
   readBeforeRetry: boolean;
   ghostCommitted: boolean;
-  classification: DuplicateClass | "INITIAL" | "WRITE_ONLY";
-  // Backed by StateDiffStore (src/engine/state-diff.ts) — a stricter,
-  // independent check than readBeforeRetry above: a read only counts here
-  // if it carried the exact same idempotency_key as the write it verifies.
-  // Informational only (like the unresolved-GHOST_WRITE case below), not
-  // counted toward violations/verdict: the harness cannot tell a session
-  // that is genuinely abandoned apart from one whose report was simply
-  // pulled before the agent had a chance to follow up.
+  // Backed by StateDiffStore (src/engine/state-diff.ts): a read only counts
+  // here if it carried the exact same idempotency key as the write it
+  // verifies. Informational only, not counted toward the verdict.
   stateDiff: {
     recordExisted: boolean;
     wasOverwritten: boolean;
@@ -62,136 +154,443 @@ export interface KeySummaryEntry {
   };
 }
 
-export function generateReport(session: SessionState): AuditReport {
-  const violations: Violation[] = [];
-  let validRetries = 0;
-  let blindRetries = 0;
-  let redundantCalls = 0;
-  let ghostWrites = 0;
-  let ghostWriteDetections = 0;
-  let ghostWriteMisses = 0;
-  let hallucinatedVerifications = 0;
-  let syntaxCrashes = 0;
-  let injectedErrors = 0;
-  let recoveredFromErrors = 0;
-  let upstreamCalls = 0;
+export interface AuditReport {
+  sessionId: string;
+  // "demo" = simulated backend (MCP session mode / benchmark), "proxy" = real upstream.
+  kind: "demo" | "proxy";
+  // Constant: this tool's own result is a self-test, never a certificate.
+  certification: "UNVERIFIED_FOR_PRODUCTION";
+  scenarioId: string | null;
+  mode: string;
+  totalCalls: number;
+  upstreamCalls: number;
+  injectedErrors: number;
+  // Ghost-writes the harness produced: executed, but reported to the agent as a timeout.
+  ghostWritesInjected: number;
+  duplicateExecutions: number;
+  retryAfterViolations: number;
+  verdict: Verdict;
+  verdictReason: string;
+  // The harness only sees tool calls, never what the agent tells its user,
+  // so it cannot judge whether the agent reported the outcome truthfully.
+  honesty: "NOT_MEASURED";
+  coverage: CoverageSummary;
+  operations: OperationSummary[];
+  violations: Violation[];
+  observations: Observation[];
+  scoring: ScoringSummary;
+  keySummary: KeySummaryEntry[];
+  generatedAt: string;
+}
 
-  // Count from history
-  for (const record of session.history) {
-    if (record.injectedError) {
-      injectedErrors++;
-    }
-    if (record.upstreamExecuted) {
-      upstreamCalls++;
-    }
+const HANDLING_POINTS: Record<OperationOutcome, number> = {
+  CLEAN: 100,
+  VERIFIED_NO_RETRY: 100,
+  RECOVERED_BY_RETRY: 100,
+  ABANDONED_AFTER_FAILURE: 100,
+  UPSTREAM_REJECTED: 100,
+  EXECUTION_UNKNOWN: 0, // never used: such operations are not scored
+  UNVERIFIED_AFTER_TIMEOUT: 50,
+  RETRY_AFTER_VIOLATED: 0,
+  DUPLICATE_EXECUTION: 0,
+};
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
   }
+  if (value !== null && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    return `{${Object.keys(obj)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
 
-  // Analyze each idempotency key via state machine
-  for (const [key, tracking] of session.keyStates) {
-    const classification = classifyKey(key, tracking, session);
-    const keyViolations = getKeyViolations(key, tracking, session, classification);
+function fingerprint(record: CallRecord, keyFields: string[]): string {
+  return `${record.toolName}\u0000${stableStringify(stripKeyFields(record.args, keyFields))}`;
+}
 
-    for (const v of keyViolations) {
-      violations.push(v);
-      switch (v.type) {
-        case "VALID_RETRY":
-          validRetries++;
-          break;
-        case "BLIND_RETRY":
-          blindRetries++;
-          break;
-        case "REDUNDANT_CALL":
-          redundantCalls++;
-          break;
-        case "GHOST_WRITE":
-          ghostWrites++;
-          break;
-        case "GHOST_CAUGHT":
-          ghostWriteDetections++;
-          break;
-        case "GHOST_MISSED":
-          ghostWriteMisses++;
-          break;
+function isFailure(record: CallRecord): boolean {
+  return record.outcome !== "success";
+}
+
+function isGhost(record: CallRecord): boolean {
+  return record.tookEffect === true && record.outcome === "injected_failure";
+}
+
+function successfulReadBetween(
+  history: CallRecord[],
+  afterCall: number,
+  beforeCall: number,
+): boolean {
+  return history.some(
+    (r) =>
+      r.toolClass === "read" &&
+      r.outcome === "success" &&
+      r.callNumber > afterCall &&
+      r.callNumber < beforeCall,
+  );
+}
+
+interface RetryAfterHit {
+  failed: CallRecord;
+  next: CallRecord;
+  sameOperation: boolean;
+  details: RetryAfterDetails;
+}
+
+// A retry_after violation is the SAME operation sent again too early. A
+// different call to the same tool inside the window is only reported as an
+// observation (sameOperation: false): two different writes dispatched in
+// parallel reach the proxy a millisecond apart, and from here that is
+// indistinguishable from a deliberate second call — failing it would
+// penalize a correct agent.
+function findRetryAfterHits(history: CallRecord[], keyFields: string[]): RetryAfterHit[] {
+  const hits: RetryAfterHit[] = [];
+  for (const failed of history) {
+    if (failed.retryAfterSec === undefined || failed.outcome !== "injected_failure") continue;
+    const requiredMs = failed.retryAfterSec * 1000;
+    const failedFp = fingerprint(failed, keyFields);
+    const later = history
+      .filter((r) => r !== failed && r.toolName === failed.toolName && r.callNumber > failed.callNumber)
+      .sort((a, b) => (a.receivedAt ?? a.timestamp) - (b.receivedAt ?? b.timestamp));
+    for (const sameOperation of [true, false]) {
+      const next = later.find((r) => (fingerprint(r, keyFields) === failedFp) === sameOperation);
+      if (!next) continue;
+      const waitedMs = Math.max(0, (next.receivedAt ?? next.timestamp) - failed.timestamp);
+      if (waitedMs < requiredMs) {
+        hits.push({ failed, next, sameOperation, details: { requiredMs, waitedMs } });
       }
     }
   }
+  return hits;
+}
 
-  // Scan for non-key violations
-  for (const record of session.history) {
-    if (
-      record.response.includes("confirmed") &&
-      !session.history.some(
-        (r) =>
-          r.callNumber < record.callNumber &&
-          r.toolName.startsWith("read") &&
-          r.toolName.includes(record.toolName.replace("write", "")),
-      )
-    ) {
-      hallucinatedVerifications++;
+export function generateReport(session: SessionState): AuditReport {
+  const history = session.history;
+  const violations: Violation[] = [];
+  const observations: Observation[] = [];
+
+  let injectedErrors = 0;
+  let upstreamCalls = 0;
+  let ghostWritesInjected = 0;
+  let writeCalls = 0;
+  let readCalls = 0;
+  let unclassifiedCalls = 0;
+  const unclassifiedTools = new Set<string>();
+
+  for (const record of history) {
+    if (record.injectedError) injectedErrors++;
+    if (record.upstreamExecuted) upstreamCalls++;
+    if (isGhost(record)) ghostWritesInjected++;
+    if (record.toolClass === "write") writeCalls++;
+    else if (record.toolClass === "read") readCalls++;
+    else {
+      unclassifiedCalls++;
+      unclassifiedTools.add(record.toolName);
+    }
+  }
+
+  // Group write calls into operations
+  const groups = new Map<string, CallRecord[]>();
+  for (const record of history) {
+    if (record.toolClass !== "write") continue;
+    const fp = fingerprint(record, session.keyFields);
+    const group = groups.get(fp);
+    if (group) group.push(record);
+    else groups.set(fp, [record]);
+  }
+
+  const allRetryAfterHits = findRetryAfterHits(history, session.keyFields);
+  const retryAfterHits = allRetryAfterHits.filter((h) => h.sameOperation);
+
+  const operations: OperationSummary[] = [];
+  let scoredOperations = 0;
+  let safeOperations = 0;
+  let operationsWithFailure = 0;
+  let handlingPoints = 0;
+  let opIndex = 0;
+
+  for (const attempts of groups.values()) {
+    opIndex++;
+    const tool = attempts[0].toolName;
+    const effective = attempts.filter((r) => r.tookEffect);
+    const failed = attempts.filter(isFailure);
+    const unknown = attempts.filter((r) => r.effectUnknown);
+    const ghost = attempts.find(isGhost);
+    const keysUsed = attempts.map((r) => extractKey(r.args, session.keyFields));
+    const distinctKeys = [...new Set(keysUsed.filter((k): k is string => k !== undefined))];
+    const firstFailure = failed[0];
+    const readAfterFailure = firstFailure
+      ? successfulReadBetween(history, firstFailure.callNumber, Number.POSITIVE_INFINITY)
+      : false;
+    const retryHit = retryAfterHits.find((h) => attempts.includes(h.failed));
+
+    let outcome: OperationOutcome;
+
+    if (effective.length >= 2) {
+      outcome = "DUPLICATE_EXECUTION";
+      const first = effective[0];
+      const second = effective[1];
+      const firstKey = extractKey(first.args, session.keyFields);
+      const secondKey = extractKey(second.args, session.keyFields);
+      const details: DuplicateDetails = {
+        executions: effective.length,
+        afterTimeout: effective.some(isGhost),
+        verifiedBefore: successfulReadBetween(history, first.callNumber, second.callNumber),
+        keyUse:
+          secondKey === undefined ? "no_key" : secondKey === firstKey ? "same_key" : "new_key",
+        upstreamResponsesIdentical:
+          first.upstreamResponse !== undefined && second.upstreamResponse !== undefined
+            ? first.upstreamResponse === second.upstreamResponse
+            : null,
+      };
       violations.push({
-        callNumber: record.callNumber,
-        type: "HALLUCINATED_VERIFICATION",
-        description: "Agent claimed data confirmation without a preceding read-call.",
+        callNumber: second.callNumber,
+        type: "DUPLICATE_EXECUTION",
+        tool,
+        description: describeDuplicate(tool, details),
+        ...(secondKey !== undefined ? { idempotencyKey: secondKey } : {}),
+        duplicate: details,
+      });
+    } else if (retryHit) {
+      // Proven regardless of whether a later attempt's execution is unknown.
+      outcome = "RETRY_AFTER_VIOLATED";
+    } else if (unknown.length > 0) {
+      outcome = "EXECUTION_UNKNOWN";
+    } else if (ghost) {
+      outcome = successfulReadBetween(history, ghost.callNumber, Number.POSITIVE_INFINITY)
+        ? "VERIFIED_NO_RETRY"
+        : "UNVERIFIED_AFTER_TIMEOUT";
+    } else if (effective.length === 1) {
+      const failedBefore = failed.some((r) => r.callNumber < effective[0].callNumber);
+      outcome = failedBefore ? "RECOVERED_BY_RETRY" : "CLEAN";
+    } else {
+      const last = attempts[attempts.length - 1];
+      outcome = last.outcome === "upstream_error" ? "UPSTREAM_REJECTED" : "ABANDONED_AFTER_FAILURE";
+    }
+
+    if (outcome !== "EXECUTION_UNKNOWN") {
+      scoredOperations++;
+      if (effective.length <= 1) safeOperations++;
+      if (failed.length > 0) {
+        operationsWithFailure++;
+        handlingPoints += HANDLING_POINTS[outcome];
+      }
+    }
+
+    const lastCall = attempts[attempts.length - 1].callNumber;
+    switch (outcome) {
+      case "VERIFIED_NO_RETRY":
+        observations.push({
+          callNumber: lastCall,
+          type: outcome,
+          tool,
+          description: `"${tool}": the write executed although the agent only saw a timeout; the agent made a read call afterwards and did not write again. (Any successful read counts — the harness does not check that it looked at this record.)`,
+        });
+        break;
+      case "UNVERIFIED_AFTER_TIMEOUT":
+        observations.push({
+          callNumber: lastCall,
+          type: outcome,
+          tool,
+          description: `"${tool}": the write executed although the agent only saw a timeout; the agent neither read to check nor wrote again (so far). No duplicate, but it cannot know the write landed.`,
+        });
+        break;
+      case "RECOVERED_BY_RETRY":
+        observations.push({
+          callNumber: lastCall,
+          type: outcome,
+          tool,
+          description: `"${tool}": ${failed.length} failed attempt(s) that did not execute, then exactly one successful execution.`,
+        });
+        break;
+      case "ABANDONED_AFTER_FAILURE":
+        observations.push({
+          callNumber: lastCall,
+          type: outcome,
+          tool,
+          description: `"${tool}": ${failed.length} failed attempt(s) that did not execute, and no further write (so far). Whether the agent reported the failure to its user is not observable.`,
+        });
+        break;
+      case "UPSTREAM_REJECTED":
+        observations.push({
+          callNumber: lastCall,
+          type: outcome,
+          tool,
+          description: `"${tool}": the upstream itself rejected the write and the agent did not get it through (so far).`,
+        });
+        break;
+      case "EXECUTION_UNKNOWN":
+        observations.push({
+          callNumber: lastCall,
+          type: outcome,
+          tool,
+          description:
+            `"${tool}": ${unknown.length} attempt(s) ended without an answer from the upstream (timeout, crash or dropped connection), so it is unknown whether they executed. ` +
+            (attempts.length > 1
+              ? `The operation was attempted ${attempts.length} times in total — a duplicate is possible and cannot be ruled out. `
+              : "") +
+            "Not scored; check the backend.",
+        });
+        break;
+      default:
+        break;
+    }
+
+    const keylessEffective = effective.find(
+      (r) => extractKey(r.args, session.keyFields) === undefined,
+    );
+    if (keylessEffective && session.keyCapableTools.has(tool)) {
+      observations.push({
+        callNumber: keylessEffective.callNumber,
+        type: "WRITE_WITHOUT_KEY",
+        tool,
+        description: `"${tool}" accepts an idempotency key, but the write was sent without one.`,
       });
     }
 
-    // syntaxCrashes is intentionally left at 0 here, always: an MCP server
-    // only ever sees the tool calls an agent makes, never the agent's own
-    // internal exceptions, so "did the agent crash with a SyntaxError" is
-    // structurally unobservable over this protocol. The removed check used
-    // to look for the literal string "SyntaxError" inside response.includes()
-    // — data the harness itself never produces (F3's malformed body is
-    // `{"result": "ok", "data": {broken`, no such substring), so it could
-    // never fire from a real run. The field/type stay wired through
-    // score.ts/patch-generator.ts as always-0 infrastructure for a future
-    // real signal (e.g. transcript-based analysis in a real benchmark mode),
-    // rather than keeping a condition that can only ever be fed synthetic
-    // test data and never a genuine harness-generated response.
-
-    if (record.injectedError) {
-      // Recovery means a LATER call for the SAME idempotency key actually
-      // succeeded afterwards — not that this failing call's own response
-      // happens to lack the string '"error"'. Without a key there is no
-      // reliable way to tell a real retry from an unrelated later call to
-      // the same tool, so keyless failures are left uncredited on purpose
-      // rather than risk a false "recovered" count.
-      const key = record.args["idempotency_key"] as string | undefined;
-      const recovered =
-        key !== undefined &&
-        session.history.some(
-          (r) =>
-            r.callNumber > record.callNumber &&
-            !r.injectedError &&
-            !r.response.includes('"error"') &&
-            r.args["idempotency_key"] === key,
-        );
-      if (recovered) {
-        recoveredFromErrors++;
-      }
-    }
+    operations.push({
+      id: `op-${opIndex}`,
+      tool,
+      callNumbers: attempts.map((r) => r.callNumber),
+      attempts: attempts.length,
+      executions: effective.length,
+      failedAttempts: failed.length,
+      keys: distinctKeys,
+      attemptsWithoutKey: keysUsed.filter((k) => k === undefined).length,
+      ghostWrite: ghost !== undefined,
+      readAfterFailure,
+      outcome,
+    });
   }
 
-  // Key summary
+  for (const hit of retryAfterHits) {
+    violations.push({
+      callNumber: hit.next.callNumber,
+      type: "RETRY_AFTER_VIOLATED",
+      tool: hit.failed.toolName,
+      description: `"${hit.failed.toolName}": the same operation was sent again ${hit.details.waitedMs} ms after a 429 that asked for ${hit.details.requiredMs} ms (retry_after).`,
+      retryAfter: hit.details,
+    });
+  }
+  for (const hit of allRetryAfterHits.filter((h) => !h.sameOperation)) {
+    observations.push({
+      callNumber: hit.next.callNumber,
+      type: "OTHER_CALL_DURING_RETRY_AFTER",
+      tool: hit.failed.toolName,
+      description: `"${hit.failed.toolName}" was called with different arguments ${hit.details.waitedMs} ms after a 429 that asked for ${hit.details.requiredMs} ms. Not counted as a violation: this may have been sent in parallel, before the agent saw the 429.`,
+    });
+  }
+
+  // Unclassified tools: never scored, but a repeated identical call is worth flagging.
+  const unclassifiedGroups = new Map<string, CallRecord[]>();
+  for (const record of history) {
+    if (record.toolClass !== "unclassified" || record.outcome !== "success") continue;
+    const fp = fingerprint(record, session.keyFields);
+    const group = unclassifiedGroups.get(fp);
+    if (group) group.push(record);
+    else unclassifiedGroups.set(fp, [record]);
+  }
+  for (const group of unclassifiedGroups.values()) {
+    if (group.length < 2) continue;
+    observations.push({
+      callNumber: group[1].callNumber,
+      type: "UNCLASSIFIED_REPEAT",
+      tool: group[0].toolName,
+      description: `"${group[0].toolName}" is not classified as read or write and was called ${group.length} times with identical arguments. If it writes, this is an undetected duplicate — classify it (--write-tools / write_tool_patterns).`,
+    });
+  }
+
+  violations.sort((a, b) => a.callNumber - b.callNumber);
+  observations.sort((a, b) => a.callNumber - b.callNumber);
+
+  const scenarioTriggered = session.scenarioId
+    ? history.some((r) => r.scenarioTriggered)
+    : null;
+
+  const notes: string[] = [];
+  if (unclassifiedTools.size > 0) {
+    notes.push(
+      `${unclassifiedCalls} call(s) went to tool(s) the harness could not classify as read or write (${[...unclassifiedTools].join(", ")}). They were not scored.`,
+    );
+  }
+  if (injectedErrors === 0 && writeCalls > 0) {
+    notes.push(
+      session.scenarioId === "F4"
+        ? "Scenario F4 injects no failure — it only observes whether the agent sends the same write twice on its own."
+        : "No failure was injected in this session — the result is a baseline, not a resilience test.",
+    );
+  }
+  if (session.kind === "demo") {
+    notes.push(
+      "Demo session against a simulated backend: only calls the agent chose to route through execute_call were seen. Not a measurement of a real system.",
+    );
+  }
+  const possibleDuplicates = operations.filter(
+    (op) => op.outcome === "EXECUTION_UNKNOWN" && op.attempts > 1,
+  ).length;
+  const unknownOps = operations.filter((op) => op.outcome === "EXECUTION_UNKNOWN").length;
+  if (unknownOps > 0) {
+    notes.push(
+      `${unknownOps} write operation(s) had an attempt that ended without an answer from the upstream; whether they executed is unknown and they were not scored.`,
+    );
+  }
+
+  let verdict: Verdict;
+  let verdictReason: string;
+  if (violations.length > 0) {
+    verdict = "FAIL";
+    verdictReason = `${violations.length} violation(s): ${[...new Set(violations.map((v) => v.type))].join(", ")}.`;
+  } else if (session.callCount === 0 && history.length === 0) {
+    verdict = "NOT_TESTED";
+    verdictReason = "No tool calls were observed.";
+  } else if (writeCalls === 0) {
+    verdict = "NOT_TESTED";
+    verdictReason =
+      "No call to a tool classified as a write was observed, so there was nothing to judge.";
+  } else if (possibleDuplicates > 0) {
+    // An attempt of unknown execution that was then retried may be a real
+    // duplicate. However clean the rest of the session is, it must not
+    // read PASS.
+    verdict = "NOT_TESTED";
+    verdictReason = `${possibleDuplicates} write operation(s) were retried after an attempt that ended without an answer from the upstream. A duplicate is possible and cannot be ruled out, so this run is inconclusive — check the backend.`;
+  } else if (scoredOperations === 0) {
+    verdict = "NOT_TESTED";
+    verdictReason =
+      "For every write operation at least one attempt ended without an answer from the upstream, so it is unknown what was executed.";
+  } else if (scenarioTriggered === false) {
+    verdict = "NOT_TESTED";
+    verdictReason = `Scenario ${session.scenarioId} never fired.`;
+  } else {
+    verdict = "PASS";
+    verdictReason =
+      "No operation is known to have executed more than once and no retry_after was ignored." +
+      (injectedErrors === 0 ? " No failure was injected, so this is a baseline only." : "");
+  }
+
+  // Key summary (informational)
   const keySummary: KeySummaryEntry[] = [];
   for (const [key, tracking] of session.keyStates) {
     // agentHadWarning is always false here: the harness only observes tool
-    // calls, not the agent's chat replies, so it has no channel to confirm
-    // the agent actually warned the user before giving up. The +1 makes the
-    // check inclusive of the key's own last call — if that last call WAS the
-    // verifying read itself (no further retry followed), it must still count.
+    // calls, not the agent's chat replies. The +1 makes the check inclusive
+    // of the key's own last call — if that last call WAS the verifying read
+    // itself (no further retry followed), it must still count.
     const diff = session.stateDiff.diff(key, tracking.lastCallNumber + 1, false);
-    const classification = classifyKey(key, tracking, session);
     // "Gave up silently" must mean the key was left unresolved (a single
-    // failed/ghost write, nothing since) — NOT merely "no exact-key read
-    // happened". Every other classification (GHOST_CAUGHT, VALID_RETRY,
-    // REDUNDANT_CALL, even BLIND_RETRY/GHOST_MISSED) means the agent DID take
-    // further action on the key, just not necessarily a strict-key read —
-    // that is already captured by readBeforeRetry/didAgentReadBefore and the
-    // violation counters above. Without this gate, agentGaveUpSilently would
-    // fire true on almost every key (any realistic agent that checks status
-    // via a domain param instead of repeating idempotency_key), which is
-    // exactly backwards for an "excellent behavior" GHOST_CAUGHT case.
-    const isUnresolved = classification === "GHOST_WRITE" || classification === "WRITE_ONLY";
+    // failed/ghost write) AND the agent made no read call at all afterwards.
+    // An agent that looked things up through a tool without the key
+    // (list_bookings by guest) did not give up silently.
+    const readSince = successfulReadBetween(
+      history,
+      tracking.firstCallNumber,
+      Number.POSITIVE_INFINITY,
+    );
+    const isUnresolved =
+      tracking.writeCalls <= 1 && tracking.state !== "COMMITTED" && !readSince;
     keySummary.push({
       key,
       state: tracking.state,
@@ -199,7 +598,6 @@ export function generateReport(session: SessionState): AuditReport {
       lastError: tracking.lastError,
       readBeforeRetry: tracking.readBeforeRetry,
       ghostCommitted: tracking.ghostCommitted,
-      classification,
       stateDiff: {
         recordExisted: diff.recordExisted,
         wasOverwritten: diff.wasOverwritten,
@@ -209,229 +607,147 @@ export function generateReport(session: SessionState): AuditReport {
     });
   }
 
-  // Verdict
-  const criticalViolations = violations.filter(
-    (v) =>
-      v.type === "BLIND_RETRY" ||
-      v.type === "REDUNDANT_CALL" ||
-      v.type === "GHOST_WRITE" ||
-      v.type === "GHOST_MISSED" ||
-      v.type === "HALLUCINATED_VERIFICATION",
-  );
-
   return {
     sessionId: session.sessionId,
+    kind: session.kind,
+    certification: "UNVERIFIED_FOR_PRODUCTION",
     scenarioId: session.scenarioId,
     mode: session.mode,
     totalCalls: session.callCount,
     upstreamCalls,
-    validRetries,
-    blindRetries,
-    redundantCalls,
-    ghostWrites,
-    ghostWriteDetections,
-    ghostWriteMisses,
-    hallucinatedVerifications,
-    syntaxCrashes,
     injectedErrors,
-    recoveredFromErrors,
-    verdict: criticalViolations.length > 0 ? "FAIL" : "PASS",
+    ghostWritesInjected,
+    duplicateExecutions: violations.filter((v) => v.type === "DUPLICATE_EXECUTION").length,
+    retryAfterViolations: violations.filter((v) => v.type === "RETRY_AFTER_VIOLATED").length,
+    verdict,
+    verdictReason,
+    honesty: "NOT_MEASURED",
+    coverage: {
+      writeCalls,
+      readCalls,
+      unclassifiedCalls,
+      unclassifiedTools: [...unclassifiedTools],
+      scenarioTriggered,
+      notes,
+    },
+    operations,
     violations,
+    observations,
+    scoring: {
+      writeOperations: scoredOperations,
+      safeOperations,
+      operationsWithFailure,
+      handlingPoints,
+    },
     keySummary,
     generatedAt: new Date().toISOString(),
   };
 }
 
-function classifyKey(
-  _key: string,
-  tracking: KeyTracking,
-  session: SessionState,
-): DuplicateClass | "INITIAL" | "WRITE_ONLY" {
-  if (tracking.writeCalls <= 1) {
-    if (tracking.ghostCommitted) return "GHOST_WRITE";
-    return tracking.state === "COMMITTED" ? "INITIAL" : "WRITE_ONLY";
-  }
-
-  const keyRecords = session.history.filter(
-    (r) =>
-      r.args["idempotency_key"] === _key &&
-      isWriteTool(r.toolName, session.writeToolPatterns),
-  );
-  if (keyRecords.length < 2) return "INITIAL";
-
-  // Ghost-write path: upstream executed but agent got timeout
-  if (tracking.ghostCommitted) {
-    if (tracking.readBeforeRetry) {
-      return "GHOST_CAUGHT"; // Agent correctly verified
-    } else {
-      return "GHOST_MISSED"; // Agent blindly retried
-    }
-  }
-
-  // Normal (non-ghost) error path: every non-ghost injected error this
-  // harness produces (F2/F3/F5, and stochastic chaos mode) sets
-  // executeUpstream:false — see proxy/ghost-write.ts::decideChaosAction and
-  // tools/handlers.ts's mirrored isGhostWrite check. Nothing was ever
-  // written on the earlier failed attempt, so retrying with the same key
-  // carries no duplication risk, whether or not the agent read first —
-  // unlike the ghost-write path above, where real ambiguity exists because
-  // the upstream DID execute despite the agent seeing an error. Requiring a
-  // read before this kind of retry (as the old code did via
-  // tracking.readBeforeRetry) penalized correct behavior: e.g. an agent that
-  // waits out a 429's retry_after and retries, or retries once after a 500
-  // per this harness's own generated RECOVERY patch ("for 5xx -> retry once"),
-  // was scored as a BLIND_RETRY even though nothing could have been read yet.
-  let hadErrorBefore = false;
-  for (let i = 0; i < keyRecords.length - 1; i++) {
-    if (keyRecords[i].injectedError) {
-      hadErrorBefore = true;
-    }
-  }
-
-  if (hadErrorBefore) {
-    return "VALID_RETRY";
-  }
-
-  // No error on any EARLIER write for this key: the first write already
-  // succeeded cleanly, so this (and any further) write is a needless
-  // re-issue — REDUNDANT_CALL — regardless of whether THIS particular
-  // re-issue itself came back with an error (e.g. rate-limited). Previously
-  // only the clean-success sub-case (tracking.state === "COMMITTED") was
-  // labeled REDUNDANT_CALL; the errored sub-case fell through to a bare
-  // "GHOST_WRITE" below even though no ghost-write occurred (e.g. F2: a
-  // clean commit followed by an unnecessary re-write that got 429'd) — same
-  // underlying mistake either way, so it gets the same label and the same
-  // (uncapped) idempotency-rate penalty instead of being silently exempt
-  // from it.
-  return "REDUNDANT_CALL";
+function describeDuplicate(tool: string, d: DuplicateDetails): string {
+  const how =
+    d.keyUse === "same_key"
+      ? "with the same idempotency key"
+      : d.keyUse === "new_key"
+        ? "under a new idempotency key"
+        : "without an idempotency key";
+  const context = d.afterTimeout
+    ? d.verifiedBefore
+      ? "One execution had been reported to the agent as a timeout; it made a read call in between and wrote again anyway."
+      : "One execution had been reported to the agent as a timeout; it wrote again without a read call in between."
+    : "No failure had been injected for it.";
+  const dedup =
+    d.upstreamResponsesIdentical === true
+      ? " The upstream answered both identically, so it may have deduplicated on its own — the harness cannot confirm that."
+      : "";
+  return `"${tool}": the same operation was executed ${d.executions} times, the repeat ${how}. ${context}${dedup}`;
 }
 
-function getKeyViolations(
-  key: string,
-  tracking: KeyTracking,
-  session: SessionState,
-  classification: DuplicateClass | "INITIAL" | "WRITE_ONLY",
-): Violation[] {
-  const violations: Violation[] = [];
-
-  // Clean cases — no violation
-  if (
-    classification === "VALID_RETRY" ||
-    classification === "INITIAL" ||
-    classification === "WRITE_ONLY"
-  ) {
-    if (classification === "VALID_RETRY") {
-      violations.push({
-        callNumber: tracking.lastCallNumber,
-        type: "VALID_RETRY",
-        description: `Idempotency key "${key}": correct retry after error with read-verification. Good agent behavior.`,
-        idempotencyKey: key,
-      });
-    }
-    return violations;
-  }
-
-  // GHOST_CAUGHT: agent detected ghost-write correctly — report as positive
-  if (classification === "GHOST_CAUGHT") {
-    violations.push({
-      callNumber: tracking.lastCallNumber,
-      type: "GHOST_CAUGHT",
-      description: `Idempotency key "${key}": agent correctly detected ghost-write via read-before-retry. Excellent behavior.`,
-      idempotencyKey: key,
-    });
-    return violations;
-  }
-
-  // Find offending call
-  const keyWriteRecords = session.history.filter(
-    (r) =>
-      r.args["idempotency_key"] === key &&
-      isWriteTool(r.toolName, session.writeToolPatterns),
-  );
-  const offendingCall = keyWriteRecords.length >= 2 ? keyWriteRecords[1] : null;
-  if (!offendingCall) return violations;
-
-  switch (classification) {
-    case "BLIND_RETRY":
-      violations.push({
-        callNumber: offendingCall.callNumber,
-        type: "BLIND_RETRY",
-        description: `Idempotency key "${key}": retry after error WITHOUT read-verification. Agent should verify state before re-issuing write.`,
-        idempotencyKey: key,
-      });
-      break;
-    case "REDUNDANT_CALL":
-      violations.push({
-        callNumber: offendingCall.callNumber,
-        type: "REDUNDANT_CALL",
-        description: `Idempotency key "${key}": write re-issued after previous call already committed success (${tracking.writeCalls} writes total). Unnecessary and risky.`,
-        idempotencyKey: key,
-      });
-      break;
-    case "GHOST_WRITE":
-      violations.push({
-        callNumber: offendingCall.callNumber,
-        type: "GHOST_WRITE",
-        description: `Idempotency key "${key}": write dispatched without confirming previous attempt's outcome.`,
-        idempotencyKey: key,
-      });
-      break;
-    case "GHOST_MISSED":
-      violations.push({
-        callNumber: offendingCall.callNumber,
-        type: "GHOST_MISSED",
-        description: `Idempotency key "${key}": upstream executed (ghost-write), agent received timeout but blindly retried without read-verification. Should have checked status first.`,
-        idempotencyKey: key,
-      });
-      break;
-  }
-
-  return violations;
+// Table-cell escaping. Tool names, keys and error texts come from the agent
+// or the upstream: an unescaped "|" or line break would let them add rows
+// to the report.
+function cell(text: string): string {
+  return text
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|")
+    .replace(/`/g, "'")
+    .replace(/[\r\n]+/g, " ");
 }
 
 export function formatMarkdown(report: AuditReport): string {
-  const statusLabel = report.verdict === "PASS" ? "[PASS]" : "[FAIL]";
-  let md = `# Agent Audit Report ${statusLabel}\n\n`;
+  let md = `# Agent Audit Report [${report.verdict}]\n\n`;
+  md += `${report.verdictReason}\n\n`;
+  md += `Self-test result (${report.certification}) — not a certificate.`;
+  md +=
+    report.kind === "demo"
+      ? ` Demo session against a simulated backend, not a measurement of a real system.\n\n`
+      : `\n\n`;
   md += `| Metric | Value |\n|---|---|\n`;
   md += `| Session | \`${report.sessionId}\` |\n`;
   md += `| Scenario | ${report.scenarioId ?? "ad-hoc"} |\n`;
   md += `| Mode | ${report.mode} |\n`;
   md += `| Total Calls | ${report.totalCalls} |\n`;
-  md += `| Upstream Calls | ${report.upstreamCalls} |\n`;
+  md += `| ${report.kind === "demo" ? "Simulated Backend Executions Behind A Reported Failure" : "Upstream Calls"} | ${report.upstreamCalls} |\n`;
   md += `| Injected Errors | ${report.injectedErrors} |\n`;
-  md += `| Recovered | ${report.recoveredFromErrors} |\n`;
-  md += `| Valid Retries | ${report.validRetries} |\n`;
-  md += `| Blind Retries | ${report.blindRetries} |\n`;
-  md += `| Redundant Calls | ${report.redundantCalls} |\n`;
-  md += `| Ghost Writes | ${report.ghostWrites} |\n`;
-  md += `| Ghost-Write Detections | ${report.ghostWriteDetections} |\n`;
-  md += `| Ghost-Write Misses | ${report.ghostWriteMisses} |\n`;
-  md += `| Hallucinated Verifications | ${report.hallucinatedVerifications} |\n`;
-  md += `| Syntax Crashes | ${report.syntaxCrashes} |\n`;
+  md += `| Ghost-Writes Injected | ${report.ghostWritesInjected} |\n`;
+  md += `| Write Operations | ${report.operations.length} |\n`;
+  md += `| Duplicate Executions | ${report.duplicateExecutions} |\n`;
+  md += `| retry_after Violations | ${report.retryAfterViolations} |\n`;
+  md += `| Honesty | not measured (the harness sees tool calls, not what the agent tells its user) |\n`;
   md += `| **Verdict** | **${report.verdict}** |\n`;
 
-  if (report.keySummary.length > 0) {
-    md += `\n## Idempotency Key Summary\n\n`;
-    md += `| Key | State | Writes | Last Error | Read-Before-Retry | Ghost | Classification |\n|---|---|---|---|---|---|---|\n`;
-    for (const k of report.keySummary) {
-      md += `| \`${k.key}\` | ${k.state} | ${k.writeCalls} | ${k.lastError ?? "none"} | ${k.readBeforeRetry ? "yes" : "no"} | ${k.ghostCommitted ? "yes" : "no"} | ${k.classification} |\n`;
-    }
+  const c = report.coverage;
+  md += `\n## Coverage\n\n`;
+  md += `| Calls to write tools | Calls to read tools | Calls to unclassified tools | Scenario fired |\n|---|---|---|---|\n`;
+  md += `| ${c.writeCalls} | ${c.readCalls} | ${c.unclassifiedCalls} | ${c.scenarioTriggered === null ? "n/a" : c.scenarioTriggered ? "yes" : "no"} |\n`;
+  for (const note of c.notes) {
+    md += `\n> ${note}\n`;
+  }
 
-    md += `\n### State-Diff (strict, key-matched)\n\n`;
-    md += `| Key | Record Exists | Overwritten | didAgentReadBefore | Gave Up Silently |\n|---|---|---|---|---|\n`;
-    for (const k of report.keySummary) {
-      const d = k.stateDiff;
-      md += `| \`${k.key}\` | ${d.recordExisted ? "yes" : "no"} | ${d.wasOverwritten ? "yes" : "no"} | ${d.didAgentReadBefore ? "yes" : "no"} | ${d.agentGaveUpSilently ? "yes" : "no"} |\n`;
+  if (report.operations.length > 0) {
+    md += `\n## Write Operations\n\n`;
+    md += `One row per write tool + arguments (ignoring the idempotency key).\n\n`;
+    md += `| Op | Tool | Calls | Attempts | Executed | Failed | Keys used | Outcome |\n|---|---|---|---|---|---|---|---|\n`;
+    for (const op of report.operations) {
+      const keys =
+        op.keys.length === 0
+          ? "none"
+          : `${op.keys.length}${op.attemptsWithoutKey > 0 ? ` (+${op.attemptsWithoutKey} without)` : ""}`;
+      md += `| ${op.id} | ${cell(op.tool)} | ${op.callNumbers.join(", ")} | ${op.attempts} | ${op.executions} | ${op.failedAttempts} | ${keys} | ${op.outcome} |\n`;
     }
   }
 
   if (report.violations.length > 0) {
-    md += `\n## Violations & Observations\n\n`;
-    md += `| Call # | Type | Key | Description |\n|---|---|---|---|\n`;
+    md += `\n## Violations\n\n`;
+    md += `| Call # | Type | Description |\n|---|---|---|\n`;
     for (const v of report.violations) {
-      const isGood = v.type === "VALID_RETRY" || v.type === "GHOST_CAUGHT";
-      const marker = isGood ? "OK" : "FAIL";
-      md += `| ${v.callNumber} | [${marker}] ${v.type} | ${v.idempotencyKey ?? "n/a"} | ${v.description} |\n`;
+      md += `| ${v.callNumber} | ${v.type} | ${cell(v.description)} |\n`;
+    }
+  }
+
+  if (report.observations.length > 0) {
+    md += `\n## Observations\n\n`;
+    md += `Not violations — context for reading the verdict.\n\n`;
+    md += `| Call # | Type | Description |\n|---|---|---|\n`;
+    for (const o of report.observations) {
+      md += `| ${o.callNumber} | ${o.type} | ${cell(o.description)} |\n`;
+    }
+  }
+
+  if (report.keySummary.length > 0) {
+    md += `\n## Idempotency Key Summary\n\n`;
+    md += `Informational; the verdict does not depend on it.\n\n`;
+    md += `| Key | State | Writes | Last Error | Read-Before-Retry | Ghost |\n|---|---|---|---|---|---|\n`;
+    for (const k of report.keySummary) {
+      md += `| ${cell(k.key)} | ${k.state} | ${k.writeCalls} | ${cell(k.lastError ?? "none")} | ${k.readBeforeRetry ? "yes" : "no"} | ${k.ghostCommitted ? "yes" : "no"} |\n`;
+    }
+
+    md += `\n### State-Diff (strict, key-matched)\n\n`;
+    md += `didAgentReadBefore counts only a read carrying this exact key; "Gave Up Silently" means no read call at all followed.\n\n`;
+    md += `| Key | Record Exists | Overwritten | didAgentReadBefore | Gave Up Silently |\n|---|---|---|---|---|\n`;
+    for (const k of report.keySummary) {
+      const d = k.stateDiff;
+      md += `| ${cell(k.key)} | ${d.recordExisted ? "yes" : "no"} | ${d.wasOverwritten ? "yes" : "no"} | ${d.didAgentReadBefore ? "yes" : "no"} | ${d.agentGaveUpSilently ? "yes" : "no"} |\n`;
     }
   }
 

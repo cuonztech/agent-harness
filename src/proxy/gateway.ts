@@ -1,98 +1,97 @@
 // Builds the MCP server exposed in `proxy` CLI mode: a transparent gateway
 // that advertises the upstream server's real tools (unchanged, discovered
-// via ProxyInterceptor) plus a handful of the harness's own audit tools
-// scoped to the proxy's single session. Uses the low-level Server class
-// instead of McpServer because upstream tool schemas arrive as raw JSON
-// Schema (from the upstream's own `listTools()`), not Zod — McpServer's
-// `registerTool` only accepts a Zod raw shape.
+// via ProxyInterceptor) plus — unless switched off — two read-only audit
+// tools scoped to the proxy's single session. Uses the low-level Server
+// class instead of McpServer because upstream tool schemas arrive as raw
+// JSON Schema (from the upstream's own `listTools()`), not Zod.
+//
+// Only the `tools` capability is proxied. Resources, prompts and
+// notifications of the upstream are NOT forwarded (documented limitation).
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
+import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { VERSION } from "../version.js";
 import type { ProxyInterceptor } from "./interceptor.js";
-import {
-  GetReportSchema,
-  GetScoreSchema,
-  ListScenariosSchema,
-  ResetSessionSchema,
-  DeleteSessionSchema,
-} from "../tools/schemas.js";
-import {
-  handleGetReport,
-  handleGetScore,
-  handleListScenarios,
-  handleResetSession,
-  handleDeleteSession,
-} from "../tools/handlers.js";
+import { handleGetReport, handleGetScore } from "../tools/handlers.js";
 
-// session_id is required in the shared schemas (used by the multi-session
-// stdio server), but a proxy only ever has one session — its own. This
-// override makes it optional so the proxy's CallTool handler can default it
-// to `interceptor.sessionId` without touching the shared schemas.
-function optionalSessionId(
-  schema: Record<string, z.ZodTypeAny>,
-): Record<string, z.ZodTypeAny> {
-  return { ...schema, session_id: schema.session_id.optional() };
-}
+// Namespaced so they cannot shadow an upstream tool that happens to be
+// called get_report/get_score. Deliberately read-only: the agent under test
+// shares this tool list, and a reset/delete tool would let it erase its own
+// violations. Hide them completely with --audit-tools off and read the
+// result from --report-file instead.
+export const AUDIT_TOOL_PREFIX = "cuonztech__";
+
+// Written out by hand instead of generated from the shared Zod schemas:
+// those mark `format` as required (it has a default) and add a session_id
+// with a UUID `pattern` that has no meaning in a single-session proxy.
+const FORMAT_INPUT_SCHEMA = {
+  type: "object" as const,
+  properties: {
+    format: {
+      type: "string",
+      enum: ["markdown", "json"],
+      default: "markdown",
+      description: "Output format: markdown (default) or json.",
+    },
+  },
+  additionalProperties: false,
+};
 
 const OWN_TOOLS = {
-  get_report: {
+  [`${AUDIT_TOOL_PREFIX}get_report`]: {
     title: "Get Audit Report",
     description:
-      "Generates the audit report for this proxy session. Returns markdown (chat-friendly) or JSON.",
-    schema: optionalSessionId(GetReportSchema),
+      "CuonzTech Agent-Harness audit tool (not part of the upstream server): returns the audit report for this proxy session as markdown or JSON.",
   },
-  get_score: {
+  [`${AUDIT_TOOL_PREFIX}get_score`]: {
     title: "Get Resilience Score",
     description:
-      "Scores this proxy session's own audit report (0-100) and generates system-prompt hardening patches for whatever violations the connected agent actually produced.",
-    schema: optionalSessionId(GetScoreSchema),
-  },
-  list_scenarios: {
-    title: "List Available Scenarios",
-    description:
-      "Returns all available deterministic failure scenarios (F1–F5) with descriptions and audit metrics.",
-    schema: ListScenariosSchema,
-  },
-  reset_session: {
-    title: "Reset Session",
-    description:
-      "Resets this proxy session's call counter and history without deleting it.",
-    schema: optionalSessionId(ResetSessionSchema),
-  },
-  delete_session: {
-    title: "Delete Session",
-    description: "Permanently deletes this proxy session's state.",
-    schema: optionalSessionId(DeleteSessionSchema),
+      "CuonzTech Agent-Harness audit tool (not part of the upstream server): scores this proxy session (0-100, or n/a when nothing was tested) and lists system-prompt hardening patches for the violations actually observed.",
   },
 } as const;
 
 type OwnToolName = keyof typeof OWN_TOOLS;
 
 function isOwnTool(name: string): name is OwnToolName {
-  return name in OWN_TOOLS;
+  return Object.prototype.hasOwnProperty.call(OWN_TOOLS, name);
 }
 
-export function createProxyServer(interceptor: ProxyInterceptor): Server {
+// Upstream tools whose name equals one of the harness's own audit tools.
+// The proxy refuses to start on a collision rather than silently answering
+// such calls itself.
+export function findToolNameCollisions(upstreamTools: Tool[]): string[] {
+  return upstreamTools.map((t) => t.name).filter((name) => isOwnTool(name));
+}
+
+export interface ProxyServerOptions {
+  // false = advertise only the upstream's tools (--audit-tools off).
+  auditTools?: boolean;
+}
+
+export function createProxyServer(
+  interceptor: ProxyInterceptor,
+  options: ProxyServerOptions = {},
+): Server {
+  const auditTools = options.auditTools ?? true;
+  const instructions = interceptor.getUpstreamInstructions();
   const server = new Server(
     { name: "cuonztech-agent-harness-proxy", version: VERSION },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: {} }, ...(instructions ? { instructions } : {}) },
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const upstreamDefs = interceptor.getUpstreamTools();
-    const ownDefs = (Object.keys(OWN_TOOLS) as OwnToolName[]).map((name) => {
-      const tool = OWN_TOOLS[name];
-      return {
-        name,
-        title: tool.title,
-        description: tool.description,
-        inputSchema: z.toJSONSchema(z.object(tool.schema)),
-      };
-    });
+    if (!auditTools) return { tools: upstreamDefs };
+    const ownDefs = (Object.keys(OWN_TOOLS) as OwnToolName[]).map((name) => ({
+      name,
+      title: OWN_TOOLS[name].title,
+      description: OWN_TOOLS[name].description,
+      inputSchema: FORMAT_INPUT_SCHEMA,
+      annotations: { readOnlyHint: true },
+    }));
     return { tools: [...upstreamDefs, ...ownDefs] };
   });
 
@@ -100,23 +99,24 @@ export function createProxyServer(interceptor: ProxyInterceptor): Server {
     const { name, arguments: rawArgs } = request.params;
     const toolArgs = (rawArgs ?? {}) as Record<string, unknown>;
 
-    if (isOwnTool(name)) {
-      const withSession = {
-        session_id: interceptor.sessionId,
-        ...toolArgs,
-      };
-      switch (name) {
-        case "get_report":
-          return handleGetReport(withSession as Parameters<typeof handleGetReport>[0]);
-        case "get_score":
-          return handleGetScore(withSession as Parameters<typeof handleGetScore>[0]);
-        case "list_scenarios":
-          return handleListScenarios();
-        case "reset_session":
-          return handleResetSession(withSession as Parameters<typeof handleResetSession>[0]);
-        case "delete_session":
-          return handleDeleteSession(withSession as Parameters<typeof handleDeleteSession>[0]);
+    if (auditTools && isOwnTool(name)) {
+      const format = toolArgs["format"] ?? "markdown";
+      if (format !== "markdown" && format !== "json") {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Error: format must be "markdown" or "json".`,
+            },
+          ],
+          isError: true,
+        };
       }
+      const withSession = { session_id: interceptor.sessionId, format } as const;
+      if (name === `${AUDIT_TOOL_PREFIX}get_report`) {
+        return handleGetReport(withSession, { persist: false });
+      }
+      return handleGetScore(withSession);
     }
 
     return interceptor.interceptToolCall(name, toolArgs);

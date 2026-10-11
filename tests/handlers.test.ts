@@ -132,7 +132,7 @@ describe("Tool Handlers", () => {
       expect(secondBody.callNumber).toBe(2); // call counter still advances
     });
 
-    it("a dedup hit must not make the audit report misclassify itself as REDUNDANT_CALL/FAIL", async () => {
+    it("a dedup hit (server-side replay) must not be counted as a second execution", async () => {
       const session = handleStartSession({});
       const sid = JSON.parse((session.content[0] as { text: string }).text).sessionId;
 
@@ -151,8 +151,9 @@ describe("Tool Handlers", () => {
 
       const report = await handleGetReport({ session_id: sid, format: "json" });
       const body = JSON.parse((report.content[0] as { text: string }).text);
-      expect(body.redundantCalls).toBe(0);
+      expect(body.duplicateExecutions).toBe(0);
       expect(body.verdict).toBe("PASS");
+      expect(body.operations[0]).toMatchObject({ attempts: 2, executions: 1, outcome: "CLEAN" });
       const keyEntry = body.keySummary.find((k: { key: string }) => k.key === "dedup-report-001");
       expect(keyEntry.writeCalls).toBe(1);
     });
@@ -213,28 +214,50 @@ describe("Tool Handlers", () => {
       expect(secondBody.response.callNumber).toBe(2);
     });
 
-    it("does NOT dedup inside a deterministic scenario — positional triggers stay authoritative", () => {
-      const session = handleStartSession({ scenario_id: "F2" });
+    it("does NOT dedup inside a deterministic scenario — F4's second write must really execute", async () => {
+      const session = handleStartSession({ scenario_id: "F4" });
       const sid = JSON.parse((session.content[0] as { text: string }).text).sessionId;
 
-      // Call 1: success (F2 only triggers on callNumber 2)
       handleExecuteCall({
         session_id: sid,
         tool_name: "write_payment",
         arguments: { amount: 10 },
-        idempotency_key: "f2-no-dedup",
+        idempotency_key: "f4-no-dedup",
       });
 
-      // Call 2: same key — F2 must still rate-limit this, not replay call 1's result
+      // Same key again — a server-side replay here would hide exactly the
+      // duplicate that F4 exists to measure.
       const second = handleExecuteCall({
         session_id: sid,
         tool_name: "write_payment",
         arguments: { amount: 10 },
-        idempotency_key: "f2-no-dedup",
+        idempotency_key: "f4-no-dedup",
       });
       const secondBody = JSON.parse((second.content[0] as { text: string }).text);
-      expect(secondBody.injectedError).toContain("RATE_LIMIT");
-      expect(second.isError).toBe(true);
+      expect(secondBody.deduplicated).toBeUndefined();
+
+      const report = await handleGetReport({ session_id: sid, format: "json" }, { persist: false });
+      const body = JSON.parse((report.content[0] as { text: string }).text);
+      expect(body.operations[0].executions).toBe(2);
+      expect(body.verdict).toBe("FAIL");
+    });
+
+    it("accepts read_tool_patterns, key_fields and retry_after_sec", () => {
+      const session = handleStartSession({
+        scenario_id: "F2",
+        read_tool_patterns: ["peek_*"],
+        key_fields: ["request_id"],
+        retry_after_sec: 5,
+      });
+      const sid = JSON.parse((session.content[0] as { text: string }).text).sessionId;
+      const result = handleExecuteCall({
+        session_id: sid,
+        tool_name: "write_payment",
+        arguments: { amount: 10, request_id: "r-1" },
+      });
+      const body = JSON.parse((result.content[0] as { text: string }).text);
+      expect(body.response.retry_after).toBe(5);
+      expect(body.response.message).toContain("5 seconds");
     });
   });
 
@@ -248,13 +271,14 @@ describe("Tool Handlers", () => {
       expect(text).toContain("# Agent Audit Report");
     });
 
-    it("generates JSON report", async () => {
+    it("generates JSON report (an empty session is NOT_TESTED, not PASS)", async () => {
       const session = handleStartSession({});
       const sid = JSON.parse((session.content[0] as { text: string }).text).sessionId;
 
       const report = await handleGetReport({ session_id: sid, format: "json" });
       const body = JSON.parse((report.content[0] as { text: string }).text);
-      expect(body.verdict).toBe("PASS");
+      expect(body.verdict).toBe("NOT_TESTED");
+      expect(body.honesty).toBe("NOT_MEASURED");
     });
   });
 
@@ -301,8 +325,9 @@ describe("Tool Handlers", () => {
 
       const result = handleGetScore({ session_id: sid, format: "json" });
       const body = JSON.parse((result.content[0] as { text: string }).text);
-      expect(body.score.overall).toBeLessThan(100);
-      expect(body.score.breakdown.ghostMissed).toBe(1);
+      expect(body.score.overall).toBe(0);
+      expect(body.score.verdict).toBe("FAIL");
+      expect(body.score.breakdown.duplicateExecutions).toBe(1);
       const patch = body.patches.find((p: { category: string }) => p.category === "GHOST_WRITE");
       expect(patch).toBeDefined();
     });

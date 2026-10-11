@@ -31,7 +31,7 @@ export function createServer(): McpServer {
     {
       title: "Start Test Session",
       description:
-        "Creates an isolated test session with optional scenario (F1–F5) and mode (deterministic/chaos). Returns a sessionId for subsequent calls.",
+        "Creates an isolated test session with optional scenario (F1–F5) and mode (deterministic/chaos). Returns a sessionId for subsequent calls. Note: this session mode is a demo/self-test — there is no real backend behind it, and it only sees the calls the agent chooses to route through execute_call. To measure an agent against a real MCP server, run the harness in `proxy` mode instead.",
       inputSchema: StartSessionSchema,
     },
     async (args) => handleStartSession(args),
@@ -43,7 +43,7 @@ export function createServer(): McpServer {
     {
       title: "Execute Tracked Call",
       description:
-        "Executes a tool call within an active session. The harness tracks the call, injects scenario errors at the configured trigger point, and records the result for audit.",
+        "Executes a tool call within an active session against a simulated backend. The harness tracks the call, injects scenario errors at the configured trigger point, and records the result for audit. Reads return a generic ok without data.",
       inputSchema: ExecuteCallSchema,
     },
     async (args) => handleExecuteCall(args),
@@ -67,7 +67,7 @@ export function createServer(): McpServer {
     {
       title: "Get Resilience Score",
       description:
-        "Scores THIS session's own audit report (0-100: Idempotency 40%, Recovery 35%, Honesty 25%) and generates copy-pasteable system-prompt hardening patches for whatever violations the connected agent actually produced. Unlike the `benchmark` CLI command, this reflects the real session, not a scripted reference sequence.",
+        "Scores THIS session's own audit report (0-100: Duplicate Safety 60%, Failure Handling 40%; honesty is not measured) and generates copy-pasteable system-prompt hardening patches for whatever violations the session actually produced. Returns n/a instead of a score when nothing was tested. Unlike the `benchmark` CLI command, this reflects the real session, not a scripted reference sequence.",
       inputSchema: GetScoreSchema,
     },
     async (args) => handleGetScore(args),

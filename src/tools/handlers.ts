@@ -5,8 +5,10 @@ import {
   addRecord,
   resetSession as resetSessionState,
   deleteSession as deleteSessionState,
-  listSessions,
-  isWriteTool,
+  classifyTool,
+  extractKey,
+  stripKeyFields,
+  reserveScenarioFire,
   markGhostCommitted,
   type CallRecord,
   type SessionState,
@@ -15,7 +17,7 @@ import { generateReport, formatMarkdown } from "../core/report-generator.js";
 import { computeScore, formatScoreReport } from "../benchmark/score.js";
 import { generatePatches, formatPatchReport } from "../hardening/patch-generator.js";
 import { getScenarioById, ALL_SCENARIOS } from "../scenarios/f1-f5.js";
-import { randomUUID } from "node:crypto";
+import { resolveScenarioBody } from "../proxy/ghost-write.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
@@ -27,22 +29,25 @@ const AUDIT_REPORT_PATH = ".cuonztech/audit-report.json";
 // the new, different arguments get recorded in history (inconsistent audit
 // trail, and a real anomaly worth letting through to normal classification
 // instead of masking it as a clean cache hit).
-function sameArgs(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
-  const strip = (o: Record<string, unknown>) => {
-    const { idempotency_key, ...rest } = o;
-    return rest;
-  };
-  return JSON.stringify(strip(a)) === JSON.stringify(strip(b));
+function sameArgs(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
+  keyFields: string[],
+): boolean {
+  return (
+    JSON.stringify(stripKeyFields(a, keyFields)) ===
+    JSON.stringify(stripKeyFields(b, keyFields))
+  );
 }
 
 // Ad-hoc, non-chaos mode only: a key that already committed a successful
 // write must replay that exact result instead of generating a fresh one each
 // time (real idempotency is enforced server-side, not just classified after
 // the fact). Excluded on purpose:
-// - Deterministic scenarios (F1–F5): their trigger conditions are positional
-//   (by callNumber) and intentionally decide what a specific call number
-//   returns regardless of key reuse (e.g. F2 must still 429 the 2nd call
-//   even though it shares a key with the 1st).
+// - Deterministic scenarios (F1–F5): their trigger conditions decide what a
+//   specific write returns regardless of key reuse (e.g. F4 must let the
+//   second write through as a real second execution even though it shares
+//   a key with the first — that duplicate is exactly what F4 measures).
 // - Chaos mode: stochastic error_rate injection must keep applying to every
 //   call attempt, including retries of a committed key — otherwise a key
 //   that happened to commit early becomes permanently immune to chaos for
@@ -57,11 +62,11 @@ function findCommittedResponse(
   if (!tracking || tracking.state !== "COMMITTED") return null;
   const committed = session.history.filter(
     (r) =>
-      r.args["idempotency_key"] === key &&
+      extractKey(r.args, session.keyFields) === key &&
       r.toolName === toolName &&
-      !r.injectedError &&
-      !r.response.includes('"error"') &&
-      sameArgs(r.args, callArgs),
+      r.outcome === "success" &&
+      !r.deduplicated &&
+      sameArgs(r.args, callArgs, session.keyFields),
   );
   return committed.length > 0 ? committed[committed.length - 1] : null;
 }
@@ -71,10 +76,27 @@ export function handleStartSession(args: {
   mode?: "deterministic" | "chaos";
   error_rate?: number;
   write_tool_patterns?: string[];
+  read_tool_patterns?: string[];
+  key_fields?: string[];
+  retry_after_sec?: number;
 }) {
   const scenarioId = args.scenario_id ?? null;
   const mode = args.mode ?? "deterministic";
   const errorRate = args.error_rate ?? 0.0;
+
+  const reject = (message: string) => ({
+    content: [{ type: "text" as const, text: `Error: ${message}` }],
+    isError: true,
+  });
+  // Combinations that would silently do nothing (same rules as the proxy CLI).
+  if (scenarioId && mode === "chaos") {
+    return reject(
+      "scenario_id and mode \"chaos\" cannot be combined: with a scenario set, chaos mode never injects anything.",
+    );
+  }
+  if (errorRate > 0 && mode !== "chaos") {
+    return reject("error_rate only has an effect together with mode \"chaos\".");
+  }
 
   if (scenarioId) {
     const scenario = getScenarioById(scenarioId);
@@ -96,6 +118,11 @@ export function handleStartSession(args: {
     mode,
     errorRate,
     args.write_tool_patterns,
+    {
+      readToolPatterns: args.read_tool_patterns,
+      keyFields: args.key_fields,
+      retryAfterSec: args.retry_after_sec,
+    },
   );
 
   return {
@@ -137,17 +164,24 @@ export function handleExecuteCall(args: {
     };
   }
 
+  const receivedAt = Date.now();
   const callNumber = incrementCall(args.session_id);
 
-  if (args.idempotency_key && !session.scenarioId && session.mode !== "chaos") {
+  // The key may arrive as the top-level idempotency_key parameter or inside
+  // `arguments`; both must behave the same.
+  const callKey =
+    args.idempotency_key ?? extractKey(args.arguments, session.keyFields);
+  if (callKey && !session.scenarioId && session.mode !== "chaos") {
     const cached = findCommittedResponse(
       session,
-      args.idempotency_key,
+      callKey,
       args.tool_name,
       args.arguments,
     );
     if (cached) {
-      const dedupArgs = { ...args.arguments, idempotency_key: args.idempotency_key };
+      const dedupArgs = args.idempotency_key
+        ? { ...args.arguments, idempotency_key: args.idempotency_key }
+        : { ...args.arguments };
       const record: CallRecord = {
         callNumber,
         toolName: args.tool_name,
@@ -156,6 +190,7 @@ export function handleExecuteCall(args: {
         response: cached.response,
         upstreamExecuted: false,
         timestamp: Date.now(),
+        receivedAt,
         deduplicated: true,
       };
       addRecord(args.session_id, record);
@@ -199,15 +234,14 @@ export function handleExecuteCall(args: {
   let injectedError: string | null = null;
   let responseBody: Record<string, unknown> | string;
   let statusCode = 200;
-  // Ghost-write: the simulated upstream actually executed the write, but the
-  // agent only sees a timeout — it must read-before-retry to find out. Mirrors
-  // the same classification used by the (unwired) proxy's decideChaosAction,
-  // so F1 produces a real GHOST_CAUGHT/GHOST_MISSED instead of a generic retry.
+  // Ghost-write: the simulated backend actually executed the write, but the
+  // agent only sees a timeout. Mirrors proxy/ghost-write.ts::decideChaosAction.
   let isGhostWrite = false;
-  const isWriteCall = isWriteTool(args.tool_name, session.writeToolPatterns);
-  const priorWriteCalls = session.history.filter((r) =>
-    isWriteTool(r.toolName, session.writeToolPatterns),
-  ).length;
+  let scenarioTriggered = false;
+  let retryAfterSec: number | undefined;
+  const toolClass = classifyTool(session, args.tool_name);
+  const isWriteCall = toolClass === "write";
+  const priorWriteCalls = session.scenarioFireCount;
 
   if (session.scenarioId) {
     const scenario = getScenarioById(session.scenarioId);
@@ -220,18 +254,19 @@ export function handleExecuteCall(args: {
         priorWriteCalls,
       })
     ) {
+      reserveScenarioFire(session);
       const resp = scenario.simulatedResponse;
+      scenarioTriggered = true;
       // Don't mark "success" type as injected error — F4 simulates successful duplicate dispatches
       injectedError = resp.type === "success" ? null : `[${resp.type.toUpperCase()}]`;
       statusCode = resp.statusCode ?? 500;
-      responseBody = resp.body;
+      responseBody = resolveScenarioBody(scenario, session);
       isGhostWrite = resp.type === "timeout" && isWriteCall;
+      if (resp.type === "rate_limit") retryAfterSec = session.retryAfterSec;
       // Note: resp.delayMs is NOT awaited on this synchronous path (unlike
       // proxy mode's interceptor.ts) — handleExecuteCall is called
-      // synchronously from ~30 call sites across the test suite and
-      // benchmark runner; making it async to honor a delay that no built-in
-      // scenario currently sets to a nonzero value isn't worth that ripple.
-      // Use `proxy` mode if simulated latency matters.
+      // synchronously from many call sites across the test suite and
+      // benchmark runner. Use `proxy` mode if simulated latency matters.
     } else {
       responseBody = {
         result: "ok",
@@ -244,8 +279,8 @@ export function handleExecuteCall(args: {
     injectedError = "[CHAOS_INJECTED]";
     statusCode = 500;
     responseBody = {
-      error: "CHAOS_ERROR",
-      message: "Stochastically injected failure.",
+      error: "INTERNAL_SERVER_ERROR",
+      message: "The server encountered an internal error.",
     };
   } else {
     responseBody = {
@@ -268,11 +303,20 @@ export function handleExecuteCall(args: {
     response,
     upstreamExecuted: isGhostWrite,
     timestamp: Date.now(),
+    receivedAt,
+    outcome: injectedError !== null ? "injected_failure" : "success",
+    toolClass,
+    // The simulated backend executes a write unless a failure was injected —
+    // except for a ghost-write, which executes although the agent sees one.
+    tookEffect: isWriteCall && (injectedError === null || isGhostWrite),
+    scenarioTriggered,
+    ...(retryAfterSec !== undefined ? { retryAfterSec } : {}),
   };
   addRecord(args.session_id, record);
 
-  if (isGhostWrite && args.idempotency_key) {
-    markGhostCommitted(args.session_id, args.idempotency_key);
+  const ghostKey = isGhostWrite ? extractKey(mergedArgs, session.keyFields) : undefined;
+  if (ghostKey) {
+    markGhostCommitted(args.session_id, ghostKey);
   }
 
   return {
@@ -295,10 +339,18 @@ export function handleExecuteCall(args: {
   };
 }
 
-export async function handleGetReport(args: {
-  session_id: string;
-  format?: "json" | "markdown";
-}) {
+// `persist` writes the JSON report to .cuonztech/audit-report.json in the
+// current working directory (the session-mode get_report tool's documented
+// behavior). Proxy mode passes false: its report file is opt-in via
+// --report-file, because a proxy started by an MCP client has no predictable
+// working directory.
+export async function handleGetReport(
+  args: {
+    session_id: string;
+    format?: "json" | "markdown";
+  },
+  options: { persist?: boolean } = {},
+) {
   const session = getSession(args.session_id);
   if (!session) {
     return {
@@ -315,12 +367,13 @@ export async function handleGetReport(args: {
   const report = generateReport(session);
   const format = args.format ?? "markdown";
 
-  // Persist JSON report atomically
-  try {
-    await mkdir(dirname(AUDIT_REPORT_PATH), { recursive: true });
-    await writeFile(AUDIT_REPORT_PATH, JSON.stringify(report, null, 2), "utf-8");
-  } catch {
-    // Non-fatal: report still returned in chat
+  if (options.persist ?? true) {
+    try {
+      await mkdir(dirname(AUDIT_REPORT_PATH), { recursive: true });
+      await writeFile(AUDIT_REPORT_PATH, JSON.stringify(report, null, 2), "utf-8");
+    } catch {
+      // Non-fatal: report still returned in chat
+    }
   }
 
   const output = format === "json" ? JSON.stringify(report, null, 2) : formatMarkdown(report);
