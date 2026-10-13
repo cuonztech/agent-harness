@@ -1,0 +1,20 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.cuonztech/agent-harness",
+  "description": "MCP chaos-testing toolkit. Default: simulated demo. Configure proxy mode to test a real agent.",
+  "repository": {
+    "url": "https://github.com/cuonztech/agent-harness",
+    "source": "github"
+  },
+  "version": "0.5.2",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "cuonztech-agent-harness",
+      "version": "0.5.2",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
