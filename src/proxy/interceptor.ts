@@ -346,8 +346,9 @@ export class ProxyInterceptor {
   async interceptToolCall(
     toolName: string,
     args: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<InterceptResult> {
-    const result = await this.handleToolCall(toolName, args);
+    const result = await this.handleToolCall(toolName, args, signal);
     try {
       await this.onCallRecorded?.();
     } catch {
@@ -359,6 +360,7 @@ export class ProxyInterceptor {
   private async handleToolCall(
     toolName: string,
     args: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<InterceptResult> {
     // Everything up to the first await runs synchronously, so two calls
     // dispatched in parallel still get distinct, ordered write positions —
@@ -431,10 +433,16 @@ export class ProxyInterceptor {
         // see interceptToolCall
       }
       try {
-        const result = (await this.upstreamClient.callTool({
-          name: toolName,
-          arguments: mergedArgs,
-        })) as Record<string, unknown>;
+        // The client cancelled while this call waited (onCallRecorded or a
+        // scenario delay). Do not start the upstream write at all.
+        if (signal?.aborted) {
+          throw new Error("cancelled by client before dispatch");
+        }
+        const result = (await this.upstreamClient.callTool(
+          { name: toolName, arguments: mergedArgs },
+          undefined,
+          { signal },
+        )) as Record<string, unknown>;
         upstreamResult = result;
         upstreamIsError = Boolean(result.isError);
         const content = Array.isArray(result.content)
