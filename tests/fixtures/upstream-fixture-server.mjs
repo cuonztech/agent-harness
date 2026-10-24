@@ -134,7 +134,7 @@ function text(value) {
   return { content: [{ type: "text", text: JSON.stringify(value) }] };
 }
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
   const { name, arguments: args } = request.params;
 
   switch (name) {
@@ -146,6 +146,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return text({ result: "ok", amount: args?.amount ?? null, written: true });
 
     case "create_booking": {
+      // FIXTURE_HOLD_BEFORE_WRITE_MS: the write waits this long before it is
+      // executed. FIXTURE_HONOR_CANCEL=1: a call cancelled meanwhile is not
+      // executed at all (MCP cancellation is a SHOULD, not a guarantee).
+      const holdMs = Number(process.env.FIXTURE_HOLD_BEFORE_WRITE_MS ?? 0);
+      if (holdMs > 0) await new Promise((resolve) => setTimeout(resolve, holdMs));
+      if (process.env.FIXTURE_HONOR_CANCEL === "1" && extra.signal.aborted) {
+        throw new Error("cancelled before write");
+      }
       ledger.push({ tool: name, args });
       const bookings = ledger.filter((e) => e.tool === "create_booking").length;
       // FIXTURE_SLOW_SECOND_BOOKING_MS: from the second booking on, the write

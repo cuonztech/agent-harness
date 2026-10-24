@@ -95,7 +95,7 @@ export function createProxyServer(
     return { tools: [...upstreamDefs, ...ownDefs] };
   });
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const { name, arguments: rawArgs } = request.params;
     const toolArgs = (rawArgs ?? {}) as Record<string, unknown>;
 
@@ -120,7 +120,7 @@ export function createProxyServer(
       return handleGetScore(withSession);
     }
 
-    return interceptor.interceptToolCall(name, toolArgs);
+    return interceptor.interceptToolCall(name, toolArgs, extra.signal);
   });
 
   return server;
