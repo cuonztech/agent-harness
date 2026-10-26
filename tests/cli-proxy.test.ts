@@ -55,6 +55,22 @@ describe("CLI `proxy` mode (real process)", () => {
       expect(stderr).toContain("BOGUS99");
     });
 
+    it("names the missing upstream script instead of failing with a Node stack trace", async () => {
+      const { stderr, exited, code } = await runProxy([
+        "--upstream-command",
+        "node",
+        "--upstream-arg",
+        "dist/dein-echter-server.js",
+        "--scenario",
+        "F1",
+      ]);
+      expect(exited).toBe(true);
+      expect(code).toBe(1);
+      expect(stderr).toContain("upstream script not found");
+      expect(stderr).toContain("dein-echter-server.js");
+      expect(stderr).not.toContain("MODULE_NOT_FOUND");
+    });
+
     it.each([
       [["--mode", "chaso"], '--mode must be "deterministic" or "chaos"'],
       [["--mode", "chaos", "--error-rate", "abc"], "--error-rate must be a number between 0 and 1"],

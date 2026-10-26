@@ -8,13 +8,16 @@ import { computeScore } from "./benchmark/score.js";
 import { generatePatches } from "./hardening/patch-generator.js";
 import { generateReport } from "./core/report-generator.js";
 import { ProxyInterceptor } from "./proxy/interceptor.js";
+import { runDoctor } from "./doctor.js";
+import { runReportMode } from "./plain-report.js";
+import { runUiMode } from "./ui/server.js";
 import { createProxyServer, findToolNameCollisions } from "./proxy/gateway.js";
 import { getScenarioById, ALL_SCENARIOS } from "./scenarios/f1-f5.js";
 import { VERSION } from "./version.js";
 import { writeFile, mkdir, rename, stat, realpath, unlink } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { writeFileSync, mkdirSync, statSync, lstatSync, existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 
 const args = process.argv.slice(2);
 
@@ -27,6 +30,16 @@ function printHelp(): void {
       `  cuonztech-agent-harness --help            Print this help (also: -h, help)\n` +
       `  cuonztech-agent-harness benchmark [opts]   Run the harness self-test (two fixed reference agents;\n` +
       `                                             "evaluate" is an alias)\n` +
+      `  cuonztech-agent-harness doctor --upstream-command <cmd> [opts]\n` +
+      `                                             Check the setup before a run (Node version, server\n` +
+      `                                             start, tool classification, report file). Calls only\n` +
+      `                                             initialize and tools/list; runs no tool.\n` +
+      `  cuonztech-agent-harness ui [--port <n>] [--no-open]\n` +
+      `                                             Guided web interface for people without a terminal\n` +
+      `                                             (local only, 127.0.0.1): demo, setup check, result.\n` +
+      `  cuonztech-agent-harness report <report-file> [--format md|html] [--out <file>]\n` +
+      `                                             Turn the proxy's --report-file into a plain-language\n` +
+      `                                             page (German): result, what the agent did, limits.\n` +
       `  cuonztech-agent-harness proxy --upstream-command <cmd> [opts]\n` +
       `                                             Run as a transparent chaos proxy\n` +
       `                                             in front of a real upstream MCP server\n\n` +
@@ -295,6 +308,12 @@ async function main(): Promise<void> {
     await runBenchmarkMode(args.slice(1));
   } else if (mode === "proxy") {
     await runProxyMode(args.slice(1));
+  } else if (mode === "doctor") {
+    process.exitCode = await runDoctor(args.slice(1));
+  } else if (mode === "report") {
+    process.exitCode = await runReportMode(args.slice(1));
+  } else if (mode === "ui") {
+    process.exitCode = await runUiMode(args.slice(1));
   } else if (mode === undefined) {
     // Default: MCP server mode (stdio)
     const server = createServer();
@@ -432,6 +451,26 @@ async function runProxyMode(argv: string[]): Promise<void> {
     const info = await stat(upstreamCwd).catch(() => null);
     if (!info || !info.isDirectory()) {
       fail(`--upstream-cwd "${upstreamCwd}" is not an existing directory.`);
+    }
+  }
+  // The most common first-run mistake is a script path that does not exist
+  // (the README example is a placeholder). Check it here and say what to do,
+  // instead of letting the upstream fail with a Node stack trace. Inline
+  // scripts (node -e / -p) have no file to check.
+  const inlineScript = upstreamArgs.some((a) => ["-e", "--eval", "-p", "--print"].includes(a));
+  const scriptArg = upstreamArgs.find((a) => !a.startsWith("-"));
+  if (
+    !inlineScript &&
+    scriptArg !== undefined &&
+    /^node(\.exe)?$/i.test(basename(upstreamCommand))
+  ) {
+    const scriptPath = resolve(upstreamCwd ?? process.cwd(), scriptArg);
+    if (!existsSync(scriptPath)) {
+      fail(
+        `upstream script not found: "${scriptPath}"\n` +
+          "Replace the example path with the entry file of your MCP server, e.g.\n" +
+          "  --upstream-arg path\\to\\your-server.js   (or use --upstream-cwd to set its folder)",
+      );
     }
   }
   if (reportFile !== undefined) {

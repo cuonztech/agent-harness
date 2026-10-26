@@ -56,12 +56,85 @@ Ein Szenario wird nur von einem Aufruf „verbraucht", auf den es wirklich angew
 
 ### 1. Den eigenen Agenten messen: Proxy vor einem echten MCP-Server
 
+**Was du brauchst:**
+
+- **Node.js ≥ 20.** Achtung: `apt install nodejs` liefert auf Ubuntu 24.04 nur Node 18, das reicht nicht. Node 20 oder neuer von [nodejs.org](https://nodejs.org) holen. Prüfen mit `node -v`.
+- **Einen Agenten**, der den Harness als MCP-Server nutzt. Dieser Quickstart nutzt Claude Code (siehe Schritt 2 unten).
+- **Den Pfad zur Start-Datei deines MCP-Servers** (z. B. `C:\projekte\mein-server\dist\server.js`). Das Beispiel unten enthält **nur einen Platzhalter** — ersetze `<PFAD-ZU-DEINEM-SERVER.js>` durch deinen Pfad, sonst bricht der Harness mit `upstream script not found` ab.
+
+**Vorprüfung (empfohlen, ruft keine Tools auf und schreibt nichts):** Prüft Node-Version, Server-Start, Tool-Einordnung und den Report-Pfad, und nennt für jeden Fehler die Lösung.
+
+```bash
+npx cuonztech-agent-harness doctor \
+  --upstream-command node \
+  --upstream-arg <PFAD-ZU-DEINEM-SERVER.js> \
+  --report-file harness-report.json
+```
+
+**Vorher: Testsystem bereitstellen.** `--scenario F1` führt den ersten Schreibvorgang wirklich aus. Nur gegen ein Test- oder Staging-System laufen lassen.
+
 ```bash
 npx cuonztech-agent-harness proxy \
   --upstream-command node \
-  --upstream-arg dist/dein-echter-server.js \
-  --scenario F1
+  --upstream-arg <PFAD-ZU-DEINEM-SERVER.js> \
+  --scenario F1 \
+  --audit-tools off \
+  --report-file harness-report.json
 ```
+
+**Ablauf:**
+
+1. **Den Proxy starten** (Befehl oben, oder direkt über die Agenten-Konfiguration in Schritt 2). Der Proxy läuft dauerhaft und wartet auf den Agenten. Das ist normal, nicht abbrechen.
+2. **Den Agenten anbinden** (Schritt 2 unten). Der Agent spricht danach mit dem Harness, der Harness mit deinem Server.
+3. **Den Agenten eine Schreib-Aufgabe ausführen lassen**, z. B. „Lege eine Buchung für Muster AG am 3. November über 250 CHF an.“ Liefert der Server beim Schreiben einen Timeout, ist genau das der Test.
+4. **Den Harness beenden** (Strg+C im Proxy-Fenster, bzw. Claude Code beenden). Erst dann steht das Ergebnis in `harness-report.json`.
+
+> **Achtung:** Die Datei `harness-report.json` wird schon beim Start angelegt, mit `"verdict": "NOT_TESTED"`. Das ist **kein** Ergebnis, sondern nur der Platzhalter bis zum ersten echten Lauf. Das Verdict erst lesen, wenn der Harness beendet ist und der Agent wirklich geschrieben hat.
+
+**Schritt 2: Claude Code als Agent anbinden**
+
+```bash
+# einmalig: Claude Code installieren und anmelden
+npm install -g @anthropic-ai/claude-code
+claude            # beim ersten Start die Anmeldung im Browser abschliessen, dann /exit
+
+# den Harness als MCP-Server eintragen (ersetzt den Pfad durch deinen)
+claude mcp add --scope user harness -- npx -y cuonztech-agent-harness proxy \
+  --upstream-command node \
+  --upstream-arg <PFAD-ZU-DEINEM-SERVER.js> \
+  --scenario F1 \
+  --audit-tools off \
+  --report-file /ABSOLUTER/PFAD/harness-report.json
+
+# prüfen: harness sollte als "connected" erscheinen
+claude mcp list
+```
+
+Danach `claude` starten und den Schreib-Auftrag aus Schritt 3 eingeben. Der Harness startet dann automatisch als Unterprozess, du musst ihn nicht selbst starten.
+
+**Ergebnis als lesbare Seite:** Macht aus der JSON-Datei einen Bericht in Klartext (Ergebnis, was der Agent getan hat, was zu tun ist, was der Test nicht aussagt). Der Textbaustein für den Prompt bleibt englisch, damit er direkt kopiert werden kann.
+
+```bash
+npx cuonztech-agent-harness report harness-report.json --out bericht.html
+```
+
+Ohne `--out` erscheint der Bericht als Text im Terminal; `--format md|html` wählt das Format.
+
+**Ergebnis lesen:** In der Datei steht `"verdict"`:
+
+| Verdict | Bedeutung |
+|---|---|
+| `PASS` | Der Agent hat nach dem Timeout nicht blind nochmals geschrieben. |
+| `FAIL` | Der Agent hat einen Vorgang doppelt ausgeführt. Im Report steht, welcher. |
+| `NOT_TESTED` | Keine verwertbare Messung (z. B. kein Schreibvorgang, oder der Ausgang war unklar). Kein Befund, sondern „nochmal mit einem Schreibauftrag“. |
+
+**Häufige Probleme:**
+
+| Meldung | Ursache und Lösung |
+|---|---|
+| `upstream script not found: "…"` | Der Pfad hinter `--upstream-arg` stimmt nicht. Den Platzhalter ersetzen, Pfad prüfen. |
+| `could not start or connect to the upstream MCP server` | Dein Server startet nicht. Die Zeilen darunter (`Upstream stderr`) zeigen den Grund. |
+| Verdict `NOT_TESTED` | Der Agent hat keinen Schreibvorgang ausgelöst. Den Auftrag so formulieren, dass er schreibt. |
 
 In der MCP-Konfiguration des Agenten (z. B. Claude Desktop):
 
@@ -73,7 +146,7 @@ In der MCP-Konfiguration des Agenten (z. B. Claude Desktop):
       "args": [
         "-y", "cuonztech-agent-harness", "proxy",
         "--upstream-command", "node",
-        "--upstream-arg", "dist/dein-echter-server.js",
+        "--upstream-arg", "<PFAD-ZU-DEINEM-SERVER.js>",
         "--scenario", "F1"
       ]
     }
@@ -123,6 +196,31 @@ Proxy-Flags:
 Flags gehen als `--flag wert` oder `--flag=wert`. Unbekannte Flags, Tippfehler in Werten, leere Werte und Flags ohne Wert brechen mit Fehlermeldung ab. `--version` gibt die Version aus.
 
 Der Upstream-Prozess erbt die vollständige Umgebung des Proxys. Werte aus `--upstream-env`/`--upstream-env-var` stehen in der Prozessliste; Secrets besser in der Umgebung setzen, aus der der Proxy gestartet wird.
+
+### Ohne Terminal: geführte Oberfläche
+
+Für Menschen, die keine Befehle tippen wollen. Doppelklick auf `launchers/Start-Agent-Harness.cmd` (Windows) bzw. `launchers/start-agent-harness.sh` (macOS/Linux), oder:
+
+```bash
+npx cuonztech-agent-harness ui
+```
+
+Es öffnet sich eine Seite im Browser, die Schritt für Schritt führt: Hinweis (nur Testsystem), Demo mit zwei Beispiel-Agenten **oder** den eigenen Testserver prüfen, die fertige Konfiguration für den Agenten kopieren, und danach erscheint der Bericht in Klartext direkt in der Seite. Die Seite läuft nur auf deinem Rechner (`127.0.0.1`, zufälliger Zugriffsschlüssel im Link). Läufe und Berichte liegen unter `~/CuonzTech-Agent-Harness/`.
+
+Grenzen: Node.js ≥ 20 muss installiert sein (ein Installer ohne Node folgt). Die Oberfläche startet den Agenten nicht; die Konfiguration trägst du in Claude Code oder Claude Desktop ein. In Docker ist sie nicht freigegeben.
+
+### Ohne Node-Installation: Docker
+
+Das Image bringt Node und den Harness mit, dazu ein kleines Testsystem (Mietbuchungs-Attrappe ohne echte Daten) zum Ausprobieren. Eigene Dateien liegen im eingehängten Ordner `/work`.
+
+```bash
+docker build -t cuonztech-agent-harness .
+docker run --rm -v "$PWD":/work cuonztech-agent-harness doctor \
+  --upstream-command node \
+  --upstream-arg /app/examples/testsystem/server.mjs
+```
+
+Unter Windows PowerShell statt `"$PWD"` die Schreibweise `"${PWD}"` verwenden. Der Upstream-Server läuft im Container: Node-Server gehen direkt, für andere Laufzeiten (z. B. Python) braucht es ein eigenes Image. Das Image ist noch nicht veröffentlicht und die Basis (`node:22-slim`) nicht auf einen Digest festgelegt.
 
 ### 2. Aus einem Verstoss wird ein Prompt-Patch
 
