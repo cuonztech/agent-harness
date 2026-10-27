@@ -122,6 +122,16 @@ npx cuonztech-agent-harness report harness-report.json --out bericht.html
 
 Ohne `--out` erscheint der Bericht als Text im Terminal; `--format md|html` wählt das Format. `--out` ersetzt eine vorhandene Datei nur, wenn ein früherer `report`-Lauf sie geschrieben hat; die Messdatei selbst und fremde Dateien lehnt der Befehl ab. Eine Datei, die kein Report des Proxys ist (etwa das Benchmark-Ergebnis), nennt der Befehl als solche.
 
+**Prüf- und Architektur-Dossier sowie Vorher/Nachher-Kampagne:**
+
+```bash
+npx cuonztech-agent-harness report harness-report.json --dossier --format html --customer Muster-AG --system Buchungssystem --out dossier.html
+npx cuonztech-agent-harness campaign --runs 1 --format html --out kampagne.html
+```
+
+- `report <report-file> --dossier [--format html|md] [--customer <name>] [--system <name>] [--agent-response <text>]` macht aus der Messdatei das druckbare Prüf- und Architektur-Dossier (Gutachten der Tool-Schemas, Call-für-Call-Forensik, Integritäts-Nachweis). Mit `--agent-response` wird die Schlussmeldung des Agenten gegen den Messbefund geprüft (Ehrlichkeits-Check); den Text mit Leerzeichen setzt man in Anführungszeichen. `--customer` und `--system` stehen nur zusammen mit `--dossier`.
+- `campaign [--runs <n>] [--format md|html] [--out <file>]` lässt die eingebauten Beispiel-Agenten (unvorsichtig, unter Nutzer-Nachdruck einknickend, gehärtet) durch F1 bis F5 und den zweiten Gesprächszug laufen und zeigt den Vorher/Nachher-Unterschied. Es braucht keinen Upstream-Server und schreibt nur in `--out`; eine fremde Datei ersetzt der Befehl nicht.
+
 **Ergebnis lesen:** In der Datei steht `"verdict"`:
 
 | Verdict | Bedeutung |
@@ -209,7 +219,7 @@ Für Menschen, die keine Befehle tippen wollen. Doppelklick auf `launchers/Start
 npx cuonztech-agent-harness ui
 ```
 
-Es öffnet sich eine Seite im Browser, die Schritt für Schritt führt: Hinweis (nur Testsystem), Demo mit zwei Beispiel-Agenten **oder** den eigenen Testserver prüfen, die fertige Konfiguration für den Agenten kopieren, und danach erscheint der Bericht in Klartext direkt in der Seite. Die Seite läuft nur auf deinem Rechner (`127.0.0.1`, zufälliger Zugriffsschlüssel im Link). Läufe und Berichte liegen unter `~/CuonzTech-Agent-Harness/`.
+Es öffnet sich eine Seite im Browser, die Schritt für Schritt führt: Hinweis (nur Testsystem), Demo mit zwei Beispiel-Agenten **oder** den eigenen Testserver prüfen, die fertige Konfiguration für den Agenten kopieren, und danach erscheint der Bericht in Klartext direkt in der Seite. Die Seite läuft nur auf deinem Rechner (`127.0.0.1`, zufälliger Zugriffsschlüssel im Link). Läufe und Berichte liegen unter `~/CuonzTech-Agent-Harness/`. In Schritt 3 bietet die Seite bereits konfigurierte MCP-Server dieses Rechners zur 1-Klick-Übernahme an (gelesen werden nur Name, Programm und Argumente aus Claude Desktop, Cursor und `.mcp.json`; `env`-Werte und andere Felder werden nie gelesen).
 
 Grenzen: Node.js ≥ 20 muss installiert sein (ein Installer ohne Node folgt). Die Oberfläche startet den Agenten nicht; die Konfiguration trägst du in Claude Code oder Claude Desktop ein. In Docker ist sie nicht freigegeben.
 

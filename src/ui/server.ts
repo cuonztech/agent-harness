@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { collectDoctor } from "../doctor.js";
 import { renderHtml, renderHtmlBody, type ReportFile } from "../plain-report.js";
 import { renderDossierHtml } from "../dossier-report.js";
+import { discoverMcpServers } from "./discover.js";
 import { evaluateAgentClaim } from "../core/claim-check.js";
 import { runCampaign, renderCampaignDemoBody, followupSummary } from "../campaign/runner.js";
 import { runBenchmark, defaultConfig, type ReferenceRun } from "../benchmark/runner.js";
@@ -206,7 +207,7 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
       return send(res, 200, PAGE_HTML.replace("__TOKEN__", token), "text/html; charset=utf-8");
     }
     if (req.method === "GET" && url.pathname === "/api/info") {
-      return sendJson(res, 200, { version: VERSION, bundledTestsystem: bundledTestsystem() });
+      return sendJson(res, 200, { version: VERSION, bundledTestsystem: bundledTestsystem(), discoveredServers: discoverMcpServers() });
     }
     if (req.method === "POST" && url.pathname === "/api/doctor") {
       const body = await readJson(req);
@@ -278,6 +279,9 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
       if (!session) return sendJson(res, 200, { state: "waiting" });
       const file = await readSessionReport();
       if (!file) return sendJson(res, 200, { state: "waiting" });
+      if (typeof file.startupError === "string" && file.startupError !== "") {
+        return sendJson(res, 200, { state: "error", startupError: file.startupError, body: renderHtmlBody(file).join("\n") });
+      }
       if (!file.report) return sendJson(res, 200, { state: "connected" });
       return sendJson(res, 200, { state: "result", verdict: file.verdict, body: renderHtmlBody(withSessionClaim(file)).join("\n") });
     }

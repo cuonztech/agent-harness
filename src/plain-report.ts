@@ -7,6 +7,7 @@ import type { AuditReport, OperationOutcome } from "./core/report-generator.js";
 import type { CallForensicReport, ClaimCheckResult, ClaimCheckStatus, ReportIntegrityProof, SchemaAuditReport, SchemaRiskLevel } from "./types.js";
 import { evaluateAgentClaim } from "./core/claim-check.js";
 import { verifyReportIntegrity } from "./core/artifact-integrity.js";
+import { isReservedFileName } from "./report-file-guard.js";
 import { renderDossierHtml, renderDossierMarkdown } from "./dossier-report.js";
 
 export interface ReportFile {
@@ -509,6 +510,11 @@ export async function runReportMode(argv: string[]): Promise<number> {
     ? chosen === "html" ? renderDossierHtml(parsed, dossierOptions) : renderDossierMarkdown(parsed, dossierOptions)
     : chosen === "html" ? renderHtml(parsed) : renderMarkdown(parsed);
   if (outPath) {
+    if (isReservedFileName(outPath)) {
+      process.stderr.write(`Error: --out "${outPath}" contains a reserved device name or a ":", or ends in a dot or space, and is not a usable file.
+`);
+      return 1;
+    }
     const real = async (p: string): Promise<string> => realpath(p).catch(() => resolve(p));
     if ((await real(outPath)) === (await real(file))) {
       process.stderr.write(`Error: --out ${outPath} is the report file itself. Writing there would replace the measurement. Choose another file.\n`);

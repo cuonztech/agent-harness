@@ -122,6 +122,24 @@ describe("README-Befehle laufen wirklich", () => {
     expect(html).toContain("<!doctype html>");
   }, 40_000);
 
+  it("dossier- und campaign-Befehle aus der README laufen und schreiben ihre Dateien", async () => {
+    const readme = await readFile("README.md", "utf8");
+    const block = fencedBlocks(readme, "bash").find((b) => b.includes("--dossier") && b.includes("cuonztech-agent-harness campaign"));
+    expect(block, "dossier-/campaign-Beispiel fehlt in der README").toBeDefined();
+    const dir = await mkdtemp(join(tmpdir(), "readme-dossier-"));
+    const reportFile = join(dir, "harness-report.json");
+    await writeFile(reportFile, JSON.stringify({ harnessVersion: "0", verdict: "NOT_TESTED", status: "starting" }));
+    const lines = block!.trim().split(String.fromCharCode(10)).filter((l) => l.trim() !== "");
+    expect(lines).toHaveLength(2);
+    for (const line of lines) {
+      const args = toLocal(line.trim().split(/\s+/), reportFile).map((t) => (/^[\w-]+\.html$/.test(t) ? join(dir, t) : t));
+      const { output, code } = await run(args, { timeoutMs: 60_000 });
+      expect(code, output).toBe(0);
+      const out = args[args.indexOf("--out") + 1]!;
+      expect(await readFile(out, "utf8")).toContain("<!doctype html>");
+    }
+  }, 150_000);
+
   // Braucht eine installierte Claude-Code-CLI mit Anmeldung. Wurde am 26.10.2026
   // von Hand auf einer VM geprüft, ist hier nicht automatisiert.
   it.skip("claude mcp add aus der README (braucht Claude Code mit Anmeldung)", () => {});

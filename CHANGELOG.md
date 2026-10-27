@@ -1,4 +1,5 @@
 # Changelog
+- Oberfläche: In Schritt 3 erkennt `GET /api/info` (Feld `discoveredServers`) bereits konfigurierte MCP-Server aus Claude Desktop, Cursor (`~/.cursor/mcp.json`, `.cursor/mcp.json`), `.mcp.json` und optional `CUONZTECH_MCP_CONFIG_PATH` und bietet sie zur 1-Klick-Übernahme an. Gelesen werden ausschliesslich Name, Programm und Argumente; `env`, `headers` und alle anderen Felder werden nie gelesen oder zurückgegeben. Der Harness selbst (`agent-harness`, `cuonztech-agent-harness`) wird nicht aufgeführt.
 
 ## 0.7.0 — 2026-10-27
 
@@ -14,6 +15,10 @@
 ### Behoben
 
 - `proxy`: Bricht der Client einen laufenden `tools/call` ab, wird der Abbruch jetzt an den Upstream weitergegeben (`notifications/cancelled`). Ein Aufruf, der vor dem Versenden abgebrochen wurde, geht nicht mehr zum Upstream. Vorher wurde der Write trotz Abbruch ausgeführt. **Grenze:** Ein Upstream, der Abbruch ignoriert, führt den Write weiterhin aus; `tests/e2e-cancel.test.ts` dokumentiert das.
+- `report --out`: Reservierte Windows-Dateinamen (`NUL`, `CON`, ...), ein `:` im Namen und Namen, die auf Punkt oder Leerzeichen enden, werden wie bei `campaign` und `proxy` mit Exit 1 abgelehnt.
+- `ui`: `GET /api/status` meldet einen `startupError` aus der Report-Datei sofort als `state: "error"` (mit Text und Berichtsansicht); die Seite zeigt «Startfehler beim Verbinden des Testservers:» statt endlos «verbunden».
+- `proxy`: Der Zahlenschutz prüft jede JSON-Zahl, nicht nur reine Ganzzahlen. Abgelehnt werden `1e400` (nicht endlich), als Ganzzahl geschriebene Werte jenseits von 2^53 in Dezimal- oder Exponentialschreibweise (`9007199254740993.0`, `9007199254740993E0`, `90071992547409930e-1`, `9.007199254740993e15`) sowie Dezimalzahlen mit mehr als 17 signifikanten Stellen oder `1e-400` (würde zu 0). Gewöhnliche Zahlen wie `1.5`, `1e3`, `0.1`, `129.95` und `9007199254740992.0` gehen unverändert durch.
+- `launchers/start-agent-harness.sh` ist im Git-Index als ausführbar (`100755`) eingetragen, damit es aus dem Tarball startet.
 
 ### Weitere Änderungen
 

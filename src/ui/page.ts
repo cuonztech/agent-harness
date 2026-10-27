@@ -83,6 +83,10 @@ table.cmp th,table.cmp td{border-bottom:1px solid var(--line);padding:.35rem .4r
 <div class="step">Schritt 3 von 4</div>
 <h2>Testserver angeben und prüfen</h2>
 <p>Wie wird dein Testserver gestartet? Die meisten Server starten mit <code>node</code> und einer Datei.</p>
+<div id="discovered" hidden>
+<p><strong>Gefundene MCP-Server auf diesem Rechner (1-Klick-Übernahme):</strong></p>
+<div id="discoveredList"></div>
+</div>
 <label for="cmd">Programm</label>
 <input type="text" id="cmd" value="node">
 <label for="file">Start-Datei deines Servers</label>
@@ -174,10 +178,31 @@ table.cmp th,table.cmp td{border-bottom:1px solid var(--line);padding:.35rem .4r
 
   // --- Eigener Agent
   var bundled = null, ready = null, timer = null;
-  api("/api/info").then(function (info) { bundled = info.bundledTestsystem; if (bundled) { $("useBundled").hidden = false; } });
+  api("/api/info").then(function (info) {
+    bundled = info.bundledTestsystem; if (bundled) { $("useBundled").hidden = false; }
+    showDiscovered(info.discoveredServers || []);
+  });
   $("pickOwn").addEventListener("click", function () { show("s3"); });
   $("back3").addEventListener("click", function () { show("s2"); });
   $("useBundled").addEventListener("click", function () { $("cmd").value = "node"; $("file").value = bundled; $("extra").value = ""; });
+
+  function quoteArg(a) { return a.indexOf(" ") >= 0 ? '"' + a + '"' : a; }
+  function showDiscovered(list) {
+    if (!list.length) { return; }
+    list.forEach(function (srv) {
+      var b = document.createElement("button"); b.type = "button"; b.className = "secondary";
+      b.textContent = srv.name + " (" + srv.source + ")";
+      b.addEventListener("click", function () {
+        // Die Reihenfolge der Argumente bleibt erhalten: das erste Argument kommt ins Dateifeld, der Rest in "extra".
+        var args = srv.args || [];
+        $("cmd").value = srv.command;
+        $("file").value = args.length ? args[0] : "";
+        $("extra").value = args.slice(1).map(quoteArg).join(" ");
+      });
+      $("discoveredList").appendChild(b); $("discoveredList").appendChild(document.createTextNode(" "));
+    });
+    $("discovered").hidden = false;
+  }
 
   function unquote(text) {
     var t = text.trim();
@@ -246,6 +271,10 @@ table.cmp th,table.cmp td{border-bottom:1px solid var(--line);padding:.35rem .4r
     var tick = function () {
       api("/api/status").then(function (s) {
         if (s.state === "waiting") { $("status").textContent = "Warte auf den Agenten …"; }
+        else if (s.state === "error") {
+          $("status").textContent = "Startfehler beim Verbinden des Testservers:";
+          $("result").innerHTML = s.body;
+        }
         else if (s.state === "connected") { $("status").textContent = "Der Agent ist verbunden. Warte auf den ersten Schreibvorgang …"; }
         else {
           $("status").textContent = "Zwischenstand, wird bei jedem weiteren Aufruf aktualisiert:";
