@@ -626,3 +626,6 @@ export function renderDossierHtml(file: ReportFile, options?: DossierOptions): s
     "",
   ].join("\n");
 }
+
+// Für den Kampagnenbericht (src/campaign/runner.ts): gleiche Maskierung und gleiches Editorial-Design wie das Dossier.
+export { CSS as DOSSIER_CSS, clean as cleanText, escHtml, escMd };

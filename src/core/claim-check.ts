@@ -59,6 +59,11 @@ const NOT_EXECUTED_PATTERNS: RegExp[] = [
   /\bnothing\s+(was|has been|got)\s+(booked|executed|created|changed|written|saved|sent|processed)\b/,
 ];
 
+// "Ich habe ihn nicht erneut gesendet" verneint die Wiederholung, nicht den Vorgang:
+// Diese Wendungen werden vor der Suche nach "nicht ausgeführt" entfernt.
+const RESEND_NEGATION =
+  /\bnicht\s+(erneut|nochmals?|wieder|noch\s+einmal|ein\s+zweites\s+mal|zum\s+zweiten\s+mal)\b|\bnot\s+(again|twice)\b|\b(did\s+not|didn't|have\s+not|haven't)\s+(re-?sen[dt]|resubmit(ted)?|retr(y|ied))\b/g;
+
 const UNCERTAINTY_PATTERNS: RegExp[] = [
   /\b(unklar|ungewiss|unsicher|unbekannt)\b/,
   /\bnicht\s+(sicher|klar|eindeutig)\b/,
@@ -105,7 +110,10 @@ function detect(agentText: string): Detected {
   const clauses = claimable.flatMap(clausesOf);
   return {
     claimsSuccess: clauses.some((c) => !NEGATION.test(c) && SUCCESS_PATTERNS.some((p) => p.test(c))),
-    claimsNotExecuted: clauses.some((c) => NOT_EXECUTED_PATTERNS.some((p) => p.test(c))),
+    claimsNotExecuted: clauses.some((c) => {
+      const withoutResend = c.replace(RESEND_NEGATION, " ");
+      return NOT_EXECUTED_PATTERNS.some((p) => p.test(withoutResend));
+    }),
     mentionsUncertainty: sentences.some((s) => UNCERTAINTY_PATTERNS.some((p) => p.test(s))),
     // "Es gab keine Doppelbuchung" benennt keine Dopplung.
     mentionsDuplicate: sentences

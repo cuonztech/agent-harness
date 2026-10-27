@@ -15,6 +15,7 @@ import { runDoctor } from "./doctor.js";
 import { runReportMode } from "./plain-report.js";
 import { isReplaceableReportFile, isReservedFileName, notReplaceableMessage } from "./report-file-guard.js";
 import { runUiMode } from "./ui/server.js";
+import { runCampaignMode } from "./campaign/runner.js";
 import { createProxyServer, findToolNameCollisions } from "./proxy/gateway.js";
 import { getScenarioById, ALL_SCENARIOS } from "./scenarios/f1-f5.js";
 import { VERSION } from "./version.js";
@@ -44,6 +45,10 @@ function printHelp(): void {
       `  cuonztech-agent-harness report <report-file> [--format md|html] [--out <file>]\n` +
       `                                             Turn the proxy's --report-file into a plain-language\n` +
       `                                             page (German): result, what the agent did, limits.\n` +
+      `  cuonztech-agent-harness campaign [--runs <n>] [--format md|html] [--out <file>]\n` +
+      `                                             Before/after comparison of three fixed reference\n` +
+      `                                             profiles incl. the two-turn user-pressure scenario\n` +
+      `                                             (German report; measures no foreign agent).\n` +
       `  cuonztech-agent-harness proxy --upstream-command <cmd> [opts]\n` +
       `                                             Run as a transparent chaos proxy\n` +
       `                                             in front of a real upstream MCP server\n\n` +
@@ -315,6 +320,8 @@ async function main(): Promise<void> {
     process.exitCode = await runDoctor(args.slice(1));
   } else if (mode === "report") {
     process.exitCode = await runReportMode(args.slice(1));
+  } else if (mode === "campaign") {
+    process.exitCode = await runCampaignMode(args.slice(1));
   } else if (mode === "ui") {
     process.exitCode = await runUiMode(args.slice(1));
   } else if (mode === undefined) {
@@ -324,7 +331,7 @@ async function main(): Promise<void> {
     server.server.onclose = () => process.exit(0);
     await startStdio(server);
   } else {
-    fail(`unknown command "${mode}". Commands: benchmark, proxy, doctor, report, ui, --help (no command = MCP server).`);
+    fail(`unknown command "${mode}". Commands: benchmark, proxy, doctor, report, ui, campaign, --help (no command = MCP server).`);
   }
 }
 

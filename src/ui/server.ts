@@ -4,7 +4,7 @@
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -12,11 +12,26 @@ import { fileURLToPath } from "node:url";
 import { collectDoctor } from "../doctor.js";
 import { renderHtml, renderHtmlBody, type ReportFile } from "../plain-report.js";
 import { renderDossierHtml } from "../dossier-report.js";
+import { evaluateAgentClaim } from "../core/claim-check.js";
+import { runCampaign, renderCampaignDemoBody, followupSummary } from "../campaign/runner.js";
 import { runBenchmark, defaultConfig, type ReferenceRun } from "../benchmark/runner.js";
 import { VERSION } from "../version.js";
 import { PAGE_HTML } from "./page.js";
 
 const MAX_BODY = 64 * 1024;
+const MAX_NAME = 200;
+const MAX_AGENT_RESPONSE = 10_000;
+const UI_SCENARIOS = ["F1", "F2", "F3", "F4", "F5"] as const;
+type UiScenario = (typeof UI_SCENARIOS)[number];
+
+// Angaben der laufenden Prüfung: wohin der Proxy schreibt und was in das Dossier gehört.
+interface UiSession {
+  reportFile: string;
+  scenario: UiScenario;
+  customerName?: string;
+  systemName?: string;
+  agentResponse?: string;
+}
 
 export interface UiOptions {
   port?: number;
@@ -91,6 +106,20 @@ function absolutizeExisting(args: string[]): string[] {
   return args.map((a) => (a !== "" && !a.startsWith("-") && !isAbsolute(a) && existsSync(resolve(a)) ? resolve(a) : a));
 }
 
+// Freitextfeld der Seite: leer = nicht angegeben; zu lang oder kein Text = Fehler.
+function optionalText(value: unknown, what: string, max: number): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || value.length > max) throw new Error(`${what} ist ungültig`);
+  const text = value.trim();
+  return text === "" ? undefined : text;
+}
+
+function scenarioOf(value: unknown): UiScenario {
+  if (value === undefined) return "F1";
+  if (typeof value !== "string" || !(UI_SCENARIOS as readonly string[]).includes(value)) throw new Error("Szenario ist ungültig");
+  return value as UiScenario;
+}
+
 function stringArray(value: unknown, what: string): string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > 30 || value.some((v) => typeof v !== "string" || v.length > 1000)) {
@@ -115,7 +144,7 @@ function demoFile(run: ReferenceRun): ReportFile {
 export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
   const token = randomBytes(16).toString("hex");
   let port = 0;
-  let session: { reportFile: string } | null = null;
+  let session: UiSession | null = null;
 
   const readSessionReport = async (): Promise<ReportFile | null> => {
     if (!session) return null;
@@ -123,6 +152,34 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
       return JSON.parse(await readFile(session.reportFile, "utf8")) as ReportFile;
     } catch {
       return null; // noch nicht da oder gerade im Schreiben
+    }
+  };
+
+  // Der Proxy schreibt die Datei nach jedem Aufruf neu und kennt die Antwort des Agenten nicht:
+  // Eine in der Oberfläche eingetragene Antwort wird daher beim Anzeigen gegen den aktuellen Bericht geprüft.
+  const withSessionClaim = (file: ReportFile): ReportFile => {
+    if (session?.agentResponse && file.report && !file.claim_check) {
+      return { ...file, claim_check: evaluateAgentClaim(session.agentResponse, file.report) };
+    }
+    return file;
+  };
+
+  const dossierOptions = (): { customerName?: string; systemName?: string; agentResponse?: string } => ({
+    customerName: session?.customerName,
+    systemName: session?.systemName,
+    agentResponse: session?.agentResponse,
+  });
+
+  // Gleiche Vorsicht wie der Proxy: erst in eine eigene Datei, dann darüber umbenennen.
+  const writeReportFile = async (path: string, file: ReportFile): Promise<void> => {
+    const tmp = `${path}.ui-${randomBytes(6).toString("hex")}.tmp`;
+    const text = JSON.stringify(file, null, 2);
+    try {
+      await writeFile(tmp, text, { encoding: "utf8", flag: "wx" });
+      await rename(tmp, path);
+    } catch {
+      await unlink(tmp).catch(() => undefined);
+      await writeFile(path, text, "utf8");
     }
   };
 
@@ -169,6 +226,9 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
       if (!command) throw new Error("Programm fehlt");
       // Die Bestätigung gilt auch hier, nicht nur als Schalter im Browser: ohne sie entsteht keine Konfiguration, die Schreibvorgänge ausführt.
       if (body.confirmedTestsystem !== true) throw new Error("Bestätigung fehlt: Der Test führt echte Schreibvorgänge aus und darf nur gegen ein Testsystem laufen");
+      const scenario = scenarioOf(body.scenario);
+      const customerName = optionalText(body.customerName, "Auftraggeber", MAX_NAME);
+      const systemName = optionalText(body.systemName, "System", MAX_NAME);
       const args = absolutizeExisting(stringArray(body.args, "Argumente"));
       const writeTools = patternList(body.writeTools, "Schreib-Tools");
       const readTools = patternList(body.readTools, "Lese-Tools");
@@ -177,7 +237,7 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
       const runDir = join(baseDir, stamp);
       await mkdir(runDir, { recursive: true });
       const reportFile = join(runDir, "harness-report.json");
-      session = { reportFile };
+      session = { reportFile, scenario, customerName, systemName };
 
       const proxyArgs = [
         cliPath(), "proxy",
@@ -187,26 +247,44 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
         ...(args.includes(bundledTestsystem() ?? "\0") ? ["--upstream-env-var", `TESTSYSTEM_DATA=${join(runDir, "bookings.json")}`] : []),
         ...(writeTools.length > 0 ? ["--write-tools", writeTools.join(",")] : []),
         ...(readTools.length > 0 ? ["--read-tools", readTools.join(",")] : []),
-        "--scenario", "F1",
+        "--scenario", scenario,
         "--allow-writes",
         "--audit-tools", "off",
         "--report-file", reportFile,
       ];
       const claudeCode = ["claude mcp add --scope user agent-harness --", process.execPath, ...proxyArgs].map((p, i) => (i === 0 ? p : quoteArg(p))).join(" ");
       const claudeDesktop = JSON.stringify({ mcpServers: { "agent-harness": { command: process.execPath, args: proxyArgs } } }, null, 2);
-      return sendJson(res, 200, { claudeCode, claudeDesktop, reportFile });
+      return sendJson(res, 200, { claudeCode, claudeDesktop, reportFile, scenario });
+    }
+    if (req.method === "POST" && url.pathname === "/api/dossier-meta") {
+      const body = await readJson(req);
+      if (!session) throw new Error("Es läuft noch keine Prüfung: bitte zuerst Schritt 3 abschliessen");
+      // Erst alles prüfen, dann übernehmen: ein ungültiges Feld ändert nichts.
+      const next = {
+        customerName: "customerName" in body ? optionalText(body.customerName, "Auftraggeber", MAX_NAME) : session.customerName,
+        systemName: "systemName" in body ? optionalText(body.systemName, "System", MAX_NAME) : session.systemName,
+        agentResponse: "agentResponse" in body ? optionalText(body.agentResponse, "Antwort des Agenten", MAX_AGENT_RESPONSE) : session.agentResponse,
+      };
+      Object.assign(session, next);
+      const file = await readSessionReport();
+      if (!file?.report) return sendJson(res, 200, { ok: true, claimCheck: null });
+      // Nur claim_check ändert sich; report, schema_audit und call_forensics bleiben, damit der Integritäts-Nachweis gültig bleibt.
+      if (session.agentResponse) file.claim_check = evaluateAgentClaim(session.agentResponse, file.report);
+      else delete file.claim_check;
+      await writeReportFile(session.reportFile, file);
+      return sendJson(res, 200, { ok: true, claimCheck: file.claim_check ?? null, body: renderHtmlBody(file).join("\n") });
     }
     if (req.method === "GET" && url.pathname === "/api/status") {
       if (!session) return sendJson(res, 200, { state: "waiting" });
       const file = await readSessionReport();
       if (!file) return sendJson(res, 200, { state: "waiting" });
       if (!file.report) return sendJson(res, 200, { state: "connected" });
-      return sendJson(res, 200, { state: "result", verdict: file.verdict, body: renderHtmlBody(file).join("\n") });
+      return sendJson(res, 200, { state: "result", verdict: file.verdict, body: renderHtmlBody(withSessionClaim(file)).join("\n") });
     }
     if (req.method === "GET" && url.pathname === "/api/report.html") {
       const file = await readSessionReport();
       if (!file) return sendJson(res, 404, { error: "Noch kein Bericht vorhanden" });
-      return send(res, 200, renderHtml(file), "text/html; charset=utf-8", {
+      return send(res, 200, renderHtml(withSessionClaim(file)), "text/html; charset=utf-8", {
         "content-disposition": 'attachment; filename="agent-test-bericht.html"',
       });
     }
@@ -214,15 +292,19 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
     if (req.method === "GET" && (url.pathname === "/api/dossier" || url.pathname === "/dossier")) {
       const file = await readSessionReport();
       if (!file) return sendJson(res, 404, { error: "Noch kein Bericht vorhanden" });
-      return send(res, 200, renderDossierHtml(file), "text/html; charset=utf-8");
+      return send(res, 200, renderDossierHtml(file, dossierOptions()), "text/html; charset=utf-8");
     }
     if (req.method === "POST" && url.pathname === "/api/demo") {
       const config = defaultConfig();
       config.scenarios = ["F1"];
       const result = await runBenchmark(config);
+      // Der Vorher/Nachher-Vergleich mit Nutzer-Nachdruck im 2. Zug (Kampagne, alle Szenarien, je ein Lauf).
+      const campaign = runCampaign({ runsPerScenario: 1 });
       return sendJson(res, 200, {
         careful: renderHtmlBody(demoFile(result.careful)).join("\n"),
         naive: renderHtmlBody(demoFile(result.naive)).join("\n"),
+        campaignHtml: renderCampaignDemoBody(campaign),
+        pressure: { summary: campaign.beforeAfterSummaryDe, followup: followupSummary(campaign) },
       });
     }
     sendJson(res, 404, { error: "Nicht gefunden" });
