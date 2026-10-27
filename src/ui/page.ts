@@ -181,7 +181,7 @@ code{background:rgba(127,127,127,.15);padding:.1rem .3rem;border-radius:4px}
   });
 
   $("go3").addEventListener("click", function () {
-    api("/api/config", ready).then(function (cfg) {
+    api("/api/config", Object.assign({ confirmedTestsystem: $("confirm").checked }, ready)).then(function (cfg) {
       $("cfgCode").textContent = cfg.claudeCode; $("cfgJson").textContent = cfg.claudeDesktop; $("reportPath").textContent = cfg.reportFile;
       $("copyCode").onclick = function () { copy(cfg.claudeCode, $("copyCode")); };
       $("copyJson").onclick = function () { copy(cfg.claudeDesktop, $("copyJson")); };

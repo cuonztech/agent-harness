@@ -17,10 +17,10 @@ const UPSTREAM = [
 
 function runProxy(
   args: string[],
-  options: { timeoutMs?: number; env?: Record<string, string>; waitFor?: string } = {},
+  options: { timeoutMs?: number; env?: Record<string, string>; waitFor?: string; allowWrites?: boolean } = {},
 ): Promise<{ stderr: string; exited: boolean; code: number | null }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, ["dist/index.js", "proxy", ...args], {
+    const child = spawn(process.execPath, ["dist/index.js", "proxy", ...(options.allowWrites === false ? [] : ["--allow-writes"]), ...args], {
       env: { ...process.env, ...options.env },
     });
     let stderr = "";
@@ -193,6 +193,47 @@ describe("CLI `proxy` mode (real process)", () => {
       ]);
       expect(code).toBe(1);
       expect(await readFile(file, "utf-8")).toBe("untouched");
+    });
+
+    describe("--allow-writes (writes against the upstream only with a deliberate yes)", () => {
+      it.each([
+        [["--scenario", "F1"], "scenario F1"],
+        [["--scenario", "F4"], "scenario F4"],
+        [["--mode", "chaos", "--error-rate", "0.3"], "chaos mode"],
+      ])("refuses %j without --allow-writes, before the upstream is started", async (extra, what) => {
+        const { stderr, exited, code } = await runProxy([...UPSTREAM, ...extra], { allowWrites: false });
+        expect(exited).toBe(true);
+        expect(code).toBe(1);
+        expect(stderr).toContain("executes the agent's writes against the upstream for real");
+        expect(stderr).toContain(what);
+        expect(stderr).toContain("--allow-writes");
+        // Nothing was started: no tool listing from the upstream.
+        expect(stderr).not.toContain("Upstream tools (");
+      });
+
+      it("starts the same run with --allow-writes", async () => {
+        const { stderr, exited } = await runProxy([...UPSTREAM, "--scenario", "F1"], {
+          waitFor: "Upstream tools (",
+        });
+        expect(exited).toBe(false);
+        expect(stderr).toContain("Upstream tools (");
+      });
+
+      it("needs no confirmation for a pure pass-through baseline or for chaos at 0%", async () => {
+        const base = await runProxy(UPSTREAM, { allowWrites: false, waitFor: "Upstream tools (" });
+        expect(base.exited).toBe(false);
+        const zero = await runProxy([...UPSTREAM, "--mode", "chaos"], { allowWrites: false, waitFor: "Upstream tools (" });
+        expect(zero.exited).toBe(false);
+      });
+
+      it("takes no value and may not be repeated", async () => {
+        const withValue = await runProxy([...UPSTREAM, "--allow-writes=yes"]);
+        expect(withValue.code).toBe(1);
+        expect(withValue.stderr).toContain("option --allow-writes takes no value");
+        const twice = await runProxy([...UPSTREAM, "--allow-writes"]);
+        expect(twice.code).toBe(1);
+        expect(twice.stderr).toContain("option --allow-writes was given more than once");
+      });
     });
 
     it("requires --upstream-command", async () => {

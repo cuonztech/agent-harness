@@ -39,6 +39,8 @@ async function connectProxy(extraArgs: string[] = []): Promise<Client> {
       process.execPath,
       "--upstream-arg",
       FIXTURE,
+      // Scenarios run the agent's writes for real; the fixture is a throwaway system.
+      "--allow-writes",
       ...extraArgs,
     ],
     stderr: "ignore",

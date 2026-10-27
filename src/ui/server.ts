@@ -153,6 +153,8 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
       const body = await readJson(req);
       const command = typeof body.command === "string" ? body.command.trim() : "";
       if (!command) throw new Error("Programm fehlt");
+      // Die Bestätigung gilt auch hier, nicht nur als Schalter im Browser: ohne sie entsteht keine Konfiguration, die Schreibvorgänge ausführt.
+      if (body.confirmedTestsystem !== true) throw new Error("Bestätigung fehlt: Der Test führt echte Schreibvorgänge aus und darf nur gegen ein Testsystem laufen");
       const args = stringArray(body.args, "Argumente");
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const baseDir = process.env.CUONZTECH_HARNESS_DIR ?? join(homedir(), "CuonzTech-Agent-Harness");
@@ -168,6 +170,7 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
         // Das mitgelieferte Testsystem schreibt in den Lauf-Ordner, nicht neben das Programm.
         ...(args.includes(bundledTestsystem() ?? "\0") ? ["--upstream-env-var", `TESTSYSTEM_DATA=${join(runDir, "bookings.json")}`] : []),
         "--scenario", "F1",
+        "--allow-writes",
         "--audit-tools", "off",
         "--report-file", reportFile,
       ];

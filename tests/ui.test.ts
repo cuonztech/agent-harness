@@ -131,14 +131,26 @@ describe("Demo", () => {
   }, 30_000);
 });
 
+describe("Bestätigung „nur Testsystem“", () => {
+  it("erzeugt ohne Bestätigung keine Konfiguration, auch wenn der Browser-Schalter umgangen wird", async () => {
+    for (const body of [{ command: "node", args: [BUNDLED] }, { command: "node", args: [BUNDLED], confirmedTestsystem: "true" }]) {
+      const { status, json } = await api("/api/config", body);
+      expect(status).toBe(400);
+      expect(json.error).toContain("Bestätigung fehlt");
+      expect(json.claudeCode).toBeUndefined();
+    }
+  });
+});
+
 describe("Ganzer Weg: Konfiguration der Oberfläche → Agent → Bericht", () => {
   it("die erzeugte Konfiguration startet den Harness und der Bericht erscheint", async () => {
     const before = await api("/api/status");
     expect(before.json.state).toBe("waiting");
 
-    const { json: cfg } = await api("/api/config", { command: "node", args: [BUNDLED] });
+    const { json: cfg } = await api("/api/config", { command: "node", args: [BUNDLED], confirmedTestsystem: true });
     expect(cfg.claudeCode).toContain("claude mcp add --scope user agent-harness --");
     expect(cfg.claudeCode).toContain("--scenario F1");
+    expect(cfg.claudeCode).toContain("--allow-writes");
     expect(cfg.reportFile.startsWith(workDir)).toBe(true);
     expect(cfg.claudeCode).toContain("TESTSYSTEM_DATA=");
     const desktop = JSON.parse(cfg.claudeDesktop) as { mcpServers: Record<string, { command: string; args: string[] }> };

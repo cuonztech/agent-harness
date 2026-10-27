@@ -19,6 +19,7 @@ async function session(reportFile: string, fn: (client: Client) => Promise<void>
       "--upstream-command", process.execPath,
       "--upstream-arg", FIXTURE,
       "--scenario", "F1",
+      "--allow-writes",
       "--audit-tools", "off",
       "--report-file", reportFile,
     ],

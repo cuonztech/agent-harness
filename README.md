@@ -71,13 +71,14 @@ npx cuonztech-agent-harness doctor \
   --report-file harness-report.json
 ```
 
-**Vorher: Testsystem bereitstellen.** `--scenario F1` führt den ersten Schreibvorgang wirklich aus. Nur gegen ein Test- oder Staging-System laufen lassen.
+**Vorher: Testsystem bereitstellen.** `--scenario F1` führt den ersten Schreibvorgang wirklich aus. Nur gegen ein Test- oder Staging-System laufen lassen. Dass es eines ist, bestätigst du mit `--allow-writes`; ohne diesen Schalter bricht der Harness vor dem Start ab.
 
 ```bash
 npx cuonztech-agent-harness proxy \
   --upstream-command node \
   --upstream-arg <PFAD-ZU-DEINEM-SERVER.js> \
   --scenario F1 \
+  --allow-writes \
   --audit-tools off \
   --report-file harness-report.json
 ```
@@ -103,6 +104,7 @@ claude mcp add --scope user harness -- npx -y cuonztech-agent-harness proxy \
   --upstream-command node \
   --upstream-arg <PFAD-ZU-DEINEM-SERVER.js> \
   --scenario F1 \
+  --allow-writes \
   --audit-tools off \
   --report-file /ABSOLUTER/PFAD/harness-report.json
 
@@ -147,14 +149,15 @@ In der MCP-Konfiguration des Agenten (z. B. Claude Desktop):
         "-y", "cuonztech-agent-harness", "proxy",
         "--upstream-command", "node",
         "--upstream-arg", "<PFAD-ZU-DEINEM-SERVER.js>",
-        "--scenario", "F1"
+        "--scenario", "F1",
+        "--allow-writes"
       ]
     }
   }
 }
 ```
 
-> **Nur gegen Test-/Staging-Backends.** F1 und F4 führen Writes wirklich aus.
+> **Nur gegen Test-/Staging-Backends.** Jedes Szenario (F1–F5) und der Chaos-Modus lassen die Schreibvorgänge des Agenten wirklich am Upstream ausführen. Deshalb verlangt der Harness dafür `--allow-writes` als bewusste Bestätigung.
 
 Der Agent sieht die echten Tools des Upstreams (Name, Beschreibung, Schema unverändert, auch bei paginierter Tool-Liste) plus zwei Audit-Tools: `cuonztech__get_report` und `cuonztech__get_score`. Beide sind nur lesend — der Agent kann die Auswertung nicht zurücksetzen.
 
@@ -184,6 +187,7 @@ Proxy-Flags:
 | `--upstream-env-var` | Eine Umgebungsvariable `KEY=VALUE`; wiederholbar, der Wert darf Kommas enthalten |
 | `--upstream-env` | Kommagetrennte `KEY=VALUE`-Paare (Werte ohne Kommas) |
 | `--scenario` | `F1`–`F5` (deterministisch); ohne Angabe reines Durchreichen |
+| `--allow-writes` | Schalter ohne Wert. Pflicht mit `--scenario` und mit `--mode chaos` (Fehlerrate > 0): bestätigt, dass `--upstream-command` auf ein Test- oder Staging-System zeigt. Ohne ihn bricht der Start mit Exit-Code 1 ab, bevor der Upstream gestartet wird. Reines Durchreichen und Chaos mit 0 % brauchen ihn nicht |
 | `--mode` | `deterministic` (Standard) oder `chaos`; nicht mit `--scenario` kombinierbar |
 | `--error-rate` | Nur mit `--mode chaos`: Fehlerwahrscheinlichkeit 0–1 |
 | `--retry-after` | Nur mit `--scenario F2`: Sekunden, die das 429 ankündigt und die danach geprüft werden (Standard 60, höchstens 86400) |
@@ -411,11 +415,11 @@ Interesse oder Fragen: **[cuonztech.ch/agent-harness.html](https://cuonztech.ch/
 
 ```bash
 # Proxy vor einem echten Upstream-MCP-Server
-npx cuonztech-agent-harness proxy --upstream-command node --upstream-arg dist/server.js --scenario F1
+npx cuonztech-agent-harness proxy --upstream-command node --upstream-arg dist/server.js --scenario F1 --allow-writes
 
 # Dasselbe für CI: Agent sieht keine Audit-Tools, Ergebnis in einer Datei
 npx cuonztech-agent-harness proxy --upstream-command node --upstream-arg dist/server.js \
-  --scenario F1 --audit-tools off --report-file out/harness-report.json
+  --scenario F1 --allow-writes --audit-tools off --report-file out/harness-report.json
 
 # Selbsttest
 npx cuonztech-agent-harness benchmark

@@ -60,6 +60,10 @@ function printHelp(): void {
       `                                  The value may contain commas.\n` +
       `  --upstream-env K=V,K2=V2       Comma-separated env vars (values cannot contain commas)\n` +
       `  --scenario F1..F5              Activate one deterministic scenario\n` +
+      `  --allow-writes                 Required with --scenario and with --mode chaos (error\n` +
+      `                                  rate > 0): confirms that --upstream-command points at a\n` +
+      `                                  disposable test/staging system. The agent's writes are\n` +
+      `                                  executed there for real.\n` +
       `  --mode deterministic|chaos     chaos = stochastic error injection (set --error-rate)\n` +
       `  --error-rate <0..1>            Error probability in chaos mode\n` +
       `  --retry-after <seconds>        retry_after announced by F2's 429 (default: 60;\n` +
@@ -89,7 +93,7 @@ function printHelp(): void {
   );
 }
 
-type FlagKind = "single" | "multi";
+type FlagKind = "single" | "multi" | "boolean";
 
 // Strict flag parsing: an unknown flag, a flag without a value, a repeated
 // single-value flag and a stray positional argument are all errors. The old
@@ -120,6 +124,18 @@ function parseFlags(
     const kind = spec[token];
     if (!kind) {
       return { error: `unknown option "${token}".` };
+    }
+    // A switch without a value (--allow-writes): "--allow-writes=yes" and a
+    // repeat are errors, and the next token is not swallowed as its value.
+    if (kind === "boolean") {
+      if (inlineValue !== undefined) {
+        return { error: `option ${token} takes no value.` };
+      }
+      if (values.has(token)) {
+        return { error: `option ${token} was given more than once.` };
+      }
+      values.set(token, ["true"]);
+      continue;
     }
     let value: string | undefined;
     if (inlineValue !== undefined) {
@@ -341,6 +357,7 @@ const PROXY_FLAGS: Record<string, FlagKind> = {
   "--key-fields": "single",
   "--audit-tools": "single",
   "--report-file": "single",
+  "--allow-writes": "boolean",
 };
 
 function parseEnvPair(pair: string, flag: string, into: Record<string, string>): void {
@@ -517,6 +534,20 @@ async function runProxyMode(argv: string[]): Promise<void> {
     log(
       "WARNING: --mode chaos with a 0% error rate — this run will inject nothing. " +
         "Pass e.g. --error-rate 0.2 to actually trigger stochastic failures.",
+    );
+  }
+
+  // Every scenario and every chaos run with a non-zero error rate lets the
+  // agent's writes reach the upstream for real. That needs a deliberate yes,
+  // given before the upstream is even started.
+  const writesReachUpstream = scenarioId !== undefined || (chaosMode === "chaos" && !chaosInjectsNothing);
+  if (writesReachUpstream && one("--allow-writes") === undefined) {
+    fail(
+      "this run executes the agent's writes against the upstream for real" +
+        (scenarioId ? ` (scenario ${scenarioId})` : " (chaos mode)") +
+        ".\n" +
+        "Only do that against a disposable test/staging system, never production.\n" +
+        "If --upstream-command points at such a system, confirm it by adding --allow-writes.",
     );
   }
 
