@@ -108,6 +108,7 @@ code{background:rgba(127,127,127,.15);padding:.1rem .3rem;border-radius:4px}
 <p class="status" id="status">Warte auf den Agenten …</p>
 <div class="report" id="result"></div>
 <p><a id="dl" href="#" hidden>Bericht als Datei speichern</a></p>
+<p><a id="dossier" href="#" target="_blank" rel="noopener" hidden>Vollständiges Prüf-Dossier öffnen / drucken</a></p>
 </section>
 </main>
 <script>
@@ -204,6 +205,7 @@ code{background:rgba(127,127,127,.15);padding:.1rem .3rem;border-radius:4px}
         else {
           $("status").textContent = "Zwischenstand, wird bei jedem weiteren Aufruf aktualisiert:";
           $("result").innerHTML = s.body; $("dl").hidden = false; $("dl").href = "/api/report.html?t=" + encodeURIComponent(TOKEN);
+          $("dossier").hidden = false; $("dossier").href = "/dossier?t=" + encodeURIComponent(TOKEN);
         }
       }).catch(function () {});
     };

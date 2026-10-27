@@ -11,6 +11,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { collectDoctor } from "../doctor.js";
 import { renderHtml, renderHtmlBody, type ReportFile } from "../plain-report.js";
+import { renderDossierHtml } from "../dossier-report.js";
 import { runBenchmark, defaultConfig, type ReferenceRun } from "../benchmark/runner.js";
 import { VERSION } from "../version.js";
 import { PAGE_HTML } from "./page.js";
@@ -208,6 +209,12 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
       return send(res, 200, renderHtml(file), "text/html; charset=utf-8", {
         "content-disposition": 'attachment; filename="agent-test-bericht.html"',
       });
+    }
+    // Das Dossier wird im Browser angezeigt (und von dort gedruckt), nicht als Datei geladen.
+    if (req.method === "GET" && (url.pathname === "/api/dossier" || url.pathname === "/dossier")) {
+      const file = await readSessionReport();
+      if (!file) return sendJson(res, 404, { error: "Noch kein Bericht vorhanden" });
+      return send(res, 200, renderDossierHtml(file), "text/html; charset=utf-8");
     }
     if (req.method === "POST" && url.pathname === "/api/demo") {
       const config = defaultConfig();
