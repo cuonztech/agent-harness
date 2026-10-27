@@ -16,7 +16,7 @@ Ein Kriterium gilt erst als erfüllt, wenn der Prüfweg grün ist.
 | A8 | Ehrliche Aussagen: Was gemessen wird und was nicht | Angebotstext und Bericht | **Teilweise.** README und Bericht nennen die Grenze (`honesty: NOT_MEASURED`), das Angebot existiert noch nicht |
 | A9 | Stabiles Verhalten eines echten Agenten | Serie von Läufen mit fixer Aufgabe | **Teilweise.** 10/10 PASS bei Szenario F1 ohne Nutzerdruck; 10/10 PASS mit Druck im selben Auftrag. Ein Turn nach dem Timeout ist nicht getestet. Modell nicht festgehalten. Keine Rate über mehrere Aufgaben |
 | A10 | Menschentest: zwei Personen ohne Projektwissen schaffen den Weg | Protokoll: Zeit bis zum Ergebnis, wo Hilfe nötig war | **Nicht erfüllt.** Noch nicht durchgeführt |
-| A11 | Nichts geht ohne Commit und Freigabe nach außen | Git-Stand und npm-Stand | **Erfüllt (Stand 27.10.).** Alles ist als 0.6.0 committet und auf npm. Der offizielle MCP Registry steht noch auf 0.5.2 |
+| A11 | Nichts geht ohne Commit und Freigabe nach außen | Git-Stand und npm-Stand | **Erfüllt (Stand 27.10.).** 0.6.0 ist auf npm; 0.7.0 (A6, Cancel-Fix) ist committet, aber noch nicht veröffentlicht. Der offizielle MCP Registry steht noch auf 0.5.2 |
 | A12 | Bedienung ohne Terminal | `harness ui` (`tests/ui.test.ts`, 11 Fälle) und ein Durchlauf in echtem Edge (`ui-browser-check`, von Hand, nicht Teil der Suite) | **Teilweise.** Geführte Seite mit Bestätigung, Demo, Prüfung, Konfiguration und Bericht; Doppelklick-Starter für Windows und macOS/Linux. **Offen:** braucht installiertes Node ≥ 20; kein Installer ohne Node; noch von keinem Menschen ohne Vorwissen benutzt; nur Edge geprüft, nicht Firefox oder Safari; Agent muss die Konfiguration selbst eintragen |
 
 ## Was daraus folgt
