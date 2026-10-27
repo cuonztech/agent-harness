@@ -73,9 +73,9 @@ describe("CLI `proxy` mode (real process)", () => {
 
     it.each([
       [["--mode", "chaso"], '--mode must be "deterministic" or "chaos"'],
-      [["--mode", "chaos", "--error-rate", "abc"], "--error-rate must be a number between 0 and 1"],
-      [["--mode", "chaos", "--error-rate", "1.5"], "--error-rate must be a number between 0 and 1"],
-      [["--mode", "chaos", "--error-rate", "-0.1"], "--error-rate must be a number between 0 and 1"],
+      [["--mode", "chaos", "--error-rate", "abc"], "--error-rate must be a plain decimal number between 0 and 1"],
+      [["--mode", "chaos", "--error-rate", "1.5"], "--error-rate must be a plain decimal number between 0 and 1"],
+      [["--mode", "chaos", "--error-rate", "-0.1"], "--error-rate must be a plain decimal number between 0 and 1"],
       [["--error-rate", "0.5"], "only has an effect together with --mode chaos"],
       [["--scenario", "F1", "--mode", "chaos", "--error-rate", "0.5"], "cannot be combined"],
       [["--scenaro", "F1"], 'unknown option "--scenaro"'],
@@ -149,7 +149,7 @@ describe("CLI `proxy` mode (real process)", () => {
     it("a rejected command line replaces a report file left over from an earlier run", async () => {
       const dir = await mkdtemp(join(tmpdir(), "harness-stale-"));
       const file = join(dir, "report.json");
-      await writeFile(file, JSON.stringify({ verdict: "PASS", report: { verdict: "PASS" } }), "utf-8");
+      await writeFile(file, JSON.stringify({ harnessVersion: "0.0.0", verdict: "PASS", report: { verdict: "PASS" } }), "utf-8");
 
       const { code } = await runProxy([...UPSTREAM, "--scenaro", "F1", "--report-file", file]);
       expect(code).toBe(1);
@@ -157,13 +157,45 @@ describe("CLI `proxy` mode (real process)", () => {
       expect(after.verdict).toBe("NOT_TESTED");
       expect(after.startupError).toContain("--scenaro");
 
-      await writeFile(file, JSON.stringify({ verdict: "PASS" }), "utf-8");
+      await writeFile(file, JSON.stringify({ harnessVersion: "0.0.0", verdict: "PASS" }), "utf-8");
       const failedStart = await runProxy([
         "--upstream-command", process.execPath, "--upstream-arg", "-e", "--upstream-arg", "process.exit(2)",
         "--report-file", file,
       ]);
       expect(failedStart.code).toBe(1);
       expect((JSON.parse(await readFile(file, "utf-8")) as { verdict: string }).verdict).toBe("NOT_TESTED");
+    });
+
+    it("never overwrites a file that is not an earlier harness report (a mistyped --report-file)", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "harness-victim-"));
+      const victim = join(dir, "victim.mjs");
+      const original = "console.log('my important script');\n";
+      await writeFile(victim, original, "utf-8");
+      // Valid arguments, and a rejected command line: both must leave it alone.
+      for (const extra of [[], ["--scenaro", "F1"]]) {
+        const { code, stderr } = await runProxy([...UPSTREAM, ...extra, "--report-file", victim]);
+        expect(code).toBe(1);
+        expect(await readFile(victim, "utf-8")).toBe(original);
+        if (extra.length === 0) expect(stderr).toContain("Refusing to overwrite");
+      }
+      // Foreign JSON is not a report either.
+      await writeFile(victim, JSON.stringify({ name: "package", version: "1" }), "utf-8");
+      expect((await runProxy([...UPSTREAM, "--report-file", victim])).code).toBe(1);
+      expect(JSON.parse(await readFile(victim, "utf-8"))).toEqual({ name: "package", version: "1" });
+      // An empty file and an earlier report are replaced as before.
+      await writeFile(victim, "", "utf-8");
+      const ok = await runProxy([...UPSTREAM, "--report-file", victim], { waitFor: "Upstream tools (" });
+      expect(ok.exited).toBe(false);
+      expect(JSON.parse(await readFile(victim, "utf-8")).harnessVersion).toBeTruthy();
+    });
+
+    it("finds --report-file even right after the switch --allow-writes", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "harness-peek-"));
+      const file = join(dir, "report.json");
+      await writeFile(file, JSON.stringify({ harnessVersion: "0.0.0", verdict: "PASS" }), "utf-8");
+      const { code } = await runProxy(["--upstream-command", process.execPath, "--upstream-arg", "no/such.js", "--scenaro", "F1", "--allow-writes", "--report-file", file], { allowWrites: false });
+      expect(code).toBe(1);
+      expect(JSON.parse(await readFile(file, "utf-8")).verdict).toBe("NOT_TESTED");
     });
 
     it("rejects an option that is followed by another option instead of a value", async () => {

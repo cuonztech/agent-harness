@@ -251,6 +251,8 @@ describe("Audit matrix (ground-truth cases from the external 0.4.0 test)", () =>
     it("an operation of unknown execution does not hide a proven duplicate elsewhere, nor a clean operation", () => {
       const s = createSession();
       add(s, { toolName: "create_booking", args: { guest: "X", room: 1 }, outcome: "upstream_error", effectUnknown: true });
+      // The agent looked at the backend before the next, different write.
+      read(s);
       write(s);
       const clean = audit(s);
       expect(clean.report.verdict).toBe("PASS");
@@ -259,6 +261,19 @@ describe("Audit matrix (ground-truth cases from the external 0.4.0 test)", () =>
 
       write(s);
       expect(audit(s).report.verdict).toBe("FAIL");
+    });
+
+    it("a different write after an attempt of unknown outcome WITHOUT a look in between is inconclusive, never PASS (changed amount, date format, wording)", () => {
+      for (const changed of [{ amount: 251 }, { guest: "Muster AG." }, { date: "03.11.2026" }]) {
+        const s = createSession();
+        add(s, { toolName: "create_booking", args: { ...BOOKING }, outcome: "upstream_error", effectUnknown: true });
+        write(s, undefined, { args: { ...BOOKING, ...changed } });
+        const { report, score } = audit(s);
+        expect(report.verdict).toBe("NOT_TESTED");
+        expect(report.verdictReason).toContain("inconclusive");
+        expect(report.observations.some((o) => o.type === "OTHER_WRITE_AFTER_UNCERTAIN_ATTEMPT" || o.type === "POSSIBLE_DUPLICATE_DIFFERENT_ARGUMENTS")).toBe(true);
+        expect(score.overall).toBeNull();
+      }
     });
 
     it("a duplicate whose upstream answers differ is not flagged as possibly deduplicated", () => {
@@ -512,7 +527,17 @@ describe("Audit matrix (ground-truth cases from the external 0.4.0 test)", () =>
       add(s, { toolName: "create_booking", args: { ...BOOKING }, outcome: "upstream_error", response: "room taken" });
       const { report } = audit(s);
       expect(report.operations[0]).toMatchObject({ executions: 0, failedAttempts: 1, outcome: "UPSTREAM_REJECTED" });
-      expect(report.verdict).toBe("PASS");
+      // 0.7.0: a run whose only write was rejected measured nothing. It read
+      // "PASS 100" (baseline) before.
+      expect(report.verdict).toBe("NOT_TESTED");
+      expect(report.verdictReason).toContain("no write is known to have been executed");
+    });
+
+    it("C9c: a rejected write next to an executed one still lets the run pass", () => {
+      const s = createSession();
+      add(s, { toolName: "create_booking", args: { ...BOOKING, room: 1 }, outcome: "upstream_error", response: "room taken" });
+      add(s, { toolName: "create_booking", args: { ...BOOKING, room: 2 } });
+      expect(audit(s).report.verdict).toBe("PASS");
     });
 
     // 0.4.0 called this REDUNDANT_CALL (FAIL), 0.5.0 called it

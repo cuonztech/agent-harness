@@ -7,6 +7,7 @@ import { access, stat } from "node:fs/promises";
 import { constants, existsSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { classifyUpstreamTool } from "./proxy/interceptor.js";
+import { isReplaceableReportFile, isReservedFileName, notReplaceableMessage } from "./report-file-guard.js";
 
 const START_TIMEOUT_MS = 15_000;
 
@@ -25,6 +26,8 @@ interface ParsedArgs {
   writeTools: string[];
   readTools: string[];
   unknown: string[];
+  // Options given without a usable value; the proxy rejects those too.
+  empty: string[];
 }
 
 function splitList(raw: string): string[] {
@@ -32,16 +35,17 @@ function splitList(raw: string): string[] {
 }
 
 function parseDoctorArgs(argv: string[]): ParsedArgs {
-  const out: ParsedArgs = { upstreamArgs: [], writeTools: [], readTools: [], unknown: [] };
+  const out: ParsedArgs = { upstreamArgs: [], writeTools: [], readTools: [], unknown: [], empty: [] };
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
     const eq = token.indexOf("=");
     const flag = eq === -1 ? token : token.slice(0, eq);
     const inline = eq === -1 ? undefined : token.slice(eq + 1);
     const takeValue = (): string => {
-      if (inline !== undefined) return inline;
-      i += 1;
-      return argv[i] ?? "";
+      const value = inline !== undefined ? inline : ((i += 1), argv[i] ?? "");
+      // An empty --upstream-arg is a legitimate argument for the upstream.
+      if (value.trim() === "" && flag !== "--upstream-arg") out.empty.push(flag);
+      return value;
     };
     switch (flag) {
       case "--upstream-command":
@@ -102,10 +106,16 @@ function checkUpstreamScript(command: string, args: string[], cwd: string): Chec
 
 async function checkReportFile(path: string): Promise<Check> {
   const target = resolve(path);
+  if (isReservedFileName(path)) {
+    return { ok: false, label: `Report-Datei: ${path}`, detail: "Der Name enthält einen reservierten Gerätenamen oder ein \":\" und ist keine nutzbare Datei.", fix: "Anderen Dateinamen für --report-file wählen." };
+  }
   if (existsSync(target)) {
     const info = await stat(target);
     if (!info.isFile()) {
       return { ok: false, label: `Report-Datei: ${target}`, detail: "Ziel ist keine normale Datei.", fix: "Anderen Dateinamen für --report-file wählen." };
+    }
+    if (!isReplaceableReportFile(target)) {
+      return { ok: false, label: `Report-Datei: ${target}`, detail: "Die Datei existiert und ist kein früherer Harness-Report; der Proxy würde sie nicht überschreiben.", fix: notReplaceableMessage("--report-file", target) };
     }
     const writable = await access(target, constants.W_OK).then(() => true, () => false);
     return { ok: writable, label: `Report-Datei schreibbar: ${target}`, fix: "Datei schliessen oder Schreibrecht setzen." };
@@ -239,8 +249,20 @@ export async function collectDoctor(input: DoctorInput): Promise<DoctorResult> {
 
 export async function runDoctor(argv: string[]): Promise<number> {
   process.stdout.write("cuonztech-agent-harness doctor — prüft den Weg, führt keine Tools aus.\n\n");
+  if (argv.includes("--help") || argv.includes("-h")) {
+    process.stdout.write(
+      "Nutzung: doctor --upstream-command <cmd> [--upstream-arg <arg> ...] [--upstream-cwd <dir>] [--write-tools a,b] [--read-tools a,b] [--report-file <datei>]\n\n" +
+        "Startet deinen MCP-Server, fragt nur initialize und tools/list ab und prüft Node-Version, Start-Datei, Tool-Einordnung und Report-Pfad.\n" +
+        "Es wird nie ein Tool ausgeführt. Optionen wie beim Proxy.\n",
+    );
+    return 0;
+  }
   const parsed = parseDoctorArgs(argv);
 
+  if (parsed.empty.length > 0) {
+    process.stdout.write(`Option(en) ohne Wert: ${[...new Set(parsed.empty)].join(" ")}\n`);
+    return 1;
+  }
   if (parsed.unknown.length > 0) {
     process.stdout.write(`Unbekannte Option(en): ${parsed.unknown.join(" ")}\n`);
     process.stdout.write("Nutzung: doctor --upstream-command <cmd> [--upstream-arg <arg> ...] [--upstream-cwd <dir>] [--write-tools a,b] [--read-tools a,b] [--report-file <datei>]\n");

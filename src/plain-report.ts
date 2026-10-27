@@ -1,8 +1,8 @@
 // `report` — macht aus der --report-file des Proxys eine Seite in Klartext, die
 // ein Mensch ohne Fachwissen lesen kann: Ergebnis, was getestet wurde, was der
 // Agent getan hat, was zu tun ist und was dieser Test NICHT aussagt.
-import { readFile, writeFile, stat } from "node:fs/promises";
-import { extname } from "node:path";
+import { readFile, writeFile, stat, realpath } from "node:fs/promises";
+import { extname, resolve } from "node:path";
 import type { AuditReport, OperationOutcome } from "./core/report-generator.js";
 
 export interface ReportFile {
@@ -13,7 +13,7 @@ export interface ReportFile {
   startupError?: string;
   report?: AuditReport;
   score?: {
-    overall: number;
+    overall: number | null;
     duplicateSafety: number;
     failureHandling: number | string;
     capped: boolean;
@@ -134,7 +134,11 @@ export function renderMarkdown(file: ReportFile): string {
 
     if (file.score) {
       lines.push("## Kennzahl", "");
-      lines.push(`Resilience Score: **${file.score.overall} / 100**${file.score.capped ? " (wegen eines Verstosses auf 49 gedeckelt)" : ""}.`);
+      if (file.score.overall === null || file.score.overall === undefined) {
+        lines.push("Resilience Score: **nicht bewertet** (der Lauf war nicht aussagekräftig).");
+      } else {
+        lines.push(`Resilience Score: **${file.score.overall} / 100**${file.score.capped ? " (wegen eines Verstosses auf 49 gedeckelt)" : ""}.`);
+      }
       lines.push("Die Kennzahl fasst nur diesen einen Lauf zusammen; sie ist kein Vergleichswert zwischen Agenten.", "");
     }
 
@@ -245,7 +249,29 @@ export function renderHtml(file: ReportFile): string {
   ].join("\n");
 }
 
+const REPORT_USAGE = "Usage: report <report-file> [--format md|html] [--out <file>]\n";
+// Both renderings carry this heading/title; it marks a file that an earlier
+// `report` run wrote and that may be replaced.
+const OWN_OUTPUT_MARKER = "Ergebnis des Agent-Tests";
+
+async function mayReplaceOutput(path: string): Promise<boolean> {
+  const info = await stat(path).catch(() => null);
+  if (!info) return true;
+  if (!info.isFile() || info.size > 4 * 1024 * 1024) return false;
+  return (await readFile(path, "utf8").catch(() => "")).slice(0, 4096).includes(OWN_OUTPUT_MARKER);
+}
+
 export async function runReportMode(argv: string[]): Promise<number> {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    process.stdout.write(
+      "report <report-file> [--format md|html] [--out <file>]\n\n" +
+        "Turns the file written by the proxy's --report-file into a plain-language page (German).\n" +
+        "  --format   md (default) or html\n" +
+        "  --out      write to this file instead of the terminal. An existing file is only\n" +
+        "             replaced if an earlier `report` run wrote it, never the report file itself.\n",
+    );
+    return 0;
+  }
   let file: string | undefined;
   let format: "md" | "html" | undefined;
   let outPath: string | undefined;
@@ -259,9 +285,14 @@ export async function runReportMode(argv: string[]): Promise<number> {
       }
       format = v;
     } else if (token === "--out") {
-      outPath = argv[++i];
+      const v = argv[++i];
+      if (v === undefined || v.startsWith("--") || v.trim() === "") {
+        process.stderr.write(`Error: --out needs a file name.\n${REPORT_USAGE}`);
+        return 1;
+      }
+      outPath = v;
     } else if (token.startsWith("--")) {
-      process.stderr.write(`Error: unknown option ${token}\nUsage: report <report-file> [--format md|html] [--out <file>]\n`);
+      process.stderr.write(`Error: unknown option ${token}\n${REPORT_USAGE}`);
       return 1;
     } else if (file === undefined) {
       file = token;
@@ -286,10 +317,48 @@ export async function runReportMode(argv: string[]): Promise<number> {
     process.stderr.write(`Error: ${file} is not valid JSON. It may still be written; try again after the proxy has exited.\n`);
     return 1;
   }
-  const chosen = format ?? (outPath && extname(outPath).toLowerCase() === ".html" ? "html" : "md");
+  // Not a proxy report at all (a benchmark result, some other JSON): say so
+  // instead of claiming that the run has not produced a result yet.
+  if (
+    parsed === null ||
+    typeof parsed !== "object" ||
+    (typeof parsed.harnessVersion !== "string" && parsed.report === undefined)
+  ) {
+    process.stderr.write(
+      `Error: ${file} is not a report written by the proxy (--report-file). ` +
+        "The benchmark result and the audit-report.json of the demo server are different files.\n",
+    );
+    return 1;
+  }
+  const outExt = outPath ? extname(outPath).toLowerCase() : "";
+  if (format === "html" && [".md", ".markdown"].includes(outExt)) {
+    process.stderr.write(`Error: --format html does not fit the file name ${outPath}. Use .html or drop --format.\n`);
+    return 1;
+  }
+  if (format === "md" && [".html", ".htm"].includes(outExt)) {
+    process.stderr.write(`Error: --format md does not fit the file name ${outPath}. Use .md or drop --format.\n`);
+    return 1;
+  }
+  const chosen = format ?? (outExt === ".html" || outExt === ".htm" ? "html" : "md");
   const text = chosen === "html" ? renderHtml(parsed) : renderMarkdown(parsed);
   if (outPath) {
-    await writeFile(outPath, text, "utf8");
+    const real = async (p: string): Promise<string> => realpath(p).catch(() => resolve(p));
+    if ((await real(outPath)) === (await real(file))) {
+      process.stderr.write(`Error: --out ${outPath} is the report file itself. Writing there would replace the measurement. Choose another file.\n`);
+      return 1;
+    }
+    if (!(await mayReplaceOutput(outPath))) {
+      process.stderr.write(`Error: ${outPath} already exists and was not written by 'report'. Refusing to overwrite it. Choose another file name.\n`);
+      return 1;
+    }
+    try {
+      await writeFile(outPath, text, "utf8");
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      const why = code === "ENOENT" ? "the folder does not exist" : code === "EISDIR" ? "it is a folder, not a file" : (err as Error).message;
+      process.stderr.write(`Error: cannot write ${outPath}: ${why}.\n`);
+      return 1;
+    }
     process.stdout.write(`Bericht geschrieben: ${outPath}\n`);
   } else {
     process.stdout.write(text);

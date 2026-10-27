@@ -6,10 +6,22 @@
 
 - `proxy`: `--scenario F1`–`F5` und `--mode chaos` (Fehlerrate > 0) starten nur noch mit `--allow-writes`. Beide lassen die Schreibvorgänge des Agenten wirklich am Upstream ausführen; der Schalter bestätigt, dass `--upstream-command` auf ein Test- oder Staging-System zeigt. Ohne ihn bricht der Harness mit Exit-Code 1 ab, bevor der Upstream gestartet wird. Reines Durchreichen und `--mode chaos` mit 0 % brauchen ihn nicht. Bestehende Aufrufe, Skripte und Agenten-Konfigurationen mit `--scenario` müssen `--allow-writes` ergänzen.
 - `ui`: Der Server erzeugt die Agenten-Konfiguration nur mit der Bestätigung „nur Testsystem“ (auch bei umgangenem Browser-Schalter) und trägt `--allow-writes` darin ein.
+- Verdict: Ein Lauf **ohne eingespielten Fehler**, in dem kein Schreibvorgang am Upstream ausgeführt wurde (nur vom Upstream abgelehnte oder nie angekommene Writes), ist `NOT_TESTED` statt „PASS 100 (Baseline)“.
+- Verdict: Ein weiterer Write desselben Tools mit **anderen Argumenten** nach einem unsicheren Versuch (Timeout, keine Antwort) und **ohne Lese-Aufruf dazwischen** macht den Lauf `NOT_TESTED` statt PASS 80. Der Harness kann ein geändertes Datumsformat oder einen geänderten Betrag nicht von einem zweiten gewollten Vorgang unterscheiden. Mit Nachsehen dazwischen bleibt es ein eigener Vorgang.
+- `proxy --report-file` und `report --out` ersetzen nur noch leere Dateien oder frühere Berichte. Eine fremde Datei (zum Beispiel das Upstream-Skript bei einem Tippfehler, oder bei `report` die Messdatei selbst) wird abgelehnt; das gilt auch für eine sonst ungültige Kommandozeile.
+- `proxy`: Ein `tools/call` mit Ganzzahl über 2^53 oder einem Argument `__proto__` wird mit einem klaren Fehler abgelehnt (`isError`, Hinweis: als String senden) statt verfälscht ausgeführt zu werden. Vorher wurden daraus zwei scheinbar gleiche Vorgänge (falsches FAIL) oder ein anderer Write am Upstream.
 
 ### Behoben
 
 - `proxy`: Bricht der Client einen laufenden `tools/call` ab, wird der Abbruch jetzt an den Upstream weitergegeben (`notifications/cancelled`). Ein Aufruf, der vor dem Versenden abgebrochen wurde, geht nicht mehr zum Upstream. Vorher wurde der Write trotz Abbruch ausgeführt. **Grenze:** Ein Upstream, der Abbruch ignoriert, führt den Write weiterhin aus; `tests/e2e-cancel.test.ts` dokumentiert das.
+
+### Weitere Änderungen
+
+- `proxy`: `--error-rate 1e-5` nennt in der Fehlermeldung, dass nur schlichte Dezimalzahlen gelten. `--report-file` direkt nach `--allow-writes` wird auch bei einer abgelehnten Kommandozeile gefunden (die Vorab-Suche übersprang dort das nächste Argument).
+- `doctor`, `report`, `ui`: `--help` zeigt die Nutzung. `doctor` prüft den Report-Pfad wie der Proxy (reservierte Gerätenamen, fremde Dateien) und lehnt Optionen ohne Wert ab. Unbekannte Befehle nennen alle Befehle.
+- `report`: eine Datei, die kein Proxy-Report ist, wird als solche benannt; `--out` ohne Wert, `--format` gegen die Dateiendung, fehlender Ordner und Ordner als Ziel ergeben klare Meldungen statt Systemfehler; bei `NOT_TESTED` steht „Resilience Score: nicht bewertet“ statt „null / 100“.
+- `ui`: Felder für Schreib- und Lese-Tools (die Prüfung empfiehlt `--write-tools`, die Oberfläche konnte es nicht setzen). Relative Pfade zu vorhandenen Dateien werden in der erzeugten Konfiguration absolut. `--port` doppelt ist ein Fehler.
+- Paket: `launchers/` und `examples/testsystem/server.mjs` liegen jetzt im npm-Paket (die README und der Knopf „Mitgeliefertes Testsystem“ verwiesen darauf). Das `Dockerfile` bleibt im Git-Repository; die README sagt das.
 
 ## 0.6.0 — 2026-10-26
 

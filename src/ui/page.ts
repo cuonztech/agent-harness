@@ -82,6 +82,11 @@ code{background:rgba(127,127,127,.15);padding:.1rem .3rem;border-radius:4px}
 <p class="hint">Der vollständige Pfad zur Datei. Leerzeichen im Pfad sind in Ordnung.</p>
 <label for="extra">Weitere Argumente (nur wenn nötig)</label>
 <input type="text" id="extra" placeholder="meist leer">
+<label for="writeTools">Tools, die schreiben (nur wenn die Prüfung Tools nicht einordnen kann)</label>
+<input type="text" id="writeTools" placeholder="meist leer, sonst z. B. buche_*, lege_an_*">
+<label for="readTools">Tools, die nur lesen (nur wenn nötig)</label>
+<input type="text" id="readTools" placeholder="meist leer, sonst z. B. zeige_*">
+<p class="hint">Mehrere Namen mit Komma trennen; * steht für beliebigen Text. Gibst du Schreib-Tools an, ersetzt das die eingebaute Namensliste.</p>
 <p><button id="useBundled" class="secondary" hidden>Mitgeliefertes Testsystem verwenden</button></p>
 <p><button id="check">Prüfen</button></p>
 <ul class="checks" id="checks"></ul>
@@ -167,7 +172,8 @@ code{background:rgba(127,127,127,.15);padding:.1rem .3rem;border-radius:4px}
     var list = $("checks"); list.textContent = ""; $("tools").textContent = ""; $("go3").hidden = true; ready = null;
     var args = currentArgs();
     $("check").disabled = true;
-    api("/api/doctor", { command: $("cmd").value.trim(), args: args }).then(function (r) {
+    var toolFields = { writeTools: $("writeTools").value.trim(), readTools: $("readTools").value.trim() };
+    api("/api/doctor", Object.assign({ command: $("cmd").value.trim(), args: args }, toolFields)).then(function (r) {
       r.checks.forEach(function (c) {
         var li = document.createElement("li"); li.className = c.ok ? "ok" : "err";
         li.appendChild(document.createTextNode(c.label));
@@ -175,7 +181,7 @@ code{background:rgba(127,127,127,.15);padding:.1rem .3rem;border-radius:4px}
         list.appendChild(li);
       });
       if (r.toolLines.length) { $("tools").textContent = "Erkannte Tools: " + r.toolLines.map(function (t) { return t.trim().replace(/\\s+/g, " "); }).join("; "); }
-      if (r.ok) { ready = { command: $("cmd").value.trim(), args: args }; $("go3").hidden = false; }
+      if (r.ok) { ready = Object.assign({ command: $("cmd").value.trim(), args: args }, toolFields); $("go3").hidden = false; }
     }).catch(function (e) { var li = document.createElement("li"); li.className = "err"; li.textContent = e.message; list.appendChild(li); })
       .then(function () { $("check").disabled = false; });
   });

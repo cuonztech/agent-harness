@@ -50,6 +50,7 @@ describe("CLI `benchmark` mode (real process)", () => {
     [["benchmark", "F1"], 'unexpected argument "F1"'],
     [["benchmark", "--runs"], "needs a value"],
     [["benchmak"], 'unknown command "benchmak"'],
+    [["bogus"], "Commands: benchmark, proxy, doctor, report, ui"],
   ])("rejects %j instead of silently ignoring it", (argv, message) => {
     const { stderr, status } = runCli(argv);
     expect(status).toBe(1);

@@ -63,6 +63,30 @@ describe("doctor (real process)", () => {
     expect(code).toBe(1);
   }, 40_000);
 
+  it("--help shows the usage", async () => {
+    const { stdout, code } = await runDoctor(["--help"]);
+    expect(stdout).toContain("Nutzung: doctor");
+    expect(code).toBe(0);
+  }, 40_000);
+
+  it("rejects an option without a value, like the proxy does", async () => {
+    const { stdout, code } = await runDoctor(["--upstream-command", process.execPath, "--write-tools", ""]);
+    expect(stdout).toContain("ohne Wert: --write-tools");
+    expect(code).toBe(1);
+  }, 40_000);
+
+  it("fails a --report-file that exists and is not an earlier harness report", async () => {
+    const { stdout, code } = await runDoctor([
+      "--upstream-command", process.execPath, "--upstream-arg", FIXTURE,
+      "--write-tools", "write*,create_*,apply_*,mutate_ledger,crash_now",
+      "--read-tools", "get_*,read_*,compute_*",
+      "--report-file", FIXTURE,
+    ]);
+    expect(stdout).toContain("FEHLER  Report-Datei");
+    expect(stdout).toContain("Refusing to overwrite");
+    expect(code).toBe(1);
+  }, 40_000);
+
   it("rejects unknown options with usage instead of ignoring them", async () => {
     const { stdout, code } = await runDoctor(["--upstream-comand", "node"]);
     expect(stdout).toContain("Unbekannte Option(en): --upstream-comand");

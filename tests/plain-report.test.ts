@@ -138,7 +138,7 @@ describe("report (Klartext-Bericht)", () => {
 
   it("Startfehler: nennt den Grund", async () => {
     const file = join(dir, "startup-error.json");
-    await writeFile(file, JSON.stringify({ verdict: "NOT_TESTED", startupError: "upstream script not found" }));
+    await writeFile(file, JSON.stringify({ harnessVersion: "0.0.0", verdict: "NOT_TESTED", startupError: "upstream script not found" }));
     const { out } = await runReport([file]);
     expect(out).toContain("upstream script not found");
     expect(out).toContain("Kein Ergebnis");
@@ -161,5 +161,59 @@ describe("report (Klartext-Bericht)", () => {
 
     const none = await runReport([]);
     expect(none.code).toBe(1);
+  }, 30_000);
+
+  it("--help zeigt die Nutzung", async () => {
+    const { out, code } = await runReport(["--help"]);
+    expect(code).toBe(0);
+    expect(out).toContain("report <report-file>");
+  }, 20_000);
+
+  it("eine fremde JSON-Datei ist kein Bericht und wird als solche benannt", async () => {
+    const foreign = join(dir, "benchmark-report.json");
+    await writeFile(foreign, JSON.stringify({ scenarios: ["F1"], careful: { score: 100 } }));
+    const { err, code } = await runReport([foreign]);
+    expect(code).toBe(1);
+    expect(err).toContain("is not a report written by the proxy");
+  }, 20_000);
+
+  it("--out überschreibt nie die Messung selbst oder fremde Dateien, wohl aber den eigenen früheren Bericht", async () => {
+    const copy = join(dir, "copy.json");
+    await writeFile(copy, await readFile(failReport, "utf8"));
+    const same = await runReport([copy, "--out", copy]);
+    expect(same.code).toBe(1);
+    expect(same.err).toContain("is the report file itself");
+    expect(JSON.parse(await readFile(copy, "utf8")).harnessVersion).toBeTruthy();
+
+    const foreign = join(dir, "keep.txt");
+    await writeFile(foreign, "wichtig");
+    const refused = await runReport([failReport, "--out", foreign]);
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain("Refusing to overwrite");
+    expect(await readFile(foreign, "utf8")).toBe("wichtig");
+
+    const mine = join(dir, "mein-bericht.md");
+    expect((await runReport([failReport, "--out", mine])).code).toBe(0);
+    expect((await runReport([passReport, "--out", mine])).code).toBe(0);
+    expect(await readFile(mine, "utf8")).toContain("Bestanden (PASS)");
+  }, 30_000);
+
+  it("--out ohne Wert, falsches Format zur Endung, fehlender Ordner und Ordner als Ziel enden mit klarer Meldung", async () => {
+    const noValue = await runReport([failReport, "--out"]);
+    expect(noValue.code).toBe(1);
+    expect(noValue.err).toContain("--out needs a file name");
+
+    const wrong = await runReport([failReport, "--format", "html", "--out", join(dir, "x.md")]);
+    expect(wrong.code).toBe(1);
+    expect(wrong.err).toContain("does not fit the file name");
+
+    const noDir = await runReport([failReport, "--out", join(dir, "nope", "x.md")]);
+    expect(noDir.code).toBe(1);
+    expect(noDir.err).toContain("the folder does not exist");
+    expect(noDir.err).not.toContain("ENOENT");
+
+    const asDir = await runReport([failReport, "--out", dir]);
+    expect(asDir.code).toBe(1);
+    expect(asDir.err).not.toContain("EISDIR");
   }, 30_000);
 });

@@ -131,6 +131,41 @@ describe("Demo", () => {
   }, 30_000);
 });
 
+describe("Konfiguration: Tool-Einordnung und Pfade", () => {
+  it("reicht Schreib-/Lese-Tools durch und macht relative Pfade zu vorhandenen Dateien absolut", async () => {
+    const rel = "tests/fixtures/upstream-fixture-server.mjs";
+    const { status, json } = await api("/api/config", {
+      command: "node",
+      args: [rel],
+      writeTools: "mutate_*, crash_now",
+      readTools: "compute_*",
+      confirmedTestsystem: true,
+    });
+    expect(status).toBe(200);
+    expect(json.claudeCode).toContain("--write-tools");
+    expect(json.claudeCode).toContain("mutate_*,crash_now");
+    expect(json.claudeCode).toContain("--read-tools");
+    expect(json.claudeCode).toContain(resolve(rel));
+    const desktop = JSON.parse(json.claudeDesktop) as { mcpServers: Record<string, { args: string[] }> };
+    const args = desktop.mcpServers["agent-harness"]!.args;
+    expect(args).not.toContain(rel);
+    expect(args).toContain(resolve(rel));
+    expect(args[args.indexOf("--write-tools") + 1]).toBe("mutate_*,crash_now");
+  });
+
+  it("die Prüfung nutzt die angegebenen Tool-Namen", async () => {
+    const without = await api("/api/doctor", { command: "node", args: [FIXTURE] });
+    expect(without.json.ok).toBe(false);
+    const withNames = await api("/api/doctor", {
+      command: "node",
+      args: [FIXTURE],
+      writeTools: "write*,create_*,apply_*,mutate_ledger,crash_now",
+      readTools: "get_*,read_*,compute_*",
+    });
+    expect(withNames.json.ok).toBe(true);
+  }, 40_000);
+});
+
 describe("Bestätigung „nur Testsystem“", () => {
   it("erzeugt ohne Bestätigung keine Konfiguration, auch wenn der Browser-Schalter umgangen wird", async () => {
     for (const body of [{ command: "node", args: [BUNDLED] }, { command: "node", args: [BUNDLED], confirmedTestsystem: "true" }]) {
@@ -183,4 +218,27 @@ describe("Ganzer Weg: Konfiguration der Oberfläche → Agent → Bericht", () =
     expect(existsSync(join(dirname(cfg.reportFile), "bookings.json"))).toBe(true);
     expect(existsSync(resolve("examples/testsystem/bookings.json"))).toBe(false);
   }, 60_000);
+});
+
+describe("ui Kommandozeile", () => {
+  const run = (args: string[]): Promise<{ out: string; code: number | null }> =>
+    new Promise((ok) => {
+      const p = spawn(process.execPath, ["dist/index.js", "ui", ...args]);
+      let out = "";
+      p.stdout.on("data", (d) => (out += d.toString()));
+      p.stderr.on("data", (d) => (out += d.toString()));
+      p.on("exit", (code) => ok({ out, code }));
+    });
+
+  it("--help zeigt die Nutzung und startet keinen Server", async () => {
+    const { out, code } = await run(["--help"]);
+    expect(code).toBe(0);
+    expect(out).toContain("Nutzung: ui");
+  }, 20_000);
+
+  it("--port zweimal ist ein Fehler, wie beim Proxy", async () => {
+    const { out, code } = await run(["--port", "1", "--port", "2"]);
+    expect(code).toBe(1);
+    expect(out).toContain("--port was given more than once");
+  }, 20_000);
 });

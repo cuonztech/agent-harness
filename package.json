@@ -45,6 +45,8 @@
   },
   "files": [
     "dist/**/*.js",
+    "launchers",
+    "examples/testsystem/server.mjs",
     "README.md",
     "LICENSE",
     "server.json"

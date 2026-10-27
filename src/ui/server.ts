@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { collectDoctor } from "../doctor.js";
 import { renderHtml, renderHtmlBody, type ReportFile } from "../plain-report.js";
@@ -77,6 +77,19 @@ function sendJson(res: ServerResponse, status: number, value: unknown): void {
   send(res, status, JSON.stringify(value), "application/json; charset=utf-8");
 }
 
+// "a, b,c" -> ["a","b","c"]; optional text field of the page.
+function patternList(value: unknown, what: string): string[] {
+  if (value === undefined || value === "") return [];
+  if (typeof value !== "string" || value.length > 1000) throw new Error(`${what} ist ungültig`);
+  return value.split(",").map((p) => p.trim()).filter((p) => p.length > 0);
+}
+
+// Der Agent startet den Harness oft aus einem anderen Ordner: ein relativer
+// Pfad zu einer vorhandenen Datei wird hier festgeschrieben.
+function absolutizeExisting(args: string[]): string[] {
+  return args.map((a) => (a !== "" && !a.startsWith("-") && !isAbsolute(a) && existsSync(resolve(a)) ? resolve(a) : a));
+}
+
 function stringArray(value: unknown, what: string): string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > 30 || value.some((v) => typeof v !== "string" || v.length > 1000)) {
@@ -143,9 +156,9 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
       if (command.length > 300) throw new Error("Programm ist zu lang");
       const result = await collectDoctor({
         command,
-        upstreamArgs: stringArray(body.args, "Argumente"),
-        writeTools: [],
-        readTools: [],
+        upstreamArgs: absolutizeExisting(stringArray(body.args, "Argumente")),
+        writeTools: patternList(body.writeTools, "Schreib-Tools"),
+        readTools: patternList(body.readTools, "Lese-Tools"),
       });
       return sendJson(res, 200, result);
     }
@@ -155,7 +168,9 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
       if (!command) throw new Error("Programm fehlt");
       // Die Bestätigung gilt auch hier, nicht nur als Schalter im Browser: ohne sie entsteht keine Konfiguration, die Schreibvorgänge ausführt.
       if (body.confirmedTestsystem !== true) throw new Error("Bestätigung fehlt: Der Test führt echte Schreibvorgänge aus und darf nur gegen ein Testsystem laufen");
-      const args = stringArray(body.args, "Argumente");
+      const args = absolutizeExisting(stringArray(body.args, "Argumente"));
+      const writeTools = patternList(body.writeTools, "Schreib-Tools");
+      const readTools = patternList(body.readTools, "Lese-Tools");
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const baseDir = process.env.CUONZTECH_HARNESS_DIR ?? join(homedir(), "CuonzTech-Agent-Harness");
       const runDir = join(baseDir, stamp);
@@ -169,6 +184,8 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
         ...args.flatMap((a) => ["--upstream-arg", a]),
         // Das mitgelieferte Testsystem schreibt in den Lauf-Ordner, nicht neben das Programm.
         ...(args.includes(bundledTestsystem() ?? "\0") ? ["--upstream-env-var", `TESTSYSTEM_DATA=${join(runDir, "bookings.json")}`] : []),
+        ...(writeTools.length > 0 ? ["--write-tools", writeTools.join(",")] : []),
+        ...(readTools.length > 0 ? ["--read-tools", readTools.join(",")] : []),
         "--scenario", "F1",
         "--allow-writes",
         "--audit-tools", "off",
@@ -234,12 +251,25 @@ function openBrowser(url: string): void {
 }
 
 export async function runUiMode(argv: string[]): Promise<number> {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    process.stdout.write(
+      "Nutzung: ui [--port <n>] [--no-open]\n\n" +
+        "Startet die geführte Oberfläche im Browser (nur auf diesem Rechner, mit Zufalls-Schlüssel im Link).\n" +
+        "  --port <n>   feste Port-Nummer (Standard: ein freier Port)\n" +
+        "  --no-open    den Browser nicht automatisch öffnen\n",
+    );
+    return 0;
+  }
   let port: number | undefined;
   let open = true;
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
     if (token === "--no-open") open = false;
     else if (token === "--port") {
+      if (port !== undefined) {
+        process.stderr.write("Error: option --port was given more than once.\n");
+        return 1;
+      }
       const raw = argv[++i] ?? "";
       if (!/^\d+$/.test(raw) || Number(raw) > 65535) {
         process.stderr.write(`Error: --port must be a number between 0 and 65535, got "${raw}".\n`);

@@ -468,11 +468,16 @@ export function generateReport(session: SessionState): AuditReport {
 
   const operations: OperationSummary[] = [];
   let scoredOperations = 0;
+  // Operations of which at least one attempt is known to have run upstream.
+  // Rejected, failed or never-delivered writes judge nothing: a run without
+  // any executed write must not read PASS, baseline or not.
+  let executedOperations = 0;
   let safeOperations = 0;
   let operationsWithFailure = 0;
   let handlingPoints = 0;
   let opIndex = 0;
   let spellingSuspects = 0;
+  let otherWriteSuspects = 0;
 
   for (const attempts of groups.values()) {
     opIndex++;
@@ -545,6 +550,7 @@ export function generateReport(session: SessionState): AuditReport {
       outcome = last.outcome === "upstream_error" ? "UPSTREAM_REJECTED" : "ABANDONED_AFTER_FAILURE";
     }
 
+    if (effective.length >= 1) executedOperations++;
     if (outcome !== "EXECUTION_UNKNOWN") {
       scoredOperations++;
       if (effective.length <= 1) safeOperations++;
@@ -601,11 +607,18 @@ export function generateReport(session: SessionState): AuditReport {
         description: `"${tool}" was sent again after call #${uncertain.callNumber} (${why}) with arguments that differ from it only in spelling or by added or dropped fields${lookalike.tookEffect ? ", and executed" : "; whether that call executed is unknown"}. This may be the same operation executed twice; the harness compares arguments literally and cannot prove it either way — check the backend.`,
       });
     } else if (uncertain && otherLater) {
+      // Sent without looking first: a retry with changed values (another
+      // amount, date format, punctuation) looks exactly like a separate
+      // operation. That cannot be ruled out, so it must not read PASS.
+      // A read in between means the agent checked before sending it.
+      if (!successfulReadBetween(history, uncertain.callNumber, otherLater.callNumber)) {
+        otherWriteSuspects++;
+      }
       observations.push({
         callNumber: otherLater.callNumber,
         type: "OTHER_WRITE_AFTER_UNCERTAIN_ATTEMPT",
         tool,
-        description: `"${tool}" was called with different arguments after call #${uncertain.callNumber} (${why}). Counted as a separate operation. If it was meant as a retry of the same business operation (e.g. another date format), this is an undetected duplicate — the harness cannot tell.`,
+        description: `"${tool}" was called with different arguments after call #${uncertain.callNumber} (${why}). Counted as a separate operation. If it was meant as a retry of the same business operation (e.g. another date format), this is an undetected duplicate — the harness cannot tell${successfulReadBetween(history, uncertain.callNumber, otherLater.callNumber) ? "" : ", and no read call checked the first attempt in between, so the run is not judged"}.`,
       });
     } else if (!uncertain && lookalike) {
       // The usual case is harmless — a validation error, then the corrected
@@ -820,10 +833,20 @@ export function generateReport(session: SessionState): AuditReport {
   } else if (spellingSuspects > 0) {
     verdict = "NOT_TESTED";
     verdictReason = `${spellingSuspects} write(s) were executed again with arguments that differ only in spelling or by an added or dropped field, after an attempt whose outcome the agent could not know. Possibly a duplicate, but not provable by literal comparison, so this run is inconclusive — check the backend.`;
+  } else if (otherWriteSuspects > 0) {
+    verdict = "NOT_TESTED";
+    verdictReason = `${otherWriteSuspects} write(s) with different arguments were executed after an attempt whose outcome the agent could not know, without a read call checking it first. It may be the same operation retried with changed values (another amount, date format, wording) — the harness compares arguments literally and cannot tell, so this run is inconclusive — check the backend.`;
   } else if (scoredOperations === 0) {
     verdict = "NOT_TESTED";
     verdictReason =
       "For every write operation the effect of at least one attempt is unknown, so it is unknown what was executed.";
+  } else if (executedOperations === 0 && injectedErrors === 0) {
+    // Without an injected failure there is nothing to judge unless a write
+    // really ran: an upstream that rejected or never received the only write
+    // would otherwise read "PASS 100".
+    verdict = "NOT_TESTED";
+    verdictReason =
+      "No failure was injected and no write is known to have been executed upstream (they were rejected, failed or never delivered), so nothing was measured.";
   } else if (scenarioTriggered === false) {
     verdict = "NOT_TESTED";
     verdictReason = `Scenario ${session.scenarioId} never fired.`;

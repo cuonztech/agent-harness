@@ -10,6 +10,7 @@ import { generateReport } from "./core/report-generator.js";
 import { ProxyInterceptor } from "./proxy/interceptor.js";
 import { runDoctor } from "./doctor.js";
 import { runReportMode } from "./plain-report.js";
+import { isReplaceableReportFile, isReservedFileName, notReplaceableMessage } from "./report-file-guard.js";
 import { runUiMode } from "./ui/server.js";
 import { createProxyServer, findToolNameCollisions } from "./proxy/gateway.js";
 import { getScenarioById, ALL_SCENARIOS } from "./scenarios/f1-f5.js";
@@ -268,24 +269,6 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-// Windows device names: writing to "NUL" or "CON" as a relative path can
-// create a real file of that name (or block on a device).
-// Checked for every path segment ("C:\\NUL\\x.json" creates a directory
-// called NUL), and a ":" after the drive letter is refused as well (it
-// addresses an alternate data stream and leaves an empty file behind).
-function isReservedFileName(path: string): boolean {
-  if (process.platform !== "win32") return false;
-  // "\\?\C:\dir\file" is an ordinary long-path spelling.
-  const withoutDrive = path.replace(/^\\\\\?\\/, "").replace(/^[a-zA-Z]:/, "");
-  if (withoutDrive.includes(":")) return true;
-  // Windows drops a trailing dot or space from a name; the file would not
-  // be the one that was asked for.
-  if (/[. ]$/.test(withoutDrive)) return true;
-  return withoutDrive
-    .split(/[\\/]+/)
-    .some((segment) => /^(nul|con|prn|aux|com[1-9]|lpt[1-9])(\..*)?$/i.test(segment));
-}
-
 // Best-effort lookup of --report-file before the full parse, so a command
 // line that is rejected by the parser still updates that file.
 // Walks the arguments the way the parser does, so that the VALUE of another
@@ -299,7 +282,8 @@ function peekReportFile(argv: string[], spec: Record<string, FlagKind>): string 
       // Followed by another option: there is no path (the parser rejects it).
       return value === undefined || value.startsWith("--") ? null : value;
     }
-    if (spec[token]) i++;
+    // A switch (--allow-writes) takes no value: the next token is not one.
+    if (spec[token] && spec[token] !== "boolean") i++;
   }
   return null;
 }
@@ -337,7 +321,7 @@ async function main(): Promise<void> {
     server.server.onclose = () => process.exit(0);
     await startStdio(server);
   } else {
-    fail(`unknown command "${mode}". Commands: benchmark, proxy, --help (no command = MCP server).`);
+    fail(`unknown command "${mode}". Commands: benchmark, proxy, doctor, report, ui, --help (no command = MCP server).`);
   }
 }
 
@@ -376,7 +360,7 @@ async function runProxyMode(argv: string[]): Promise<void> {
     return;
   }
   const peeked = peekReportFile(argv, PROXY_FLAGS);
-  if (peeked && peeked.trim() !== "" && !isReservedFileName(peeked)) {
+  if (peeked && peeked.trim() !== "" && !isReservedFileName(peeked) && isReplaceableReportFile(peeked)) {
     startupReportFile = peeked;
   }
   if ("error" in parsed) fail(parsed.error);
@@ -422,7 +406,7 @@ async function runProxyMode(argv: string[]): Promise<void> {
   let errorRate = 0.0;
   if (errorRateRaw !== undefined) {
     if (!/^(\d+(\.\d+)?|\.\d+)$/.test(errorRateRaw) || Number(errorRateRaw) > 1) {
-      fail(`--error-rate must be a number between 0 and 1, got "${errorRateRaw}".`);
+      fail(`--error-rate must be a plain decimal number between 0 and 1 (like 0.2; no exponent such as 1e-5), got "${errorRateRaw}".`);
     }
     if (chaosMode !== "chaos") {
       fail("--error-rate only has an effect together with --mode chaos.");
@@ -497,6 +481,9 @@ async function runProxyMode(argv: string[]): Promise<void> {
       );
     }
     const info = await stat(reportFile).catch(() => null);
+    if (info?.isFile() && !isReplaceableReportFile(reportFile)) {
+      fail(notReplaceableMessage("--report-file", reportFile));
+    }
     if (info?.isDirectory()) {
       fail(`--report-file "${reportFile}" is a directory, not a file.`);
     }
@@ -843,7 +830,7 @@ async function runProxyMode(argv: string[]): Promise<void> {
     log("The connection to the client was closed (stdin ended, or a message was too large for the MCP transport). Shutting down.");
     void shutdown();
   };
-  await startStdio(server);
+  await startStdio(server, { log });
 }
 
 const BENCHMARK_FLAGS: Record<string, FlagKind> = {
