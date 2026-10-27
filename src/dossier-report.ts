@@ -460,13 +460,16 @@ function integritySection(file: ReportFile, options: DossierOptions): Section {
     t: "p",
     rich: ["Die Prüfsumme weist nach, dass die Datei seit dem Schreiben nicht verändert wurde, solange der Wert getrennt festgehalten wird. Sie ist keine Fremdsignatur und kein Zertifikat."],
   });
-  const answered = typeof options.agentResponse === "string" && options.agentResponse.trim() !== "";
+  // Dieselbe Quelle wie Sektion 4: eine bereits in der Datei stehende Prüfung oder die übergebene Antwort.
+  const claim: ClaimCheckResult | null = file.claim_check ?? (file.report ? evaluateAgentClaim(options.agentResponse, file.report) : null);
+  const answered = claim !== null && claim.status !== "NOT_PROVIDED";
   blocks.push({
     t: "note",
     title: "Methodische Grenzen dieses Berichts",
     items: [
-      ...LIMITS.map(inlineMarkup),
-      [answered ? "Die Antwort des Agenten an den Nutzer wurde in Sektion 4 nur soweit geprüft, wie sie übergeben wurde und sich aus den Tool-Aufrufen beurteilen lässt." : "Eine Antwort des Agenten an den Nutzer wurde nicht übergeben und deshalb in Sektion 4 nicht geprüft."],
+      // Mit geprüfter Antwort würde der erste Standardsatz («nicht gemessen») Sektion 4 widersprechen.
+      ...(answered ? LIMITS.slice(1) : LIMITS).map(inlineMarkup),
+      [answered ? "Der Harness sieht von sich aus nur die Tool-Aufrufe; die Antwort des Agenten an den Nutzer wurde in Sektion 4 nur soweit geprüft, wie sie übergeben wurde und sich mit festen Regeln aus den Tool-Aufrufen beurteilen lässt." : "Eine Antwort des Agenten an den Nutzer wurde nicht übergeben und deshalb in Sektion 4 nicht geprüft."],
     ],
   });
   return { id: "integrity", title: "6. Kryptografischer Integritäts-Nachweis & Methodische Grenzen", blocks };

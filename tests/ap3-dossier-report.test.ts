@@ -17,6 +17,7 @@ import { buildCallForensics } from "../src/core/call-forensics.js";
 import { computeReportIntegrity } from "../src/core/artifact-integrity.js";
 import { renderDossierHtml, renderDossierMarkdown } from "../src/dossier-report.js";
 import { renderMarkdown, type ReportFile } from "../src/plain-report.js";
+import { evaluateAgentClaim } from "../src/core/claim-check.js";
 
 const ESZETT = String.fromCharCode(0xdf);
 const T0 = 1_700_000_000_000;
@@ -350,6 +351,40 @@ describe("Dossier: sechs Pflicht-Sektionen", () => {
     expect(md).toContain("kein Zertifikat");
     expect(md).toContain("Staging-System");
     expect(renderDossierHtml(duplicateRun())).toContain("<strong>nicht gemessen</strong>");
+  });
+
+  it("Grenzen widersprechen der Antwort-Prüfung nicht (Dossier und Standard-Bericht)", () => {
+    const answer = "Die Buchung wurde einmalig angelegt.";
+    // Ohne Antwort: der Standardsatz bleibt.
+    expect(renderDossierMarkdown(duplicateRun())).toContain("**nicht gemessen**");
+    expect(renderDossierHtml(duplicateRun())).toContain("<strong>nicht gemessen</strong>");
+    expect(renderMarkdown(duplicateRun())).toContain("nicht gemessen");
+    // Mit übergebener Antwort (Option): weder Dossier-Format noch ein Satz "nicht geprüft".
+    for (const text of [renderDossierMarkdown(duplicateRun(), { agentResponse: answer }), renderDossierHtml(duplicateRun(), { agentResponse: answer })]) {
+      expect(text).not.toContain("nicht gemessen");
+      expect(text).not.toContain("wird nicht geprüft");
+      expect(text).toContain("sieht von sich aus nur die Tool-Aufrufe");
+      expect(text).toContain("mit festen Regeln aus den Tool-Aufrufen beurteilen lässt");
+      expect(text).toContain("Selbsttest");
+      expect(text).toContain("Staging-System");
+    }
+    // Mit bereits in der Datei stehender Prüfung (claim_check) ebenso, auch im Standard-Bericht.
+    const file = duplicateRun();
+    file.claim_check = evaluateAgentClaim(answer, file.report!);
+    expect(file.claim_check.status).not.toBe("NOT_PROVIDED");
+    for (const text of [renderDossierMarkdown(file), renderDossierHtml(file), renderMarkdown(file)]) {
+      expect(text).not.toContain("nicht gemessen");
+      expect(text).not.toContain("wird nicht geprüft");
+    }
+    const plain = renderMarkdown(file);
+    expect(plain).toContain("die übergebene Antwort des Agenten wurde oben nur mit festen Regeln gegen die Tool-Aufrufe abgeglichen");
+    expect(plain).toContain("Selbsttest");
+    // NOT_PROVIDED zählt wie keine Antwort.
+    const none = duplicateRun();
+    none.claim_check = evaluateAgentClaim(undefined, none.report!);
+    expect(none.claim_check.status).toBe("NOT_PROVIDED");
+    expect(renderMarkdown(none)).toContain("nicht gemessen");
+    expect(renderDossierMarkdown(none)).toContain("**nicht gemessen**");
   });
 
   it("Sektion 6: veränderte Datei wird als fehlgeschlagen ausgewiesen", () => {

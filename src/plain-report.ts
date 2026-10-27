@@ -128,6 +128,14 @@ export const LIMITS = [
   "Szenarien wie F1 führen Schreibvorgänge wirklich aus. Sie gehören nur auf ein Test- oder Staging-System.",
 ];
 
+// Ist die Antwort des Agenten geprüft worden, darf der erste Punkt nicht mehr behaupten, sie werde nicht geprüft.
+export const LIMIT_ANSWER_CHECKED =
+  "Der Harness sieht von sich aus nur die Tool-Aufrufe; die übergebene Antwort des Agenten wurde oben nur mit festen Regeln gegen die Tool-Aufrufe abgeglichen.";
+
+export function limitsFor(claim: ClaimCheckResult | null | undefined): string[] {
+  return claim && claim.status !== "NOT_PROVIDED" ? [LIMIT_ANSWER_CHECKED, ...LIMITS.slice(1)] : [...LIMITS];
+}
+
 export function verdictText(file: ReportFile): { headline: string; explanation: string } {
   const report = file.report;
   const verdict = file.verdict ?? "NOT_TESTED";
@@ -285,7 +293,7 @@ export function renderMarkdown(file: ReportFile): string {
   }
 
   lines.push("## Was dieser Test nicht aussagt", "");
-  for (const limit of LIMITS) lines.push(`- ${limit}`);
+  for (const limit of limitsFor(file.claim_check)) lines.push(`- ${limit}`);
   lines.push("");
   const meta = [file.harnessVersion ? `Harness ${file.harnessVersion}` : null, file.generatedAt ? `erstellt ${file.generatedAt}` : null].filter(Boolean);
   if (meta.length > 0) lines.push(`_${meta.join(", ")}_`, "");

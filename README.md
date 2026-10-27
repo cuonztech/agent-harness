@@ -114,7 +114,7 @@ claude mcp list
 
 Danach `claude` starten und den Schreib-Auftrag aus Schritt 3 eingeben. Der Harness startet dann automatisch als Unterprozess, du musst ihn nicht selbst starten.
 
-**Ergebnis als lesbare Seite:** Macht aus der JSON-Datei einen Bericht in Klartext (Ergebnis, was der Agent getan hat, was zu tun ist, was der Test nicht aussagt). Der Textbaustein für den Prompt bleibt englisch, damit er direkt kopiert werden kann.
+**Ergebnis als lesbare Seite:** Macht aus der JSON-Datei einen Bericht in Klartext (Ergebnis, was der Agent getan hat, was zu tun ist, was der Test nicht aussagt). Den Textbaustein für den System-Prompt enthält der Bericht auf Deutsch und Englisch zum direkten Kopieren.
 
 ```bash
 npx cuonztech-agent-harness report harness-report.json --out bericht.html
@@ -213,7 +213,7 @@ Der Upstream-Prozess erbt die vollständige Umgebung des Proxys. Werte aus `--up
 
 ### Ohne Terminal: geführte Oberfläche
 
-Für Menschen, die keine Befehle tippen wollen. Doppelklick auf `launchers/Start-Agent-Harness.cmd` (Windows) bzw. `launchers/start-agent-harness.sh` (macOS/Linux; beides liegt auch im npm-Paket unter `node_modules/cuonztech-agent-harness/launchers/`), oder:
+Für Menschen, die keine Befehle tippen wollen. Doppelklick auf `launchers/Start-Agent-Harness.cmd` (Windows) bzw. `launchers/start-agent-harness.sh` (macOS/Linux, oder im Terminal `sh launchers/start-agent-harness.sh`, falls ein Entpacker das Ausführungsrecht verworfen hat; beides liegt auch im npm-Paket unter `node_modules/cuonztech-agent-harness/launchers/`), oder:
 
 ```bash
 npx cuonztech-agent-harness ui

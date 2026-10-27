@@ -11,6 +11,13 @@ Registry-Eintrag.
 2. `npm run lint` und `npm test` ausführen. `npm test` baut das Paket vor den Tests.
 3. Mit `npm pack` den tatsächlichen Release-Tarball erstellen. Dateiliste und
    Integrität festhalten; interne Dokumente und Zugangsdaten dürfen nicht enthalten sein.
+   Unter Windows schreibt `npm pack` für Dateien ohne Ausführungsbit den Modus 644, auch
+   wenn der Git-Index `100755` führt (betrifft `launchers/start-agent-harness.sh`). Entweder
+   unter Linux/CI packen oder den Header nachträglich setzen:
+   `node scripts/set-tarball-mode.mjs <tarball.tgz>` (lokales, nicht versioniertes Hilfsskript;
+   setzt Modus 755 und die Header-Prüfsumme neu). Danach mit `tar -ztvf <tarball.tgz>`
+   prüfen, dass der Eintrag `-rwxr-xr-x` zeigt. Veröffentlicht wird genau diese Datei,
+   nicht ein neues `npm pack`.
 4. Diesen Tarball in einem leeren Verzeichnis installieren und prüfen. Das
    unabhängige Release-Gate umfasst einen selbst geschriebenen Test-Upstream mit
    Ausführungsjournal, F1–F5, CLI-Grenzen, Audit-Datenlecks und echte LLM-Läufe mit
