@@ -17,6 +17,10 @@
 
 ### Weitere Änderungen
 
+- Neu: Schnittstellen-Gutachten (`src/schema-audit.ts`). Es liest nur die `tools/list`-Antwort und beurteilt je Schreib-Tool: Idempotenz-Schlüssel (`idempotency_key`, `requestId`, `client_reference_id`, `dedup_key`, `transaction_id`, auch in anderer Schreibweise), MCP-Annotationen, passende Lese- oder Such-Tools und ob davon eines ohne Pflicht-ID auskommt (nach einem Timeout kennt der Agent die ID noch nicht), dazu Risikostufe, deutsche Befunde und ein kopierfertiges Schema für `idempotency_key`. Ausgabe: `doctor` (Feld `schemaAudit`, Zusammenfassung im Terminal), Report-Datei des Proxys (`schema_audit`) und Abschnitt «Schnittstellen- & Schema-Prüfung (MCP-Tools)» im Klartext-Bericht.
+- Neu in der Report-Datei, alle optional (bestehende Felder unverändert): `report.observations_de` (Beobachtungen auf Deutsch, die englischen bleiben), `recommended_prompt_patch_de` (deutscher Prompt-Baustein mit den Tool-Namen des Servers), `schema_audit`. Der Klartext-Bericht zeigt den deutschen Baustein und die englischen Originale getrennt beschriftet und die Beobachtungen auf Deutsch statt als „Originaltext des Harness“.
+- Oberfläche: «Agent anschliessen» statt «anschließen» (Schweizer Rechtschreibung).
+
 - `proxy`: `--error-rate 1e-5` nennt in der Fehlermeldung, dass nur schlichte Dezimalzahlen gelten. `--report-file` direkt nach `--allow-writes` wird auch bei einer abgelehnten Kommandozeile gefunden (die Vorab-Suche übersprang dort das nächste Argument).
 - `doctor`, `report`, `ui`: `--help` zeigt die Nutzung. `doctor` prüft den Report-Pfad wie der Proxy (reservierte Gerätenamen, fremde Dateien) und lehnt Optionen ohne Wert ab. Unbekannte Befehle nennen alle Befehle.
 - `report`: eine Datei, die kein Proxy-Report ist, wird als solche benannt; `--out` ohne Wert, `--format` gegen die Dateiendung, fehlender Ordner und Ordner als Ziel ergeben klare Meldungen statt Systemfehler; bei `NOT_TESTED` steht „Resilience Score: nicht bewertet“ statt „null / 100“.

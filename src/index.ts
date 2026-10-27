@@ -5,7 +5,8 @@ import { startStdio } from "./server/stdio.js";
 import { runBenchmark, defaultConfig, type ReferenceRun } from "./benchmark/runner.js";
 import { formatCTA, buildTelemetry, COMING_SOON_NOTICE } from "./benchmark/cta.js";
 import { computeScore } from "./benchmark/score.js";
-import { generatePatches } from "./hardening/patch-generator.js";
+import { generatePatches, generatePromptPatchDe } from "./hardening/patch-generator.js";
+import { auditToolSchemas } from "./schema-audit.js";
 import { generateReport } from "./core/report-generator.js";
 import { ProxyInterceptor } from "./proxy/interceptor.js";
 import { runDoctor } from "./doctor.js";
@@ -615,6 +616,8 @@ async function runProxyMode(argv: string[]): Promise<void> {
   }
 
   const upstreamTools = interceptor.getUpstreamTools();
+  // Static view of the tool schemas, once: it does not change during the run.
+  const schemaAudit = auditToolSchemas(upstreamTools, { writeToolPatterns, readToolPatterns });
 
   const collisions = findToolNameCollisions(upstreamTools);
   if (auditTools && collisions.length > 0) {
@@ -719,6 +722,13 @@ async function runProxyMode(argv: string[]): Promise<void> {
           report,
           score,
           patches,
+          // Deutscher Prompt-Baustein und Schema-Gutachten (neu in 0.7.0, optional für Leser).
+          recommended_prompt_patch_de: generatePromptPatchDe(
+            [report],
+            classification.filter((c) => c.class === "write").map((c) => c.name),
+            classification.filter((c) => c.class === "read").map((c) => c.name),
+          ),
+          schema_audit: schemaAudit,
           toolClassification: classification,
           generatedAt: new Date().toISOString(),
         },

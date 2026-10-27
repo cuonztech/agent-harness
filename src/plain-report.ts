@@ -4,6 +4,7 @@
 import { readFile, writeFile, stat, realpath } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import type { AuditReport, OperationOutcome } from "./core/report-generator.js";
+import type { SchemaAuditReport, SchemaRiskLevel } from "./types.js";
 
 export interface ReportFile {
   harnessVersion?: string;
@@ -21,7 +22,47 @@ export interface ReportFile {
   };
   patches?: Array<{ category: string; severity: string; trigger: string; promptSnippet: string }>;
   toolClassification?: Array<{ name: string; class: string; source: string }>;
+  // Deutscher System-Prompt-Baustein (ab 0.7.0); die englischen stehen in `patches`.
+  recommended_prompt_patch_de?: string;
+  // Schnittstellen-Gutachten über die Tool-Schemas (ab 0.7.0).
+  schema_audit?: SchemaAuditReport;
   generatedAt?: string;
+}
+
+const RISK_DE: Record<SchemaRiskLevel, string> = { HIGH: "HOCH", MEDIUM: "MITTEL", LOW: "NIEDRIG" };
+
+// Tool-Namen kommen vom Upstream: Zeilenumbrüche und Backticks dürfen die
+// Struktur des Berichts nicht verändern.
+function safeName(name: string): string {
+  return name.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029`]/g, "?");
+}
+
+function schemaSection(audit: SchemaAuditReport): string[] {
+  const lines: string[] = ["## Schnittstellen- & Schema-Prüfung (MCP-Tools)", "", audit.summaryDe, ""];
+  const writeLike = audit.tools.filter((t) => t.classification !== "read");
+  if (writeLike.length === 0) return lines;
+  lines.push("Beurteilt wird nur das Schema der Tools, nichts wurde aufgerufen. Die Risikostufe sagt, wie gut sich ein Schreib-Tool gegen Doppelausführung absichern lässt, nicht, wie sich ein Agent verhalten hat.", "");
+  const order: SchemaRiskLevel[] = ["HIGH", "MEDIUM", "LOW"];
+  for (const t of [...writeLike].sort((a, b) => order.indexOf(a.riskLevel) - order.indexOf(b.riskLevel))) {
+    lines.push(`### ${safeName(t.name)} — Risiko ${RISK_DE[t.riskLevel]}`, "");
+    lines.push(
+      t.hasIdempotencyKey
+        ? `- Idempotenz-Schlüssel: vorhanden (\`${safeName(t.idempotencyFieldName ?? "")}\`)`
+        : "- Idempotenz-Schlüssel: fehlt",
+    );
+    lines.push(
+      t.canVerifyWithoutId
+        ? `- Nachsehen nach einem Timeout ohne ID: möglich (${t.matchingReadTools.map(safeName).join(", ")})`
+        : "- Nachsehen nach einem Timeout ohne ID: nicht möglich",
+    );
+    lines.push(`- MCP-Annotationen: ${t.hasMcpAnnotations ? "vorhanden" : "fehlen"}`);
+    for (const finding of t.findingsDe) lines.push(`- Befund: ${finding}`);
+    if (t.recommendedSchemaPatch) {
+      lines.push("", "Vorschlag für das Schema (unter `properties` des Tools eintragen):", "", "```json", `"idempotency_key": ${JSON.stringify(t.recommendedSchemaPatch, null, 2)}`, "```");
+    }
+    lines.push("");
+  }
+  return lines;
 }
 
 const SCENARIOS: Record<string, string> = {
@@ -142,19 +183,33 @@ export function renderMarkdown(file: ReportFile): string {
       lines.push("Die Kennzahl fasst nur diesen einen Lauf zusammen; sie ist kein Vergleichswert zwischen Agenten.", "");
     }
 
-    if (file.patches && file.patches.length > 0) {
-      lines.push("## Was zu tun ist", "");
-      for (const patch of file.patches) {
-        lines.push(`### ${patch.category} (${patch.severity})`, "", patch.trigger, "", "Textbaustein für den Prompt des Agenten:", "", "```text", patch.promptSnippet, "```", "");
+    const hasPatches = Boolean(file.patches && file.patches.length > 0);
+    if (hasPatches || file.recommended_prompt_patch_de) {
+      lines.push(hasPatches ? "## Was zu tun ist" : "## Empfohlener Prompt-Baustein", "");
+      if (file.recommended_prompt_patch_de) {
+        lines.push(
+          hasPatches ? "### Textbaustein für den Prompt des Agenten (Deutsch)" : "### Textbaustein für den Prompt des Agenten (Deutsch, vorbeugend)",
+          "",
+          "```text",
+          file.recommended_prompt_patch_de,
+          "```",
+          "",
+        );
+      }
+      for (const patch of file.patches ?? []) {
+        lines.push(`### ${patch.category} (${patch.severity})`, "", patch.trigger, "", "Textbaustein für den Prompt des Agenten (Englisch, Originalfassung):", "", "```text", patch.promptSnippet, "```", "");
       }
     }
 
-    if (report.observations.length > 0) {
-      lines.push("## Technische Beobachtungen (Originaltext des Harness)", "");
-      for (const obs of report.observations) lines.push(`- Aufruf ${obs.callNumber}, ${obs.tool}: ${obs.description}`);
+    const observations = report.observations_de ?? report.observations.map((o) => `Aufruf ${o.callNumber}, ${o.tool}: ${o.description}`);
+    if (observations.length > 0) {
+      lines.push("## Beobachtungen", "");
+      for (const text of observations) lines.push(`- ${text}`);
       lines.push("");
     }
   }
+
+  if (file.schema_audit) lines.push(...schemaSection(file.schema_audit));
 
   lines.push("## Was dieser Test nicht aussagt", "");
   for (const limit of LIMITS) lines.push(`- ${limit}`);

@@ -62,7 +62,7 @@ Ein Szenario wird nur von einem Aufruf „verbraucht", auf den es wirklich angew
 - **Einen Agenten**, der den Harness als MCP-Server nutzt. Dieser Quickstart nutzt Claude Code (siehe Schritt 2 unten).
 - **Den Pfad zur Start-Datei deines MCP-Servers** (z. B. `C:\projekte\mein-server\dist\server.js`). Das Beispiel unten enthält **nur einen Platzhalter** — ersetze `<PFAD-ZU-DEINEM-SERVER.js>` durch deinen Pfad, sonst bricht der Harness mit `upstream script not found` ab.
 
-**Vorprüfung (empfohlen, ruft keine Tools auf und schreibt nichts):** Prüft Node-Version, Server-Start, Tool-Einordnung und den Report-Pfad, und nennt für jeden Fehler die Lösung.
+**Vorprüfung (empfohlen, ruft keine Tools auf und schreibt nichts):** Prüft Node-Version, Server-Start, Tool-Einordnung und den Report-Pfad, und nennt für jeden Fehler die Lösung. Zusätzlich beurteilt es die Tool-Schemas (Schnittstellen-Prüfung): welche Schreib-Tools keinen Idempotenz-Schlüssel haben und ob ein Agent nach einem Timeout ohne vorher bekannte ID nachsehen kann. Dieselbe Beurteilung steht als Abschnitt «Schnittstellen- & Schema-Prüfung» im Bericht. Sie liest nur Schemas; sie sagt nichts darüber, wie sich ein Agent verhält.
 
 ```bash
 npx cuonztech-agent-harness doctor \

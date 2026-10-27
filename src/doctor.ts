@@ -7,6 +7,8 @@ import { access, stat } from "node:fs/promises";
 import { constants, existsSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { classifyUpstreamTool } from "./proxy/interceptor.js";
+import { auditToolSchemas, shown } from "./schema-audit.js";
+import type { SchemaAuditReport } from "./types.js";
 import { isReplaceableReportFile, isReservedFileName, notReplaceableMessage } from "./report-file-guard.js";
 
 const START_TIMEOUT_MS = 15_000;
@@ -128,6 +130,7 @@ async function checkReportFile(path: string): Promise<Check> {
 interface ProtocolResult {
   checks: Check[];
   toolLines: string[];
+  schemaAudit?: SchemaAuditReport;
 }
 
 interface ToolPatterns {
@@ -169,6 +172,7 @@ async function checkUpstreamProtocol(command: string, args: string[], cwd: strin
         },
       ],
       toolLines: classified.map((c) => `  ${c.class.padEnd(12)} ${c.name}  (${c.source})`),
+      schemaAudit: auditToolSchemas(tools, patterns),
     };
   } catch (err) {
     const tail = stderrText.trim().split("\n").slice(-8).map((l) => `    ${l}`).join("\n");
@@ -209,12 +213,15 @@ export interface DoctorResult {
   checks: Check[];
   toolLines: string[];
   ok: boolean;
+  // Static assessment of the tool schemas (nothing was called); only when tools/list worked.
+  schemaAudit?: SchemaAuditReport;
 }
 
 // Alle Prüfungen als Daten, damit Kommandozeile und Oberfläche dasselbe nutzen.
 export async function collectDoctor(input: DoctorInput): Promise<DoctorResult> {
   const checks: Check[] = [checkNode()];
   let toolLines: string[] = [];
+  let schemaAudit: SchemaAuditReport | undefined;
 
   if (input.command === undefined || input.command.trim() === "") {
     checks.push({
@@ -238,13 +245,14 @@ export async function collectDoctor(input: DoctorInput): Promise<DoctorResult> {
       });
       checks.push(...protocol.checks);
       toolLines = protocol.toolLines;
+      schemaAudit = protocol.schemaAudit;
     }
   }
 
   if (input.reportFile !== undefined) {
     checks.push(await checkReportFile(input.reportFile));
   }
-  return { checks, toolLines, ok: checks.every((c) => c.ok) };
+  return { checks, toolLines, ok: checks.every((c) => c.ok), ...(schemaAudit ? { schemaAudit } : {}) };
 }
 
 export async function runDoctor(argv: string[]): Promise<number> {
@@ -269,11 +277,18 @@ export async function runDoctor(argv: string[]): Promise<number> {
     return 1;
   }
 
-  const { checks, toolLines } = await collectDoctor(parsed);
+  const { checks, toolLines, schemaAudit } = await collectDoctor(parsed);
   checks.forEach(printCheck);
   if (toolLines.length > 0) {
     process.stdout.write("\nErkannte Tools (nur Einordnung, nichts wurde ausgeführt):\n");
     toolLines.forEach((line) => process.stdout.write(`${line}\n`));
+  }
+  if (schemaAudit && schemaAudit.totalTools > 0) {
+    process.stdout.write("\nSchnittstellen-Prüfung (nur Schema, nichts wurde aufgerufen):\n");
+    process.stdout.write(`  ${schemaAudit.summaryDe}\n`);
+    for (const t of schemaAudit.tools.filter((e) => e.riskLevel === "HIGH")) {
+      process.stdout.write(`  HOCH: ${shown(t.name)}\n`);
+    }
   }
 
   const failed = checks.filter((c) => !c.ok).length;

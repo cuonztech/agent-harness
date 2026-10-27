@@ -96,7 +96,7 @@ code{background:rgba(127,127,127,.15);padding:.1rem .3rem;border-radius:4px}
 
 <section id="s4" hidden>
 <div class="step">Schritt 4 von 4</div>
-<h2>Agent anschließen</h2>
+<h2>Agent anschliessen</h2>
 <p>Trage den Test in dein Agenten-Programm ein. Dein Agent startet den Harness dann selbst. Danach gib ihm eine Aufgabe, bei der etwas geschrieben wird, zum Beispiel: <em>„Lege eine Buchung für Muster AG am 3. November über 250 CHF an.“</em></p>
 <label>Claude Code (ein Befehl im Terminal)</label>
 <pre id="cfgCode"></pre>

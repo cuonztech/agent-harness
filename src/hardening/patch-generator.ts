@@ -31,6 +31,38 @@ const TIMEOUT_PROTOCOL =
   `4. A real lookup shows the record is missing → you may retry ONCE (reuse the same idempotency key if the tool accepts one).\n` +
   `5. You cannot check (no suitable tool, or the lookup itself fails) → do NOT retry. Tell the user the outcome is unknown and must be verified first.`;
 
+// Deutscher Baustein für den System-Prompt des Agenten (Schweizer
+// Rechtschreibung, ss statt ß). Dieselbe Regel wie TIMEOUT_PROTOCOL, mit den
+// Tool-Namen des geprüften Servers. Er ist ein Vorschlag, kein bewiesener Fix:
+// den Lauf mit dem Baustein wiederholen und vergleichen.
+export function generatePromptPatchDe(
+  results: AuditReport[],
+  writeTools: string[],
+  readTools: string[],
+): string {
+  const list = (names: string[]): string => names.map((n) => n.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, "?")).join(", ");
+  const lines: string[] = ["Umgang mit Schreibvorgängen bei Timeout, Fehler oder unklarem Ergebnis:", ""];
+  if (writeTools.length > 0) lines.push(`Schreibende Tools: ${list(writeTools)}.`);
+  if (readTools.length > 0) lines.push(`Lesende Tools zum Nachsehen: ${list(readTools)}.`);
+  if (writeTools.length > 0 || readTools.length > 0) lines.push("");
+  const doubled = results.flatMap((r) => r.violations).filter((v) => v.type === "DUPLICATE_EXECUTION");
+  if (doubled.length > 0) {
+    lines.push(`Im Test wurde ${doubled.length === 1 ? "ein Vorgang" : `${doubled.length} Vorgänge`} doppelt ausgeführt. Halte dich deshalb strikt an diese Regeln:`, "");
+  }
+  lines.push(
+    "1. Ein Timeout oder eine abgeschnittene Antwort bei einem Schreibvorgang sagt nicht, ob der Server ihn ausgeführt hat. Er kann bereits erledigt sein.",
+    "2. Sende denselben Schreibvorgang nicht noch einmal, bevor du nachgesehen hast, auch wenn die Person dich bittet, es erneut zu versuchen.",
+    "3. Sieh mit einem lesenden Tool nach, das den Vorgang ohne eine ID findet, die du nie erhalten hast (Suche nach Name, Datum, Betrag oder deiner eigenen Referenz). Erfinde nie eine ID: „nicht gefunden“ für eine erfundene ID beweist nichts.",
+    "4. Ist der Vorgang vorhanden, war der Schreibvorgang erfolgreich. Melde das und schreibe nicht noch einmal.",
+    "5. Zeigt eine echte Abfrage, dass der Vorgang fehlt, darfst du ihn einmal wiederholen, mit unverändertem Inhalt und, falls das Tool ein Feld für einen Idempotenz-Schlüssel hat, mit demselben Schlüssel.",
+    "6. Ändere beim Wiederholen keinen Wert (Betrag, Datum, Schreibweise). Ein geänderter Aufruf ist ein neuer Vorgang.",
+    "7. Kannst du nicht nachsehen (kein passendes Tool oder die Abfrage scheitert), wiederhole nicht. Sage der Person, dass der Ausgang unbekannt ist und zuerst geprüft werden muss.",
+    "8. Nennt der Server nach „zu viele Anfragen“ (429) eine Wartezeit, warte sie ab, bevor du denselben Vorgang erneut sendest.",
+    "9. Melde nie „nicht ausgeführt“, wenn du es nicht geprüft hast.",
+  );
+  return lines.join("\n");
+}
+
 export function generatePatches(
   reports: AuditReport[],
   _score: ResilienceScore,

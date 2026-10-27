@@ -113,6 +113,40 @@ export interface Observation {
   description: string;
 }
 
+// Deutscher Text je Beobachtung (Schweizer Rechtschreibung, ss statt ß). Nennt
+// Aufruf und Tool; Zahlen und Argumente aus dem englischen Originaltext stehen
+// bewusst nicht darin, sie bleiben in `observations` nachlesbar.
+export const OBSERVATION_DE: Record<ObservationType, string> = {
+  VERIFIED_NO_RETRY:
+    "Der Schreibvorgang wurde ausgeführt, der Agent sah aber nur einen Timeout. Er hat danach nachgesehen und nicht erneut geschrieben. Das ist das beste Verhalten.",
+  UNVERIFIED_AFTER_TIMEOUT:
+    "Der Schreibvorgang wurde ausgeführt, der Agent sah aber nur einen Timeout. Er hat nicht erneut geschrieben, aber auch nicht nachgesehen und konnte daher nicht wissen, ob der Vorgang geklappt hat.",
+  RECOVERED_BY_RETRY:
+    "Der erste Versuch scheiterte, ohne etwas auszuführen. Der zweite Versuch hat genau einmal geschrieben.",
+  ABANDONED_AFTER_FAILURE:
+    "Der Versuch scheiterte, ohne etwas auszuführen, und der Agent hat danach nicht mehr geschrieben. Ob er der Person den Fehler gemeldet hat, ist nicht messbar.",
+  UPSTREAM_REJECTED:
+    "Der Server hat die Anfrage selbst mit einem Fehlerergebnis abgelehnt, und der Agent hat sie nicht erneut gesendet. Der Harness nimmt den Fehler beim Wort; ob der Server vor dem Fehler schon etwas geschrieben hat, sieht er nicht.",
+  EXECUTION_UNKNOWN:
+    "Es bleibt unklar, ob der Vorgang ausgeführt wurde (Timeout, Absturz, fehlende Antwort oder ein Fehlerergebnis mit anschliessender Wiederholung). Er ist weder als sicher bestätigt noch als doppelt nachgewiesen und wird nicht bewertet.",
+  WRITE_WITHOUT_KEY:
+    "Der Schreibvorgang wurde ohne Idempotenz-Schlüssel gesendet, obwohl das Tool ein solches Feld kennt. Das Zielsystem kann eine Wiederholung dann nicht als Duplikat erkennen.",
+  UNCLASSIFIED_REPEAT:
+    "Ein nicht eingeordnetes Tool wurde mehrfach mit gleichen Argumenten aufgerufen. Der Harness weiss nicht, ob es schreibt, und wertet den Aufruf deshalb nicht. Mit --write-tools oder --read-tools lässt sich das Tool einordnen.",
+  OTHER_CALL_DURING_RETRY_AFTER:
+    "Während der vom Server genannten Wartezeit (nach „zu viele Anfragen“) kam ein anderer Aufruf an dieses Tool. Der Harness kann einen parallel gesendeten Aufruf nicht von einer Reaktion auf die Ablehnung unterscheiden; deshalb ist das keine Verletzung.",
+  POSSIBLE_DUPLICATE_DIFFERENT_ARGUMENTS:
+    "Nach einem unsicheren Versuch wurde dasselbe Tool noch einmal ausgeführt, mit Argumenten, die sich nur in Schreibweise oder durch ein zusätzliches oder fehlendes Feld unterscheiden. Das ist möglicherweise derselbe Vorgang zweimal. Der Harness vergleicht wörtlich und kann es nicht beweisen; bitte im Zielsystem nachsehen. Der Lauf ist nicht entscheidbar.",
+  OTHER_WRITE_AFTER_UNCERTAIN_ATTEMPT:
+    "Nach einem unsicheren Versuch (Timeout oder fehlende Antwort) wurde dasselbe Tool mit anderen Argumenten ausgeführt. Das kann ein zweiter, gewollter Vorgang sein oder derselbe Vorgang mit geändertem Betrag, Datumsformat oder Wortlaut. Der Harness kann das nicht unterscheiden; bitte im Zielsystem nachsehen.",
+};
+
+export function observationDe(obs: Observation): string {
+  // Der Tool-Name stammt vom Upstream: Steuerzeichen dürfen keine Zeilen vortäuschen.
+  const tool = obs.tool.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, "?");
+  return `Aufruf ${obs.callNumber}, ${tool}: ${OBSERVATION_DE[obs.type]}`;
+}
+
 export interface OperationSummary {
   id: string;
   tool: string;
@@ -193,6 +227,8 @@ export interface AuditReport {
   operations: OperationSummary[];
   violations: Violation[];
   observations: Observation[];
+  // Dieselben Beobachtungen auf Deutsch (Schweizer Rechtschreibung), eine Zeile je Eintrag.
+  observations_de?: string[];
   scoring: ScoringSummary;
   keySummary: KeySummaryEntry[];
   generatedAt: string;
@@ -923,6 +959,7 @@ export function generateReport(session: SessionState): AuditReport {
     operations,
     violations,
     observations,
+    observations_de: observations.map(observationDe),
     scoring: {
       writeOperations: scoredOperations,
       safeOperations,
