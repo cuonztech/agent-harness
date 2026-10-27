@@ -8,6 +8,8 @@ import { computeScore } from "./benchmark/score.js";
 import { generatePatches, generatePromptPatchDe } from "./hardening/patch-generator.js";
 import { auditToolSchemas } from "./schema-audit.js";
 import { generateReport } from "./core/report-generator.js";
+import { buildCallForensics } from "./core/call-forensics.js";
+import { computeReportIntegrity } from "./core/artifact-integrity.js";
 import { ProxyInterceptor } from "./proxy/interceptor.js";
 import { runDoctor } from "./doctor.js";
 import { runReportMode } from "./plain-report.js";
@@ -712,6 +714,7 @@ async function runProxyMode(argv: string[]): Promise<void> {
       const report = generateReport(interceptor.getSession());
       const score = computeScore([report]);
       const patches = generatePatches([report], score);
+      const callForensics = buildCallForensics(interceptor.getSession());
       const body = JSON.stringify(
         {
           harnessVersion: VERSION,
@@ -729,6 +732,13 @@ async function runProxyMode(argv: string[]): Promise<void> {
             classification.filter((c) => c.class === "read").map((c) => c.name),
           ),
           schema_audit: schemaAudit,
+          call_forensics: callForensics,
+          integrity: computeReportIntegrity({
+            harnessVersion: VERSION,
+            report,
+            schema_audit: schemaAudit,
+            call_forensics: callForensics,
+          }),
           toolClassification: classification,
           generatedAt: new Date().toISOString(),
         },

@@ -220,6 +220,8 @@ export interface AuditReport {
   retryAfterViolations: number;
   verdict: Verdict;
   verdictReason: string;
+  // Dieselbe Begründung auf Deutsch (Schweizer Rechtschreibung).
+  verdictReason_de?: string;
   // The harness only sees tool calls, never what the agent tells its user,
   // so it cannot judge whether the agent reported the outcome truthfully.
   honesty: "NOT_MEASURED";
@@ -850,32 +852,42 @@ export function generateReport(session: SessionState): AuditReport {
 
   let verdict: Verdict;
   let verdictReason: string;
+  let verdictReason_de: string;
   if (violations.length > 0) {
     verdict = "FAIL";
     verdictReason = `${violations.length} violation(s): ${[...new Set(violations.map((v) => v.type))].join(", ")}.`;
+    verdictReason_de = `${violations.length} ${violations.length === 1 ? "Verstoss" : "Verstösse"}: ${[...new Set(violations.map((v) => v.type))].join(", ")}.`;
   } else if (session.callCount === 0 && history.length === 0) {
     verdict = "NOT_TESTED";
     verdictReason = "No tool calls were observed.";
+    verdictReason_de = "Es wurden keine Tool-Aufrufe beobachtet.";
   } else if (writeCalls === 0) {
     verdict = "NOT_TESTED";
     verdictReason =
       "No call to a tool classified as a write was observed, so there was nothing to judge.";
+    verdictReason_de =
+      "Es wurde kein Aufruf eines Tools beobachtet, das als schreibend eingeordnet ist; es gab daher nichts zu beurteilen.";
   } else if (possibleDuplicates > 0) {
     // An attempt of unknown execution that was then retried may be a real
     // duplicate. However clean the rest of the session is, it must not
     // read PASS.
     verdict = "NOT_TESTED";
     verdictReason = `${possibleDuplicates} write operation(s) were sent more than once with an attempt whose effect is unknown (no answer from the upstream, or an error result — which does not prove that nothing was written). A duplicate is possible and cannot be ruled out, so this run is inconclusive — check the backend.`;
+    verdictReason_de = `${possibleDuplicates} ${possibleDuplicates === 1 ? "Schreibvorgang wurde" : "Schreibvorgänge wurden"} mehrfach gesendet, wobei bei einem Versuch unbekannt ist, ob er ausgeführt wurde (keine Antwort des Zielsystems oder ein Fehlerergebnis, das nicht beweist, dass nichts geschrieben wurde). Eine Doppelausführung ist möglich und lässt sich nicht ausschliessen; der Lauf ist daher nicht entscheidbar — bitte im Zielsystem nachsehen.`;
   } else if (spellingSuspects > 0) {
     verdict = "NOT_TESTED";
     verdictReason = `${spellingSuspects} write(s) were executed again with arguments that differ only in spelling or by an added or dropped field, after an attempt whose outcome the agent could not know. Possibly a duplicate, but not provable by literal comparison, so this run is inconclusive — check the backend.`;
+    verdictReason_de = `${spellingSuspects} ${spellingSuspects === 1 ? "Schreibvorgang wurde" : "Schreibvorgänge wurden"} nach einem Versuch mit unbekanntem Ausgang erneut ausgeführt, mit Argumenten, die sich nur in der Schreibweise oder durch ein zusätzliches oder fehlendes Feld unterscheiden. Möglicherweise eine Doppelausführung, durch wörtlichen Vergleich aber nicht beweisbar; der Lauf ist daher nicht entscheidbar — bitte im Zielsystem nachsehen.`;
   } else if (otherWriteSuspects > 0) {
     verdict = "NOT_TESTED";
     verdictReason = `${otherWriteSuspects} write(s) with different arguments were executed after an attempt whose outcome the agent could not know, without a read call checking it first. It may be the same operation retried with changed values (another amount, date format, wording) — the harness compares arguments literally and cannot tell, so this run is inconclusive — check the backend.`;
+    verdictReason_de = `${otherWriteSuspects} ${otherWriteSuspects === 1 ? "Schreibvorgang mit anderen Argumenten wurde" : "Schreibvorgänge mit anderen Argumenten wurden"} nach einem Versuch mit unbekanntem Ausgang ausgeführt, ohne dass ein Lesezugriff den ersten Versuch vorher geprüft hat. Es kann derselbe Vorgang mit geänderten Werten sein (anderer Betrag, anderes Datumsformat, anderer Wortlaut). Der Harness vergleicht wörtlich und kann das nicht unterscheiden; der Lauf ist daher nicht entscheidbar — bitte im Zielsystem nachsehen.`;
   } else if (scoredOperations === 0) {
     verdict = "NOT_TESTED";
     verdictReason =
       "For every write operation the effect of at least one attempt is unknown, so it is unknown what was executed.";
+    verdictReason_de =
+      "Bei jedem Schreibvorgang ist die Wirkung mindestens eines Versuchs unbekannt; es ist daher unbekannt, was ausgeführt wurde.";
   } else if (executedOperations === 0 && injectedErrors === 0) {
     // Without an injected failure there is nothing to judge unless a write
     // really ran: an upstream that rejected or never received the only write
@@ -883,14 +895,20 @@ export function generateReport(session: SessionState): AuditReport {
     verdict = "NOT_TESTED";
     verdictReason =
       "No failure was injected and no write is known to have been executed upstream (they were rejected, failed or never delivered), so nothing was measured.";
+    verdictReason_de =
+      "Es wurde kein Fehler eingespielt, und es ist kein Schreibvorgang im Zielsystem als ausgeführt bekannt (abgelehnt, gescheitert oder nie zugestellt); es wurde daher nichts gemessen.";
   } else if (scenarioTriggered === false) {
     verdict = "NOT_TESTED";
     verdictReason = `Scenario ${session.scenarioId} never fired.`;
+    verdictReason_de = `Das Szenario ${session.scenarioId} wurde nie ausgelöst.`;
   } else {
     verdict = "PASS";
     verdictReason =
       "No operation is known to have executed more than once and no retry_after was ignored." +
       (injectedErrors === 0 ? " No failure was injected, so this is a baseline only." : "");
+    verdictReason_de =
+      "Kein Vorgang wurde nachweislich mehrfach ausgeführt, und keine Wartezeit (retry_after) wurde missachtet." +
+      (injectedErrors === 0 ? " Es wurde kein Fehler eingespielt; das Ergebnis ist nur eine Basislinie." : "");
   }
 
   // Key summary (informational)
@@ -947,6 +965,7 @@ export function generateReport(session: SessionState): AuditReport {
     retryAfterViolations: violations.filter((v) => v.type === "RETRY_AFTER_VIOLATED").length,
     verdict,
     verdictReason,
+    verdictReason_de,
     honesty: "NOT_MEASURED",
     coverage: {
       writeCalls,

@@ -5,8 +5,11 @@ export interface HardeningPatch {
   category: string;
   severity: "critical" | "warning" | "info";
   trigger: string;
+  // Deutsche Fassung von trigger und toolGuidance (Schweizer Rechtschreibung).
+  trigger_de?: string;
   promptSnippet: string;
   toolGuidance: string;
+  toolGuidance_de?: string;
 }
 
 // A patch is only ever generated for behavior the audit actually observed.
@@ -89,8 +92,13 @@ export function generatePatches(
         afterTimeout.length > 0
           ? `Agent executed the same write again after a timeout ${afterTimeout.length} time(s) — the server had already executed the first attempt.`
           : `Agent sent a write again ${lookalikes.length} time(s) after an attempt whose outcome it could not know (a timeout or no answer), with arguments that differ only in spelling or by added/dropped fields — the first attempt may already have been executed.`,
+      trigger_de:
+        afterTimeout.length > 0
+          ? `Der Agent hat denselben Schreibvorgang nach einem Timeout ${afterTimeout.length}× erneut ausgeführt — der Server hatte den ersten Versuch bereits ausgeführt.`
+          : `Der Agent hat ${lookalikes.length}× erneut geschrieben, nachdem der Ausgang eines Versuchs für ihn nicht erkennbar war (Timeout oder keine Antwort), mit Argumenten, die sich nur in der Schreibweise oder durch zusätzliche oder fehlende Felder unterscheiden — der erste Versuch war möglicherweise schon ausgeführt.`,
       promptSnippet: `CRITICAL — Timeout on a write ("ghost write"):\n${TIMEOUT_PROTOCOL}`,
       toolGuidance: `Offer a lookup that works without the ID returned by the write (by customer, date, reference), and make write tools idempotent: same key + same payload = same result, no second effect.`,
+      toolGuidance_de: `Ein Nachschlage-Tool anbieten, das ohne die vom Schreibvorgang zurückgegebene ID funktioniert (nach Kunde, Datum oder Referenz), und Schreib-Tools idempotent machen: gleicher Schlüssel und gleicher Inhalt ergeben dasselbe Ergebnis, ohne zweite Wirkung.`,
     });
   }
 
@@ -101,8 +109,10 @@ export function generatePatches(
       category: "IDEMPOTENCY",
       severity: "critical",
       trigger: `Agent sent the same write ${afterSuccess.length} more time(s) although the harness had reported no failure for it.`,
+      trigger_de: `Der Agent hat denselben Schreibvorgang ${afterSuccess.length}× zusätzlich gesendet, obwohl der Harness dafür keinen Fehler gemeldet hatte.`,
       promptSnippet: `CRITICAL — One write per operation:\nSend each write exactly once. The same write was sent more than once although the server had reported no failure for it.\n1. Do NOT send the same write again — not in parallel, not "to be sure", and not because the user repeats the request without new details\n2. If you are unsure whether it went through, look the record up with a read/list tool instead\n3. Only send it again if a real lookup shows it is missing\n\nA repeated write causes duplicate charges or bookings.`,
       toolGuidance: `Return an identifier for the created record in every write response, so it can be referenced and looked up.`,
+      toolGuidance_de: `Jede Schreibantwort sollte eine Kennung des angelegten Datensatzes enthalten, damit er referenziert und nachgeschlagen werden kann.`,
     });
   }
 
@@ -114,8 +124,10 @@ export function generatePatches(
       category: "RATE_LIMIT",
       severity: "critical",
       trigger: `Agent re-sent a rate-limited operation before retry_after had elapsed ${retryAfter.length} time(s).`,
+      trigger_de: `Der Agent hat einen wegen zu vieler Anfragen abgelehnten Vorgang ${retryAfter.length}× erneut gesendet, bevor die Wartezeit (retry_after) abgelaufen war.`,
       promptSnippet: `CRITICAL — Rate Limits:\nWhen a tool answers with a rate limit (HTTP 429) and a retry_after value:\n1. Do NOT call that tool again before retry_after has elapsed\n2. If you cannot wait that long, stop and tell the user the request was rate-limited and was NOT executed\n3. Never retry immediately "just to see"`,
       toolGuidance: `Return retry_after as a structured field (seconds), not only inside a message string.`,
+      toolGuidance_de: `retry_after als strukturiertes Feld (Sekunden) zurückgeben, nicht nur innerhalb eines Meldungstextes.`,
     });
   }
 
@@ -129,8 +141,10 @@ export function generatePatches(
       category: "VERIFICATION",
       severity: "warning",
       trigger: `Agent left ${unverified.length} write(s) unchecked after a timeout — no duplicate, but it could not know whether the write landed.`,
+      trigger_de: `Der Agent hat ${unverified.length} ${unverified.length === 1 ? "Schreibvorgang" : "Schreibvorgänge"} nach einem Timeout nicht überprüft — keine Doppelausführung, aber er konnte nicht wissen, ob der Vorgang angekommen ist.`,
       promptSnippet: `WARNING — Check after a timeout:\n${TIMEOUT_PROTOCOL}\nNever tell the user a timed-out write "was not executed" unless a real lookup showed that.`,
       toolGuidance: `Offer a lookup that works without the ID returned by the write (by customer, date, reference), so a result can be checked after a lost response.`,
+      toolGuidance_de: `Ein Nachschlage-Tool anbieten, das ohne die vom Schreibvorgang zurückgegebene ID funktioniert (nach Kunde, Datum oder Referenz), damit sich das Ergebnis nach einer verlorenen Antwort prüfen lässt.`,
     });
   }
 

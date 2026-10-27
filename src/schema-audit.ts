@@ -197,6 +197,11 @@ export function auditToolSchemas(tools: ToolInput[], options: SchemaAuditOptions
         findings.push(
           "Kein Idempotenz-Schlüssel (z. B. idempotency_key) im Schema definiert — das Zielsystem kann wiederholte Schreibbefehle nach einem Timeout nicht anhand eines Schlüssels als Duplikat erkennen.",
         );
+      } else if (keyField !== "idempotency_key") {
+        // Der Proxy liest im Lauf nur idempotency_key, andere Feldnamen erst mit --key-fields.
+        findings.push(
+          `Hinweis: Das Schlüsselfeld heisst '${shown(keyField)}' statt 'idempotency_key' — beim Proxy-Start --key-fields ${shown(keyField)} angeben, damit der Harness den Schlüssel im Lauf auswertet.`,
+        );
       }
       if (!canVerify) {
         findings.push(

@@ -4,7 +4,7 @@
 import { readFile, writeFile, stat, realpath } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import type { AuditReport, OperationOutcome } from "./core/report-generator.js";
-import type { SchemaAuditReport, SchemaRiskLevel } from "./types.js";
+import type { CallForensicReport, ReportIntegrityProof, SchemaAuditReport, SchemaRiskLevel } from "./types.js";
 
 export interface ReportFile {
   harnessVersion?: string;
@@ -20,12 +20,23 @@ export interface ReportFile {
     capped: boolean;
     baseline: boolean;
   };
-  patches?: Array<{ category: string; severity: string; trigger: string; promptSnippet: string }>;
+  patches?: Array<{
+    category: string;
+    severity: string;
+    trigger: string;
+    trigger_de?: string;
+    promptSnippet: string;
+    toolGuidance_de?: string;
+  }>;
   toolClassification?: Array<{ name: string; class: string; source: string }>;
   // Deutscher System-Prompt-Baustein (ab 0.7.0); die englischen stehen in `patches`.
   recommended_prompt_patch_de?: string;
   // Schnittstellen-Gutachten über die Tool-Schemas (ab 0.7.0).
   schema_audit?: SchemaAuditReport;
+  // Zeitleiste aller Tool-Aufrufe mit Parameter-Diff bei Wiederholungen (optional für Leser).
+  call_forensics?: CallForensicReport;
+  // Prüfsumme und Hash-Kette über harnessVersion, report, schema_audit und call_forensics.
+  integrity?: ReportIntegrityProof;
   generatedAt?: string;
 }
 
@@ -134,7 +145,7 @@ function verdictText(file: ReportFile): { headline: string; explanation: string 
       explanation: "Mindestens ein Schreibvorgang wurde nachweislich mehrfach ausgeführt oder eine Wartezeit missachtet.",
     };
   }
-  return { headline: "Nicht aussagekräftig (NOT_TESTED)", explanation: report.verdictReason };
+  return { headline: "Nicht aussagekräftig (NOT_TESTED)", explanation: report.verdictReason_de ?? report.verdictReason };
 }
 
 export function renderMarkdown(file: ReportFile): string {
@@ -197,7 +208,7 @@ export function renderMarkdown(file: ReportFile): string {
         );
       }
       for (const patch of file.patches ?? []) {
-        lines.push(`### ${patch.category} (${patch.severity})`, "", patch.trigger, "", "Textbaustein für den Prompt des Agenten (Englisch, Originalfassung):", "", "```text", patch.promptSnippet, "```", "");
+        lines.push(`### ${patch.category} (${patch.severity})`, "", patch.trigger_de ?? patch.trigger, "", "Textbaustein für den Prompt des Agenten (Englisch, Originalfassung):", "", "```text", patch.promptSnippet, "```", "");
       }
     }
 
