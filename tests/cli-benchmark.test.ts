@@ -112,11 +112,11 @@ describe("CLI `benchmark` mode (real process)", () => {
     const failing = runCli(["benchmark"]);
     const passingOnly = runCli(["benchmark", "--scenarios", "F3,F5"]);
     for (const { stdout } of [failing, passingOnly]) {
-      expect(stdout.match(/Coming soon — CuonzTech Agent Audit/g)).toHaveLength(1);
+      expect(stdout.match(/CuonzTech Agent Audit \(on request\)/g)).toHaveLength(1);
       expect(stdout).toContain("issues no certificate");
       expect(stdout).toContain("https://cuonztech.ch/agent-harness.html");
     }
-    expect(runCli(["--help"]).stdout).toContain("Coming soon — CuonzTech Agent Audit");
+    expect(runCli(["--help"]).stdout).toContain("CuonzTech Agent Audit (on request)");
   });
 
   it("--help prints usage and exits instead of hanging in stdio server mode", () => {

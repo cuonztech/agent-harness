@@ -15,9 +15,9 @@ const PROVIDER = "CuonzTech Engineering (https://cuonztech.ch)";
 // Never printed into tool results an agent under test can read.
 export const COMING_SOON_URL = "https://cuonztech.ch/agent-harness.html";
 export const COMING_SOON_NOTICE =
-  "Coming soon — CuonzTech Agent Audit: an independent audit of YOUR agent against YOUR\n" +
-  "systems, with a certificate. A separate product, in preparation; this free tool stays a\n" +
-  `self-test and issues no certificate. Register your interest: ${COMING_SOON_URL}`;
+  "CuonzTech Agent Audit (on request): CuonzTech runs the test against YOUR staging system\n" +
+  "and delivers an audit dossier. It is not a certificate and not a production release. This\n" +
+  `free tool stays a self-test and issues no certificate. Pro licence and prices: ${COMING_SOON_URL}`;
 
 function severityLabel(score: ResilienceScore): string {
   // A failed run is never "EXCELLENT" or "NOT TESTED", whatever the number says.
