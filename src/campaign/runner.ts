@@ -15,6 +15,7 @@ import { computeScore, type ResilienceScore } from "../benchmark/score.js";
 import { DOSSIER_CSS, cleanText, escHtml, escMd } from "../dossier-report.js";
 import { isReservedFileName } from "../report-file-guard.js";
 import { VERSION } from "../version.js";
+import { resolveProGate, lockedNotice } from "../license/index.js";
 import type { CallForensicReport, ClaimCheckResult } from "../types.js";
 
 export type CampaignProfileId = "naive" | "pressure_vulnerable" | "hardened";
@@ -540,7 +541,7 @@ export function followupSummary(
 
 // ---------- Kommandozeile ----------
 
-const CAMPAIGN_USAGE = "Usage: campaign [--runs <n>] [--format md|html] [--out <file>]\n";
+const CAMPAIGN_USAGE = "Usage: campaign [--runs <n>] [--format md|html] [--out <file>] [--license <key>]\n";
 
 async function mayReplaceCampaignOutput(path: string): Promise<boolean> {
   const info = await stat(path).catch(() => null);
@@ -559,7 +560,9 @@ export async function runCampaignMode(argv: string[]): Promise<number> {
         "  --runs <n>       Läufe je Szenario, 1 bis 1000 (Standard: 1)\n" +
         "  --format         md (Standard) oder html\n" +
         "  --out <file>     in diese Datei schreiben statt ins Terminal. Eine bestehende Datei wird nur ersetzt,\n" +
-        "                   wenn ein früherer `campaign`-Lauf sie geschrieben hat.\n",
+        "                   wenn ein früherer `campaign`-Lauf sie geschrieben hat.\n" +
+        "  --license <key>  Pro-Lizenzschlüssel (oder Umgebungsvariable AGENT_AUDIT_LICENSE). Der Kampagnen-Runner\n" +
+        "                   gehört zum Pro-Umfang und läuft ohne gültige Lizenz nicht.\n",
     );
     return 0;
   }
@@ -567,9 +570,17 @@ export async function runCampaignMode(argv: string[]): Promise<number> {
   let runsSeen = false;
   let format: "md" | "html" | undefined;
   let outPath: string | undefined;
+  let licenseKey: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
-    if (token === "--runs") {
+    if (token === "--license") {
+      const v = argv[++i];
+      if (v === undefined || v.startsWith("--") || v.trim() === "") {
+        process.stderr.write(`Error: --license needs a key.\n${CAMPAIGN_USAGE}`);
+        return 1;
+      }
+      licenseKey = v;
+    } else if (token === "--runs") {
       const raw = argv[++i];
       if (runsSeen) {
         process.stderr.write("Error: option --runs was given more than once.\n");
@@ -603,6 +614,14 @@ export async function runCampaignMode(argv: string[]): Promise<number> {
       process.stderr.write(`Error: unexpected argument ${token}\n${CAMPAIGN_USAGE}`);
       return 1;
     }
+  }
+
+  // Pro-Umfang: ohne gültige Lizenz wird die Kampagne nicht gerechnet und keine Datei angefasst.
+  // Exit 1 wie jeder nicht ausgeführte Befehl; kein eigener Code. Selbsttest (benchmark) und Proxy-Lauf bleiben frei.
+  const gate = resolveProGate(licenseKey);
+  if (!gate.pro) {
+    process.stderr.write(lockedNotice("campaign", gate.verdict));
+    return 1;
   }
 
   const outExt = outPath ? extname(outPath).toLowerCase() : "";

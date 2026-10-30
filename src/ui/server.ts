@@ -18,6 +18,7 @@ import { runCampaign, renderCampaignDemoBody, followupSummary } from "../campaig
 import { runBenchmark, defaultConfig, type ReferenceRun } from "../benchmark/runner.js";
 import { VERSION } from "../version.js";
 import { PAGE_HTML } from "./page.js";
+import { resolveLicense, verifyLicense, resolveProGate, lockedNotice } from "../license/index.js";
 
 const MAX_BODY = 64 * 1024;
 const MAX_NAME = 200;
@@ -37,6 +38,7 @@ interface UiSession {
 export interface UiOptions {
   port?: number;
   open?: boolean;
+  licenseKey?: string;
 }
 
 export interface UiHandle {
@@ -165,10 +167,21 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
     return file;
   };
 
-  const dossierOptions = (): { customerName?: string; systemName?: string; agentResponse?: string } => ({
+  let currentLicenseVerdict = resolveLicense(options.licenseKey);
+  // Nur ein ausdrücklich übergebener, gültiger Schlüssel wird in die erzeugte Agenten-Konfiguration übernommen
+  // (damit der Proxy des Agenten die Pro-Teile in den Report schreibt); aus der Umgebung stammende nie.
+  let explicitLicenseKey: string | undefined = options.licenseKey;
+
+  const dossierOptions = (): {
+    customerName?: string;
+    systemName?: string;
+    agentResponse?: string;
+    licenseVerdict?: typeof currentLicenseVerdict;
+  } => ({
     customerName: session?.customerName,
     systemName: session?.systemName,
     agentResponse: session?.agentResponse,
+    licenseVerdict: currentLicenseVerdict,
   });
 
   // Gleiche Vorsicht wie der Proxy: erst in eine eigene Datei, dann darüber umbenennen.
@@ -207,7 +220,29 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
       return send(res, 200, PAGE_HTML.replace("__TOKEN__", token), "text/html; charset=utf-8");
     }
     if (req.method === "GET" && url.pathname === "/api/info") {
-      return sendJson(res, 200, { version: VERSION, bundledTestsystem: bundledTestsystem(), discoveredServers: discoverMcpServers() });
+      return sendJson(res, 200, {
+        version: VERSION,
+        bundledTestsystem: bundledTestsystem(),
+        discoveredServers: discoverMcpServers(),
+        license: {
+          valid: currentLicenseVerdict.valid,
+          tier: currentLicenseVerdict.tier ?? "evaluation",
+          claims: currentLicenseVerdict.claims,
+          reason: currentLicenseVerdict.reason,
+        },
+      });
+    }
+    if (req.method === "POST" && url.pathname === "/api/license") {
+      const body = await readJson(req);
+      const key = typeof body.key === "string" ? body.key.trim() : "";
+      currentLicenseVerdict = verifyLicense(key);
+      explicitLicenseKey = key;
+      return sendJson(res, 200, {
+        valid: currentLicenseVerdict.valid,
+        tier: currentLicenseVerdict.tier ?? "evaluation",
+        claims: currentLicenseVerdict.claims,
+        reason: currentLicenseVerdict.reason,
+      });
     }
     if (req.method === "POST" && url.pathname === "/api/doctor") {
       const body = await readJson(req);
@@ -252,6 +287,7 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
         "--allow-writes",
         "--audit-tools", "off",
         "--report-file", reportFile,
+        ...(currentLicenseVerdict.valid && explicitLicenseKey ? ["--license", explicitLicenseKey] : []),
       ];
       const claudeCode = ["claude mcp add --scope user agent-harness --", process.execPath, ...proxyArgs].map((p, i) => (i === 0 ? p : quoteArg(p))).join(" ");
       const claudeDesktop = JSON.stringify({ mcpServers: { "agent-harness": { command: process.execPath, args: proxyArgs } } }, null, 2);
@@ -346,19 +382,24 @@ function openBrowser(url: string): void {
 export async function runUiMode(argv: string[]): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(
-      "Nutzung: ui [--port <n>] [--no-open]\n\n" +
+      "Nutzung: ui [--port <n>] [--no-open] [--license <key>]\n\n" +
         "Startet die geführte Oberfläche im Browser (nur auf diesem Rechner, mit Zufalls-Schlüssel im Link).\n" +
-        "  --port <n>   feste Port-Nummer (Standard: ein freier Port)\n" +
-        "  --no-open    den Browser nicht automatisch öffnen\n",
+        "Die Oberfläche gehört zum Pro-Umfang und braucht einen gültigen Lizenzschlüssel (oder AGENT_AUDIT_LICENSE).\n" +
+        "  --port <n>      feste Port-Nummer (Standard: ein freier Port)\n" +
+        "  --no-open       den Browser nicht automatisch öffnen\n" +
+        "  --license <key> CuonzTech Agent Audit Pro Lizenzschlüssel (oder Umgebungsvariable AGENT_AUDIT_LICENSE)\n",
     );
     return 0;
   }
   let port: number | undefined;
   let open = true;
+  let licenseKey: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
     if (token === "--no-open") open = false;
-    else if (token === "--port") {
+    else if (token === "--license") {
+      licenseKey = argv[++i] ?? "";
+    } else if (token === "--port") {
       if (port !== undefined) {
         process.stderr.write("Error: option --port was given more than once.\n");
         return 1;
@@ -374,7 +415,14 @@ export async function runUiMode(argv: string[]): Promise<number> {
       return 1;
     }
   }
-  const handle = await startUi({ port, open });
+  // Pro-Umfang: ohne gültige Lizenz startet die Oberfläche nicht (klarer Hinweis, Exit 1 wie jeder nicht ausgeführte Befehl).
+  // Das Frei-Paket bleibt über die Kommandozeile vollständig nutzbar (proxy, doctor, report).
+  const gate = resolveProGate(licenseKey);
+  if (!gate.pro) {
+    process.stderr.write(lockedNotice("ui", gate.verdict));
+    return 1;
+  }
+  const handle = await startUi({ port, open, licenseKey });
   process.stdout.write(`Oberfläche: ${handle.url}\n`);
   process.stdout.write("Läuft nur auf diesem Rechner. Beenden mit Strg+C.\n");
   await new Promise<void>((ok) => {

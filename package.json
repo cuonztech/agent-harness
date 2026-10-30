@@ -1,6 +1,6 @@
 {
   "name": "cuonztech-agent-harness",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "mcpName": "io.github.cuonztech/agent-harness",
   "description": "Chaos-Proxy für MCP-Server: injiziert F1-F5-Fehlerszenarien (Ghost-Write nach Timeout, 429, defektes JSON, Duplicate Dispatch, 500) vor einem echten Upstream-MCP-Server und prüft, ob ein Agent Schreibvorgänge doppelt ausführt. Mit Resilience Score und System-Prompt-Patches für beobachtetes Fehlverhalten.",
   "type": "module",
@@ -31,7 +31,7 @@
     "cuonztech"
   ],
   "author": "CuonzTech",
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cuonztech/agent-harness.git"
@@ -49,6 +49,7 @@
     "examples/testsystem/server.mjs",
     "README.md",
     "LICENSE",
+    "LICENSE-MIT-bis-0.7.0.txt",
     "server.json"
   ],
   "dependencies": {

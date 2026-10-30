@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { proProcessEnv } from "./helpers/license-env.js";
 import {
   createSession,
   incrementCall,
@@ -697,6 +698,7 @@ describe("AP 2", () => {
           "--scenario", "F1", "--allow-writes", "--audit-tools", "off",
           "--report-file", reportFile,
         ],
+        env: proProcessEnv(),
         stderr: "ignore",
       });
       const client = new Client({ name: "ap2-test", version: "0" });

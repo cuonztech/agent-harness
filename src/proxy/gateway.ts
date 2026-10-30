@@ -69,6 +69,9 @@ export function findToolNameCollisions(upstreamTools: Tool[]): string[] {
 export interface ProxyServerOptions {
   // false = advertise only the upstream's tools (--audit-tools off).
   auditTools?: boolean;
+  // false = cuonztech__get_score returns the score without the hardening patches
+  // (Pro scope, no valid license). The score and the verdict are never affected.
+  patches?: boolean;
 }
 
 export function createProxyServer(
@@ -76,6 +79,7 @@ export function createProxyServer(
   options: ProxyServerOptions = {},
 ): Server {
   const auditTools = options.auditTools ?? true;
+  const withPatches = options.patches ?? true;
   const instructions = interceptor.getUpstreamInstructions();
   const server = new Server(
     { name: "cuonztech-agent-harness-proxy", version: VERSION },
@@ -117,7 +121,7 @@ export function createProxyServer(
       if (name === `${AUDIT_TOOL_PREFIX}get_report`) {
         return handleGetReport(withSession, { persist: false });
       }
-      return handleGetScore(withSession);
+      return handleGetScore(withSession, { patches: withPatches });
     }
 
     return interceptor.interceptToolCall(name, toolArgs, extra.signal);

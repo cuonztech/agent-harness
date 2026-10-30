@@ -391,7 +391,10 @@ export async function handleGetReport(
 // Resilience Score + Hardening Patches for THIS session's own audit report —
 // unlike `benchmark` mode (which scores a hardcoded scripted call sequence
 // against itself), this scores whatever the connected agent actually did.
-export function handleGetScore(args: { session_id: string; format?: "json" | "markdown" }) {
+// `patches: false` (Proxy ohne gültige Lizenz): Score und Urteil unverändert, die Härtungsvorschläge
+// (Textbausteine) gehören zum Pro-Umfang und werden durch einen Hinweis ersetzt.
+export function handleGetScore(args: { session_id: string; format?: "json" | "markdown" }, options: { patches?: boolean } = {}) {
+  const withPatches = options.patches ?? true;
   const session = getSession(args.session_id);
   if (!session) {
     return {
@@ -407,13 +410,16 @@ export function handleGetScore(args: { session_id: string; format?: "json" | "ma
 
   const report = generateReport(session);
   const score = computeScore([report]);
-  const patches = generatePatches([report], score);
+  const patches = withPatches ? generatePatches([report], score) : [];
   const format = args.format ?? "markdown";
+  const lockedNote =
+    "Keine gültige Lizenz: Die Härtungsvorschläge (Textbausteine) gehören zum Pro-Umfang. " +
+    "Score und Urteil sind vollständig. Lizenz: https://cuonztech.ch/agent-harness.html#audit";
 
   const output =
     format === "json"
-      ? JSON.stringify({ score, patches }, null, 2)
-      : [formatScoreReport(score), patches.length > 0 ? formatPatchReport(patches) : null]
+      ? JSON.stringify({ score, patches, ...(withPatches ? {} : { limitedByLicense: true, licenseNotice: lockedNote }) }, null, 2)
+      : [formatScoreReport(score), withPatches ? (patches.length > 0 ? formatPatchReport(patches) : null) : lockedNote]
           .filter(Boolean)
           .join("\n\n");
 

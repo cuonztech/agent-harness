@@ -1,21 +1,220 @@
-MIT License
+CuonzTech Agent-Harness — Lizenz / License
 
-Copyright (c) 2026 CuonzTech
+Copyright (c) 2026 CuonzTech · Carlo Cuonz. Alle Rechte vorbehalten. / All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Proprietär, nicht Open Source. Der Quelltext ist einsehbar (GitHub und Paket); die Einsicht
+begründet keine Rechte ausser den hier eingeräumten. Gilt ab Version 0.8.0.
+Fassung vom 30. Oktober 2026 (Revision 1).
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+HINWEIS ZU FRÜHEREN VERSIONEN
+Die Versionen bis und mit 0.7.0 und alle Stände des öffentlichen Repositories bis und mit
+Commit 1c079e1 (27.10.2026) wurden unter der MIT-Lizenz veröffentlicht. Für jede Person, die
+eine dieser Versionen oder Stände bezieht, auch nach dem Erscheinen von 0.8.0, bleibt dafür die
+MIT-Lizenz massgebend (Wortlaut: Datei LICENSE-MIT-bis-0.7.0.txt im Repository).
+Diese Lizenz gilt für Version 0.8.0 und alle späteren Versionen. Dateien und Dateiteile, die
+unverändert in Version 0.7.0 veröffentlicht wurden, bleiben in der Fassung 0.7.0 unter MIT, auch
+wenn sie in 0.8.0 enthalten sind. Alle Änderungen und Ergänzungen seit 0.7.0 (insbesondere die
+Lizenzprüfung und die Kürzung der Ausgabe) stehen nur unter dieser Lizenz. Jede Version steht
+unter der Fassung dieser Lizenz, die dem Paket dieser Version beiliegt.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+
+================================================================================
+DEUTSCH
+================================================================================
+
+1. Gebrauchsüberlassung; was ohne Lizenzcode erlaubt ist (freier Umfang)
+1.1 CuonzTech räumt Ihnen das einfache, nicht übertragbare, nicht unterlizenzierbare Recht ein,
+    die Software zu installieren und auszuführen. Es wird keine Programmkopie veräussert und
+    kein Eigentum an der Software übertragen. Alle nicht ausdrücklich eingeräumten Rechte
+    bleiben bei CuonzTech.
+1.2 Ohne Lizenzcode dürfen Sie die Software auch kommerziell und intern nutzen. Vollständig
+    stehen zur Verfügung:
+    a) der MCP-Chaos-Proxy mit den Szenarien F1 bis F5,
+    b) die Vorprüfung (doctor) einschliesslich der Schema-Inspektion (Zusammenfassung und
+       Risikostufe je Tool),
+    c) der Kompaktbericht in der Konsole und der Klartext-Bericht (report ohne --dossier), beide
+       ohne Textbausteine,
+    d) der JSON-Report (--report-file), der Resilience Score und das Urteil
+       PASS/FAIL/NOT_TESTED samt Exit-Code für Pipelines,
+    e) der Selbsttest (benchmark) und der Demo-MCP-Server.
+    Der Lauf selbst wird ohne Lizenzcode weder verändert noch abgeschwächt; Urteil, Score und
+    Exit-Code sind mit und ohne Lizenzcode dieselben.
+1.3 Ohne gültigen Lizenzcode (keiner hinterlegt, ungültig, abgelaufen, erloschen) wird nur die
+    Ausgabe der Funktionen nach Ziffer 2 gekürzt oder der Befehl nicht ausgeführt: das Dossier
+    enthält nur Kopf, Score und das Urteil je Szenario, das Schema-Gutachten nur Zusammenfassung
+    und Risikostufe, die Textbausteine (Härtungsvorschläge) entfallen; ui und campaign werden
+    nicht ausgeführt.
+
+2. Was einen gültigen Lizenzcode von CuonzTech erfordert (Pro-Umfang); Systeme
+2.1 Ein gültiger Lizenzcode ist erforderlich für:
+    a) den vollständigen Export des Prüf-Dossiers (report --dossier: HTML, Markdown, druckbar
+       als PDF) mit Details, Aufruf-Protokoll, Härtungspaket und Anhängen,
+    b) die geführte Web-Oberfläche (ui),
+    c) das Schema-Gutachten mit den Befunden je Tool und den Schema-Vorschlägen,
+    d) den Textbaustein- und Prompt-Patch-Generator (Härtungsvorschläge),
+    e) den Kampagnen-Runner für Mehrfach-Läufe (campaign).
+    Die Freischaltung erfolgt mit dem Lizenzcode (Option --license oder Umgebungsvariable
+    AGENT_AUDIT_LICENSE). Die Prüfung des Codes erfolgt offline.
+2.2 Lizenzen gibt es als «Harness Pro · 90 Tage» (Einmalkauf, 90 Tage ab Kauf) und «Harness Pro ·
+    Monat» (Abonnement, monatlich). Beide gelten für ein System. Preise und Laufzeiten gelten in
+    der Fassung der Produktseite und der Bestellbestätigung im Zeitpunkt des Kaufs.
+2.3 System. Ein System ist ein MCP-Server (Upstream), den Sie mit der Software prüfen, samt der
+    dafür eingesetzten Konfiguration. Die Lizenz berechtigt zur Nutzung des Pro-Umfangs für
+    Läufe gegen ein System. Sie verpflichten sich, diese Zahl einzuhalten und weitere Systeme
+    rechtzeitig nachzulizenzieren. CuonzTech darf in Textform Auskunft verlangen; Sie antworten
+    innert 10 Tagen. Wird die Zahl überschritten, schulden Sie die Lizenzgebühr für jedes nicht
+    lizenzierte System ab Beginn der Überschreitung; weitere Ansprüche bleiben vorbehalten. Die
+    Software zählt Systeme technisch nicht; das ist keine Erlaubnis zur Überschreitung.
+2.4 Offline-Prüfung. Der Lizenzcode wird ohne Verbindung zu CuonzTech geprüft und kann
+    technisch nicht zurückgerufen werden. Das ändert nichts daran, dass Ihre Berechtigung mit
+    Ablauf, Kündigung, Erstattung, Rückbuchung oder Beendigung nach Ziffer 6 endet; danach
+    dürfen Sie den Lizenzcode nicht mehr verwenden.
+2.5 Der Lizenzcode ist geheim zu halten (in CI als Secret ablegen, nicht als Argument). Die
+    Lizenz berechtigt Sie als Lizenznehmer. Sie dürfen die Software und den Lizenzcode durch
+    Ihre Mitarbeitenden und beauftragte Dienstleister für Ihr eigenes System einsetzen. Der
+    Einsatz für Systeme Dritter als eigene Dienstleistung ist nur mit Zustimmung von CuonzTech
+    in Textform erlaubt.
+2.6 Ergebnisse. Berichte, Dossiers und Exporte, die Sie mit dem freien Umfang oder während einer
+    gültigen Lizenz erzeugt haben, dürfen Sie dauerhaft behalten, intern verwenden und in
+    unveränderter Form (mit dem Abschnitt «Methodische Grenzen») an Ihre Kunden, Prüfer und
+    Versicherer weitergeben.
+2.7 Lizenzschlüssel für CuonzTech Privacy Chaos Gate berechtigen nicht zum Pro-Umfang.
+
+3. Was nicht erlaubt ist
+3.1 Die Software oder Teile davon zu kopieren, zu verkaufen, weiterzugeben, zu vermieten,
+    unterzulizenzieren oder als eigenes Produkt oder als Dienstleistung anzubieten, soweit dies
+    über Ziffer 1 und 2.5 hinausgeht.
+3.2 Lizenzprüfungen, Lizenzcodes, Signaturprüfungen, die Kürzung der Ausgabe oder Hinweise auf
+    diese Lizenz zu entfernen, zu umgehen, zu deaktivieren, nachzubilden oder zu fälschen,
+    insbesondere die Software zu patchen, zu wrappen oder den Lizenzprüfer zu imitieren.
+3.3 Lizenzcodes Dritten zugänglich zu machen oder zu veröffentlichen.
+3.4 Copyright- und Lizenzhinweise zu entfernen; Namen und Marke «CuonzTech» oder «Agent
+    Harness» ohne Zustimmung für Gütesiegel, Zertifikate oder Bestätigungen zu verwenden.
+    Berichte der Software dürfen nicht als Zertifikat, Gutachten, Rechtsauskunft oder
+    behördliche Bestätigung dargestellt werden.
+3.5 Die Einsicht in den Quelltext begründet kein Recht, ihn zu verändern oder weiterzuverbreiten.
+    Vorbehalten bleiben zwingende gesetzliche Befugnisse (insbesondere Art. 21 und Art. 24
+    Abs. 2 URG).
+
+4. Keine Zusicherung, Gewährleistung, Haftung
+4.1 Keine Zusicherung. Die Software wird «wie besehen» geliefert. CuonzTech sichert weder die
+    Eignung für einen bestimmten Zweck zu, noch die Vollständigkeit oder Richtigkeit der
+    Befunde, noch dass ein Agent oder System für den Produktivbetrieb geeignet oder fehlerfrei
+    ist, noch die Verfügbarkeit von Diensten Dritter (zum Beispiel npm, GitHub, Zahlungs-,
+    Hosting- und KI-Anbieter).
+4.2 Befunde sind Messwerte zu einem Zeitpunkt unter der angegebenen Konfiguration. Sie sind kein
+    Zertifikat, keine Produktionsfreigabe, kein Gutachten und keine Rechtsauskunft. Sie
+    entscheiden und verantworten allein, welche Schlüsse Sie ziehen.
+4.3 Haftung. Bei unentgeltlicher Nutzung haftet CuonzTech nur für Absicht und grobe
+    Fahrlässigkeit. Bei entgeltlicher Lizenz ist die Haftung für leichte Fahrlässigkeit
+    ausgeschlossen; bei mittlerer Fahrlässigkeit ist sie auf die Lizenzgebühr begrenzt, die Sie
+    in den zwölf Monaten vor dem schädigenden Ereignis bezahlt haben, höchstens auf CHF 20'000.
+    In jedem Fall ausgeschlossen sind, soweit gesetzlich zulässig: indirekte Schäden und
+    Folgeschäden, entgangener Gewinn, Datenverlust, Ausfallzeiten, Schäden an Ihren Systemen
+    oder an Systemen Dritter durch die Ausführung von Schreibvorgängen (Doppelbuchungen,
+    Zahlungen, Nachrichten, Meldungen), Ansprüche Dritter sowie Reputationsschäden. Die
+    Haftung für Hilfspersonen ist im gesetzlich zulässigen Rahmen ausgeschlossen.
+4.4 Vorbehalten bleiben die Haftung für Absicht und grobe Fahrlässigkeit und jede Haftung, die
+    nach zwingendem Recht nicht ausgeschlossen oder beschränkt werden kann.
+4.5 Mängel melden Sie innert 10 Tagen nach Entdeckung in Textform an support@cuonztech.ch.
+    CuonzTech behebt sie nach Wahl durch Update oder Umgehungslösung; ist das innert angemessener
+    Frist nicht möglich, erstattet CuonzTech die Lizenzgebühr anteilig für den nicht genutzten
+    Zeitraum. Weitere Gewährleistungsansprüche sind ausgeschlossen, ausser bei Arglist.
+4.6 Freistellung. Sie stellen CuonzTech von Ansprüchen Dritter frei, die daraus entstehen, dass
+    Sie die Software entgegen Ziffer 4a einsetzen, Berichte unzutreffend als Zertifikat oder
+    Rechtsauskunft weitergeben oder diese Lizenz verletzen.
+
+4a. Testsystem und Schreibvorgänge
+4a.1 Der Harness führt die Schreibvorgänge Ihres Agenten wirklich an dem angeschlossenen
+     Upstream aus und löst dabei absichtlich Fehler, Wiederholungen und Verzögerungen aus
+     (Option --allow-writes). Setzen Sie ihn nur gegen ein Testsystem ein, das
+     (a) keine Produktivumgebung ist,
+     (b) ausschliesslich synthetische Daten enthält, keine Personendaten und keine Geschäfts-
+         oder Berufsgeheimnisse Dritter,
+     (c) so von der Aussenwelt getrennt ist, dass Ausführungen, Doppelausführungen und Timeouts
+         keine Wirkung auf Dritte, Zahlungen, E-Mails, Meldungen oder Produktivsysteme haben,
+     (d) das Sie prüfen dürfen.
+4a.2 Mit der Option --allow-writes und mit dem Schalter «nur Testsystem» der Oberfläche
+     bestätigen Sie, dass diese Voraussetzungen erfüllt sind.
+4a.3 Sie sichern das Testsystem vor jedem Lauf oder können es zurücksetzen. Sie tragen die
+     Verantwortung für Schäden aus einem Einsatz entgegen Ziffer 4a.1.
+
+5. Drittkomponenten
+Die Software verwendet Open-Source-Bibliotheken (zum Beispiel das MCP SDK und Zod) unter deren
+jeweiligen Lizenzen; sie werden bei der Installation von deren Quellen bezogen. Diese Lizenz
+ändert sie nicht.
+
+6. Dauer, Kündigung, Beendigung, Erstattung
+6.1 «Harness Pro · 90 Tage» endet 90 Tage nach Kauf (Datum in der Bestellbestätigung) ohne
+    Kündigung. Verlängerung nur durch Neukauf.
+6.2 «Harness Pro · Monat» läuft monatlich und verlängert sich um jeweils einen Monat.
+    Mindestlaufzeit drei Monate; danach können Sie jederzeit in Textform an
+    support@cuonztech.ch auf das Ende der bezahlten Periode kündigen. Für jede bezahlte Periode
+    erhalten Sie einen neuen Lizenzcode per E-Mail; der letzte gilt bis zum Ende der bezahlten
+    Periode und, als Entgegenkommen ohne Anspruch, drei Tage darüber hinaus. Für die laufende
+    Periode gibt es keine anteilige Rückerstattung. Ein Widerrufsrecht besteht nicht.
+6.3 Bleibt die Zahlung aus, wird kein neuer Lizenzcode ausgestellt.
+6.4 Wird der Kaufpreis ganz erstattet, zurückgebucht oder angefochten, erlischt die Lizenz mit
+    sofortiger Wirkung; Sie stellen die Verwendung des Lizenzcodes ein. Eine Teilerstattung
+    lässt die Lizenz unberührt.
+6.5 Verstösse gegen Ziffer 2.3, 3.1, 3.2, 3.3 oder 4a beenden Ihre Rechte nach Ziffer 1 und 2
+    sofort und ohne weitere Mitteilung; bezahlte Gebühren werden nicht erstattet. Bei anderen
+    Verstössen darf CuonzTech die Lizenz sperren, wenn Sie eine Aufforderung in Textform nicht
+    innert 10 Tagen befolgen. Ansprüche auf Unterlassung und Schadenersatz bleiben vorbehalten.
+6.6 Nach Beendigung gilt Ziffer 1.3. Vor der Beendigung erzeugte Berichte dürfen Sie nach
+    Ziffer 2.6 behalten.
+
+7. Anwendbares Recht, Gerichtsstand, Adressaten
+7.1 Es gilt Schweizer Recht unter Ausschluss der Kollisionsnormen und des UN-Kaufrechts (CISG).
+7.2 Ausschliesslicher Gerichtsstand ist Thusis, Kanton Graubünden, soweit zwingende
+    Gerichtsstände nichts anderes vorsehen.
+7.3 Entgeltliche Lizenzen werden nur an Unternehmen, Selbständigerwerbende und Organisationen
+    für berufliche oder gewerbliche Zwecke abgegeben. Mit dem Kauf bestätigen Sie, dass Sie nicht
+    als Konsumentin oder Konsument handeln.
+
+8. Kontakt
+Cuonz Tech, Carlo Cuonz, Heinzenbergstrasse 11, 7430 Thusis · support@cuonztech.ch ·
+https://cuonztech.ch
+
+9. Änderungen
+CuonzTech darf diese Lizenz für künftige Versionen ändern. Für eine bereits bezogene Version
+gilt die mit ihr gelieferte Fassung. Änderungen der Bedingungen eines laufenden Abonnements
+werden 30 Tage nach Mitteilung per E-Mail wirksam; widersprechen Sie, können Sie auf das Ende der
+bezahlten Periode kündigen.
+
+
+================================================================================
+ENGLISH (short version; the German text above governs in case of doubt)
+================================================================================
+
+Proprietary, not open source. Source is viewable; viewing grants no rights beyond this license.
+Applies from version 0.8.0. Versions up to and including 0.7.0, and all states of the public
+repository up to commit 1c079e1 (2026-10-27), were released under the MIT License and remain
+under it for anyone who obtains them, also after 0.8.0. Files published unchanged in 0.7.0 stay
+under MIT in that form; all changes since 0.7.0 are under this license only.
+
+Without a license code you may install and run the software, including commercially and
+internally. Free: the MCP chaos proxy with scenarios F1 to F5, doctor (summary and risk level
+of the schema inspection), the compact and plain-language report (without text blocks), the
+JSON report, the Resilience Score, the PASS/FAIL/NOT_TESTED verdict and exit code, the
+self-test (benchmark) and the demo server. The run is never altered or weakened; verdict, score
+and exit code are the same with and without a code. Without a valid code the output of the Pro
+scope is shortened or the command is not run.
+
+A valid license code is required for the Pro scope: the full audit dossier, the guided web
+interface (ui), the schema assessment with findings and suggestions, the prompt text blocks and
+the campaign runner. Licenses ("Harness Pro 90 days", "Harness Pro monthly") cover one system
+(an MCP server you test). The code is verified offline and cannot be revoked technically; your
+right ends on expiry, termination, refund or chargeback, and you stop using the code. Reports
+you created may be kept and passed on unchanged.
+
+The software executes your agent's write operations for real against the connected upstream.
+Use it only against a test system with synthetic data that is isolated from third parties and
+production; --allow-writes confirms this. Provided "as is". Liability: free use only for intent
+and gross negligence; paid licenses: slight negligence excluded, otherwise capped; mandatory
+liability remains. You indemnify CuonzTech for use against these terms.
+
+You may not copy, sell, redistribute, sublicense or offer the software as your own product or
+service, or remove, bypass or forge license checks or codes. Swiss law applies; exclusive place
+of jurisdiction is Thusis, canton of Graubünden, unless mandatory law provides otherwise. Paid
+licenses are sold to businesses only. Contact: support@cuonztech.ch

@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-
+import { proProcessEnv } from "./helpers/license-env.js";
 const FIXTURE = "tests/fixtures/upstream-fixture-server.mjs";
 
 async function session(reportFile: string, fn: (client: Client) => Promise<void>): Promise<void> {
@@ -23,6 +23,7 @@ async function session(reportFile: string, fn: (client: Client) => Promise<void>
       "--audit-tools", "off",
       "--report-file", reportFile,
     ],
+    env: proProcessEnv(),
     stderr: "ignore",
   });
   const client = new Client({ name: "plain-report-test", version: "0" });

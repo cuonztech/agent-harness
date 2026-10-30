@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { proProcessEnv } from "./helpers/license-env.js";
 import { auditToolSchemas } from "../src/schema-audit.js";
 import { collectDoctor } from "../src/doctor.js";
 import { OBSERVATION_DE, observationDe } from "../src/core/report-generator.js";
@@ -333,6 +334,7 @@ describe("doctor und Proxy-Report liefern das Gutachten mit", () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: ["dist/index.js", "proxy", "--upstream-command", process.execPath, "--upstream-arg", FIXTURE, "--scenario", "F1", "--allow-writes", "--audit-tools", "off", "--report-file", reportFile],
+      env: proProcessEnv(),
       stderr: "ignore",
     });
     const client = new Client({ name: "schema-audit-test", version: "0" });

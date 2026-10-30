@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { proProcessEnv } from "./helpers/license-env.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { mkdtemp, readFile, readdir, rm, mkdir } from "node:fs/promises";
 import { openSync, closeSync } from "node:fs";
@@ -43,6 +44,8 @@ async function connectProxy(extraArgs: string[] = []): Promise<Client> {
       "--allow-writes",
       ...extraArgs,
     ],
+    // Die bestehende Suite prüft die Pro-Ausgabe (Textbausteine); ohne Lizenz: tests/license-gate.test.ts.
+    env: proProcessEnv(),
     stderr: "ignore",
   });
   const client = new Client({ name: "e2e-proxy-test-client", version: "0.0.1" });

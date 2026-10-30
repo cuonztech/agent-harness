@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.8.0 — nicht veröffentlicht
+
+### Nicht abwärtskompatibel
+
+- Lizenz: Ab 0.8.0 gilt die CuonzTech-Lizenz (LICENSE); die Versionen bis 0.7.0 bleiben unter MIT. Funktionen, die in 0.7.0 ohne Lizenz liefen, sind ab 0.8.0 ohne gültigen Lizenzcode gekürzt oder gesperrt: `report --dossier` (nur Kopf, Score, Urteil je Szenario), Schema-Gutachten (nur Zusammenfassung und Risikostufe), Textbausteine/Prompt-Patches (entfallen), `ui` und `campaign` (nicht ausgeführt). Der Lauf, das Urteil, der Score und der Exit-Code ändern sich nicht. Wer den vollen Umfang ohne Lizenzcode braucht, bleibt bei Version 0.7.0 (`npx cuonztech-agent-harness@0.7.0`).
+
+### Lizenz
+
+- Die bereits veröffentlichten Versionen (bis einschliesslich 0.7.0) stehen unter der MIT-Lizenz und bleiben dort. Ab 0.8.0 steht das Paket unter einer CuonzTech-Lizenz mit freiem Umfang und Pro-Umfang (`LICENSE`, source-available, proprietär; `package.json`: `SEE LICENSE IN LICENSE`). Der freie Umfang bleibt kostenlos.
+
+### Neu: Lizenz-Sperre nach dem Muster von CPCG
+
+Der Lauf selbst wird nie verändert: Proxy, Szenarien F1 bis F5, Urteil, Score und Exit-Code sind mit und ohne Lizenz gleich. Ohne gültige Lizenz wird nur die Ausgabe gekürzt oder ein Pro-Befehl mit klarem deutschem Hinweis nicht ausgeführt (Kaufziel `https://cuonztech.ch/agent-harness.html#audit`).
+
+- **Frei:** `proxy`, `doctor` (mit Schema-Inspektion), Kompaktbericht `report <datei>`, JSON-Report (`--report-file`), Resilience Score, PASS/FAIL/NOT_TESTED, Exit-Code, `benchmark`.
+- **Gekürzt ohne Lizenz:** `report --dossier` (nur Kopf, Score und Urteil je Szenario, Hinweis auf stderr), Schema-Gutachten (nur Zusammenfassung und Risikostufe je Tool, keine Befunde und Schema-Vorschläge), Textbausteine/Prompt-Patches (fehlen im Report `patches`/`recommended_prompt_patch_de`, in `cuonztech__get_score` und im Kompaktbericht; ein Hinweis steht an ihrer Stelle). Die Report-Datei trägt dann `limitedByLicense: true` und `licenseNotice`; der Integritäts-Nachweis gilt für die geschriebene Fassung.
+- **Gesperrt ohne Lizenz:** `ui` und `campaign` (Hinweis auf stderr, Exit 1 wie jeder nicht ausgeführte Befehl; kein eigener Exit-Code, keine Datei wird angefasst).
+- `--license <key>` jetzt auch bei `proxy` und `campaign` (schon vorhanden bei `report` und `ui`); alternativ `AGENT_AUDIT_LICENSE`. Prüfung offline (Ed25519, nur `CAUDIT-`-Schlüssel mit zwingendem Ablaufdatum `exp`; `CPCG-`-Schlüssel von Privacy Chaos Gate berechtigen nicht zum Pro-Umfang und werden abgelehnt). Ein ungültiger oder abgelaufener Schlüssel bricht den Proxy-Lauf nicht ab, er kürzt nur die Ausgabe; der Hinweis nennt den Grund.
+- Lizenzcodes tragen künftig keine E-Mail-Adresse mehr (`sub` als undurchsichtige Kennung `H-<12 hex>`, kein `eml`); Codes der alten Form mit E-Mail im `sub` gelten weiter.
+- `proxy` mit Schreibvorgängen (`--allow-writes`): beim Start steht eine deutliche Warnzeile auf stderr (nur gegen ein Testsystem mit synthetischen Daten einsetzen, LICENSE Ziffer 4a).
+- Die Oberfläche trägt einen mit `--license` übergebenen, gültigen Schlüssel in die erzeugte Agenten-Konfiguration ein.
+- Lizenzstatus im Dossier: `PRO (…)` mit Lizenz, `EVALUATION` ohne (gekürzte Fassung). Neue Bibliotheksoptionen: `DossierOptions.limited`, `renderMarkdown(file, { pro })`, `handleGetScore(args, { patches })`, `createProxyServer(…, { patches })`; ohne Angabe gilt der volle Umfang.
+- Tests: `tests/license-gate.test.ts` (Zustände keine Lizenz, gültig, abgelaufen, falsche Signatur, falsches Format gegen alle betroffenen Befehle; Lauf mit und ohne Lizenz identisch). Die bestehende Suite läuft mit einer Test-Lizenz (`tests/setup/pro-license.ts`, eigenes Schlüsselpaar über den Test-Schlüssel-Override).
+
+### Weitere Änderungen (bereits in der Arbeitskopie, mit 0.8.0 ausgeliefert)
+
+- `proxy --report-file`: Ein vorhandener, echter Bericht wird beim Neustart (zum Beispiel Reconnect des Agenten) bitgenau als `<name>.<zeitstempel>.json` gesichert und im neuen Bericht unter `previousRun` verwiesen; ohne Sicherung startet der Proxy nicht (fail closed). Bericht und Dossier weisen den Vorläufer-Lauf aus.
+- Lizenzprüfung (`src/license/`, Ed25519, offline) und Lizenzstatus in der Oberfläche (`GET /api/info`, `POST /api/license`).
+
 ## 0.7.0 — 2026-10-27
 
 ### Nicht abwärtskompatibel

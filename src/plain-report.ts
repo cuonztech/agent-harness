@@ -2,13 +2,21 @@
 // ein Mensch ohne Fachwissen lesen kann: Ergebnis, was getestet wurde, was der
 // Agent getan hat, was zu tun ist und was dieser Test NICHT aussagt.
 import { readFile, writeFile, stat, realpath } from "node:fs/promises";
-import { extname, resolve } from "node:path";
+import { basename, extname, resolve } from "node:path";
 import type { AuditReport, OperationOutcome } from "./core/report-generator.js";
 import type { CallForensicReport, ClaimCheckResult, ClaimCheckStatus, ReportIntegrityProof, SchemaAuditReport, SchemaRiskLevel } from "./types.js";
 import { evaluateAgentClaim } from "./core/claim-check.js";
 import { verifyReportIntegrity } from "./core/artifact-integrity.js";
 import { isReservedFileName } from "./report-file-guard.js";
 import { renderDossierHtml, renderDossierMarkdown } from "./dossier-report.js";
+import { resolveProGate, shortenedNotice, PURCHASE_URL } from "./license/index.js";
+
+export interface PreviousRunSummary {
+  file: string;
+  verdict?: string;
+  callsCount: number;
+  archivedAt: string;
+}
 
 export interface ReportFile {
   harnessVersion?: string;
@@ -43,6 +51,8 @@ export interface ReportFile {
   integrity?: ReportIntegrityProof;
   // Ehrlichkeits-Check der Abschluss-Antwort des Agenten (nur wenn eine Antwort übergeben wurde).
   claim_check?: ClaimCheckResult;
+  // Vorläufer-Lauf, der vor dem Neustart archiviert wurde (ab 0.7.1).
+  previousRun?: PreviousRunSummary;
   generatedAt?: string;
 }
 
@@ -54,10 +64,19 @@ function safeName(name: string): string {
   return name.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029`]/g, "?");
 }
 
-function schemaSection(audit: SchemaAuditReport): string[] {
+function schemaSection(audit: SchemaAuditReport, pro: boolean): string[] {
   const lines: string[] = ["## Schnittstellen- & Schema-Prüfung (MCP-Tools)", "", audit.summaryDe, ""];
   const writeLike = audit.tools.filter((t) => t.classification !== "read");
   if (writeLike.length === 0) return lines;
+  if (!pro) {
+    // Ohne Lizenz: Zusammenfassung und Risikostufe je Tool; Befunde und Schema-Vorschläge gehören zum Pro-Umfang.
+    const order: SchemaRiskLevel[] = ["HIGH", "MEDIUM", "LOW"];
+    for (const t of [...writeLike].sort((a, b) => order.indexOf(a.riskLevel) - order.indexOf(b.riskLevel))) {
+      lines.push(`- ${safeName(t.name)}: Risiko ${RISK_DE[t.riskLevel]}`);
+    }
+    lines.push("", `Die Befunde je Tool und die kopierfertigen Schema-Vorschläge gehören zum Pro-Umfang (Lizenz: ${PURCHASE_URL}).`, "");
+    return lines;
+  }
   lines.push("Beurteilt wird nur das Schema der Tools, nichts wurde aufgerufen. Die Risikostufe sagt, wie gut sich ein Schreib-Tool gegen Doppelausführung absichern lässt, nicht, wie sich ein Agent verhalten hat.", "");
   const order: SchemaRiskLevel[] = ["HIGH", "MEDIUM", "LOW"];
   for (const t of [...writeLike].sort((a, b) => order.indexOf(a.riskLevel) - order.indexOf(b.riskLevel))) {
@@ -132,8 +151,15 @@ export const LIMITS = [
 export const LIMIT_ANSWER_CHECKED =
   "Der Harness sieht von sich aus nur die Tool-Aufrufe; die übergebene Antwort des Agenten wurde oben nur mit festen Regeln gegen die Tool-Aufrufe abgeglichen.";
 
-export function limitsFor(claim: ClaimCheckResult | null | undefined): string[] {
-  return claim && claim.status !== "NOT_PROVIDED" ? [LIMIT_ANSWER_CHECKED, ...LIMITS.slice(1)] : [...LIMITS];
+export const LIMIT_SPLIT_RUN =
+  "Der Lauf folgte auf einen früheren Lauf (archiviert). Durch den Neustart des Prüfstands gilt dieses Ergebnis nur für die Aufrufe seit dem Neustart; Aufrufe vor dem Neustart sind im Archiv gesichert.";
+
+export function limitsFor(claim?: ClaimCheckResult | null, previousRun?: PreviousRunSummary | null): string[] {
+  const base = claim && claim.status !== "NOT_PROVIDED" ? [LIMIT_ANSWER_CHECKED, ...LIMITS.slice(1)] : [...LIMITS];
+  if (previousRun) {
+    base.push(LIMIT_SPLIT_RUN);
+  }
+  return base;
 }
 
 export function verdictText(file: ReportFile): { headline: string; explanation: string } {
@@ -211,7 +237,13 @@ function claimSection(claim: ClaimCheckResult): string[] {
   return lines;
 }
 
-export function renderMarkdown(file: ReportFile): string {
+// `pro` = gültige Lizenz. Fehlt die Angabe, gilt der volle Umfang (Bibliotheksaufruf); der Befehl `report` setzt sie immer.
+export interface RenderOptions {
+  pro?: boolean;
+}
+
+export function renderMarkdown(file: ReportFile, options: RenderOptions = {}): string {
+  const pro = options.pro ?? true;
   const { headline, explanation } = verdictText(file);
   const report = file.report;
   const lines: string[] = ["# Ergebnis des Agent-Tests", "", `## ${headline}`, "", explanation, ""];
@@ -226,6 +258,9 @@ export function renderMarkdown(file: ReportFile): string {
     const scenario = report.scenarioId ? `${report.scenarioId}: ${SCENARIOS[report.scenarioId] ?? ""}` : "Kein Szenario (reines Durchreichen).";
     lines.push(`- Szenario: ${scenario}`);
     lines.push(`- Aufrufe des Agenten: ${report.totalCalls} (davon ${report.coverage.writeCalls} schreibend, ${report.coverage.readCalls} lesend)`);
+    if (file.previousRun) {
+      lines.push(`- **Vorläufer-Lauf archiviert:** Vor diesem Lauf lag ein früherer Lauf mit ${file.previousRun.callsCount} Aufruf(en) vor (gesichert als \`${basename(file.previousRun.file)}\`).`);
+    }
     lines.push(`- Eingespielte Fehler: ${report.injectedErrors}`);
     if (report.coverage.scenarioTriggered === false) {
       lines.push("- **Das Szenario wurde nie ausgelöst.** Es gab keinen Schreibvorgang, auf den es wirken konnte.");
@@ -258,7 +293,14 @@ export function renderMarkdown(file: ReportFile): string {
     }
 
     const hasPatches = Boolean(file.patches && file.patches.length > 0);
-    if (hasPatches || file.recommended_prompt_patch_de) {
+    if (!pro) {
+      lines.push(
+        "## Härtungsvorschläge",
+        "",
+        `Textbausteine für den Prompt des Agenten (Deutsch und Englisch) gehören zum Pro-Umfang. Das Urteil, der Score und die Beobachtungen sind vollständig. Lizenz: ${PURCHASE_URL}`,
+        "",
+      );
+    } else if (hasPatches || file.recommended_prompt_patch_de) {
       lines.push(hasPatches ? "## Was zu tun ist" : "## Empfohlener Prompt-Baustein", "");
       if (file.recommended_prompt_patch_de) {
         lines.push(
@@ -275,7 +317,7 @@ export function renderMarkdown(file: ReportFile): string {
       }
     }
 
-    const observations = report.observations_de ?? report.observations.map((o) => `Aufruf ${o.callNumber}, ${o.tool}: ${o.description}`);
+    const observations = report.observations_de ?? (report.observations ?? []).map((o) => `Aufruf ${o.callNumber}, ${o.tool}: ${o.description}`);
     if (observations.length > 0) {
       lines.push("## Beobachtungen", "");
       for (const text of observations) lines.push(`- ${text}`);
@@ -286,14 +328,14 @@ export function renderMarkdown(file: ReportFile): string {
   if (file.call_forensics && file.call_forensics.entries.length > 0) lines.push(...forensicsSection(file.call_forensics));
   if (file.claim_check && file.claim_check.status !== "NOT_PROVIDED") lines.push(...claimSection(file.claim_check));
 
-  if (file.schema_audit) lines.push(...schemaSection(file.schema_audit));
+  if (file.schema_audit) lines.push(...schemaSection(file.schema_audit, pro));
 
   if (file.integrity) {
     lines.push(`Integrität: ${verifyReportIntegrity(file).reasonDe} Prüfsumme (SHA-256): \`${safeName(String(file.integrity.payloadSha256))}\``, "");
   }
 
   lines.push("## Was dieser Test nicht aussagt", "");
-  for (const limit of limitsFor(file.claim_check)) lines.push(`- ${limit}`);
+  for (const limit of limitsFor(file.claim_check, file.previousRun)) lines.push(`- ${limit}`);
   lines.push("");
   const meta = [file.harnessVersion ? `Harness ${file.harnessVersion}` : null, file.generatedAt ? `erstellt ${file.generatedAt}` : null].filter(Boolean);
   if (meta.length > 0) lines.push(`_${meta.join(", ")}_`, "");
@@ -306,8 +348,8 @@ function escapeHtml(text: string): string {
 
 // Rendert das Markdown oben in ein eigenständiges HTML. Bewusst klein gehalten:
 // nur die Konstrukte, die renderMarkdown erzeugt.
-export function renderHtmlBody(file: ReportFile): string[] {
-  const markdown = renderMarkdown(file);
+export function renderHtmlBody(file: ReportFile, options: RenderOptions = {}): string[] {
+  const markdown = renderMarkdown(file, options);
   const out: string[] = [];
   let inCode = false;
   let inList = false;
@@ -361,8 +403,8 @@ export function renderHtmlBody(file: ReportFile): string[] {
   return out;
 }
 
-export function renderHtml(file: ReportFile): string {
-  const out = renderHtmlBody(file);
+export function renderHtml(file: ReportFile, options: RenderOptions = {}): string {
+  const out = renderHtmlBody(file, options);
   const verdict = file.verdict ?? "NOT_TESTED";
   const colour = verdict === "PASS" ? "#1a7f37" : verdict === "FAIL" ? "#cf222e" : "#9a6700";
   return [
@@ -407,12 +449,15 @@ export async function runReportMode(argv: string[]): Promise<number> {
         "  --format          md (default) or html\n" +
         "  --out             write to this file instead of the terminal. An existing file is only\n" +
         "                    replaced if an earlier `report` run wrote it, never the report file itself.\n" +
-        "  --dossier         render the full test and architecture dossier (6 sections) instead of the short page\n" +
+        "  --dossier         render the test and architecture dossier (6 sections) instead of the short page.\n" +
+        "                    Without a valid license it is shortened to header, score and verdict per scenario (Pro scope).\n" +
         "  --customer <name> client / environment named in the dossier (needs --dossier)\n" +
         "  --system <name>   system under test named in the dossier (needs --dossier)\n" +
         "  --agent-response <text>\n" +
         "                    the agent's final answer to the user; it is checked against what the\n" +
-        "                    target system actually did (honesty check)\n",
+        "                    target system actually did (honesty check)\n" +
+        "  --license <key>   CuonzTech Agent Audit Pro license key (or AGENT_AUDIT_LICENSE env var). Without one, the short\n" +
+        "                    page leaves out the hardening suggestions and schema findings; verdict and score stay complete.\n",
     );
     return 0;
   }
@@ -423,10 +468,18 @@ export async function runReportMode(argv: string[]): Promise<number> {
   let customerName: string | undefined;
   let systemName: string | undefined;
   let agentResponse: string | undefined;
+  let licenseKey: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
     if (token === "--dossier") {
       dossier = true;
+    } else if (token === "--license") {
+      const v = argv[++i];
+      if (v === undefined || v.startsWith("--") || v.trim() === "") {
+        process.stderr.write(`Error: --license needs a key.\n${REPORT_USAGE}`);
+        return 1;
+      }
+      licenseKey = v;
     } else if (token === "--customer" || token === "--system") {
       const v = argv[++i];
       if (v === undefined || v.startsWith("--") || v.trim() === "") {
@@ -513,10 +566,16 @@ export async function runReportMode(argv: string[]): Promise<number> {
     return 1;
   }
   const chosen = format ?? (outExt === ".html" || outExt === ".htm" ? "html" : "md");
-  const dossierOptions = { customerName, systemName, agentResponse };
+  const { pro, verdict: licenseVerdict } = resolveProGate(licenseKey);
+  // Ohne Lizenz wird nur die Ausgabe gekürzt (Dossier: Kopf, Score, Urteil; Bericht: ohne Härtungsvorschläge
+  // und Schema-Befunde). Der Hinweis geht auf stderr, damit er nie in der Berichtsdatei oder einer Pipe landet.
+  if (!pro && !process.env.AGENT_AUDIT_SUPPRESS_LICENSE_HINT) {
+    if (dossier) process.stderr.write(shortenedNotice("dossier", licenseVerdict) + "\n");
+  }
+  const dossierOptions = { customerName, systemName, agentResponse, licenseVerdict, limited: !pro };
   const text = dossier
     ? chosen === "html" ? renderDossierHtml(parsed, dossierOptions) : renderDossierMarkdown(parsed, dossierOptions)
-    : chosen === "html" ? renderHtml(parsed) : renderMarkdown(parsed);
+    : chosen === "html" ? renderHtml(parsed, { pro }) : renderMarkdown(parsed, { pro });
   if (outPath) {
     if (isReservedFileName(outPath)) {
       process.stderr.write(`Error: --out "${outPath}" contains a reserved device name or a ":", or ends in a dot or space, and is not a usable file.

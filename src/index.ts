@@ -13,10 +13,11 @@ import { computeReportIntegrity } from "./core/artifact-integrity.js";
 import { ProxyInterceptor } from "./proxy/interceptor.js";
 import { runDoctor } from "./doctor.js";
 import { runReportMode } from "./plain-report.js";
-import { isReplaceableReportFile, isReservedFileName, notReplaceableMessage } from "./report-file-guard.js";
+import { archivePreviousReportSync, isReplaceableReportFile, isReservedFileName, notReplaceableMessage, type ArchivedReportInfo } from "./report-file-guard.js";
 import { runUiMode } from "./ui/server.js";
 import { runCampaignMode } from "./campaign/runner.js";
 import { createProxyServer, findToolNameCollisions } from "./proxy/gateway.js";
+import { resolveProGate, reduceSchemaAudit, reasonSentence, FREE_SCOPE_DE, PURCHASE_URL } from "./license/index.js";
 import { getScenarioById, ALL_SCENARIOS } from "./scenarios/f1-f5.js";
 import { VERSION } from "./version.js";
 import { writeFile, mkdir, rename, stat, realpath, unlink } from "node:fs/promises";
@@ -39,13 +40,13 @@ function printHelp(): void {
       `                                             Check the setup before a run (Node version, server\n` +
       `                                             start, tool classification, report file). Calls only\n` +
       `                                             initialize and tools/list; runs no tool.\n` +
-      `  cuonztech-agent-harness ui [--port <n>] [--no-open]\n` +
+      `  cuonztech-agent-harness ui [--port <n>] [--no-open]    (Pro: needs a license)\n` +
       `                                             Guided web interface for people without a terminal\n` +
       `                                             (local only, 127.0.0.1): demo, setup check, result.\n` +
       `  cuonztech-agent-harness report <report-file> [--format md|html] [--out <file>]\n` +
       `                                             Turn the proxy's --report-file into a plain-language\n` +
       `                                             page (German): result, what the agent did, limits.\n` +
-      `  cuonztech-agent-harness campaign [--runs <n>] [--format md|html] [--out <file>]\n` +
+      `  cuonztech-agent-harness campaign [--runs <n>] [--format md|html] [--out <file>]    (Pro)\n` +
       `                                             Before/after comparison of three fixed reference\n` +
       `                                             profiles incl. the two-turn user-pressure scenario\n` +
       `                                             (German report; measures no foreign agent).\n` +
@@ -95,6 +96,14 @@ function printHelp(): void {
       `Tool classification in proxy mode: explicit flags first, then the upstream's own\n` +
       `MCP annotations (readOnlyHint/destructiveHint), then name patterns. The result is\n` +
       `printed to stderr at startup; unclassified tools are passed through but not scored.\n\n` +
+      `  --license <key>                Licence key (or env AGENT_AUDIT_LICENSE), see "Lizenz" below\n\n` +
+      `Lizenz (Schlüssel CAUDIT-..., Prüfung offline):\n` +
+      `  Der Lauf selbst ist immer vollständig; Urteil, Score und Exit-Code sind echt.\n` +
+      `  Frei: ${FREE_SCOPE_DE}.\n` +
+      `  Pro: report --dossier (ohne Lizenz nur Kopf, Score, Urteil), ui, campaign, Schema-Befunde\n` +
+      `  und Textbausteine (Härtungsvorschläge) im Report.\n` +
+      `  Angabe per --license <key> (proxy, report, ui, campaign) oder Umgebungsvariable AGENT_AUDIT_LICENSE.\n` +
+      `  Lizenz erwerben: ${PURCHASE_URL}\n\n` +
       `The proxy is a long-running server: its exit code says nothing about the verdict.\n` +
       `Read the verdict from --report-file. Exit code 1 means the run itself broke\n` +
       `(bad arguments, upstream did not start, report file not writable).\n\n` +
@@ -193,6 +202,20 @@ function parseFlags(
 // failed start — including a rejected command line — replaces a report left
 // over from an earlier run instead of leaving its old PASS in place.
 let startupReportFile: string | null = null;
+let archivedPreviousRun: ArchivedReportInfo | null = null;
+let archiveAttempted = false;
+
+function tryArchivePreviousReport(): void {
+  if (archiveAttempted || !startupReportFile) return;
+  archiveAttempted = true;
+  try {
+    archivedPreviousRun = archivePreviousReportSync(startupReportFile);
+  } catch (err) {
+    // Fail closed: could not archive existing real report
+    process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(1);
+  }
+}
 
 // mkdir -p without { recursive: true }: on Linux pseudo file systems
 // (/proc/…) Node's recursive mkdir never returns and spins at full CPU.
@@ -229,6 +252,7 @@ function writeStartupFailureSync(reason: string): void {
 function writeStartupStateSync(extra: Record<string, string>): void {
   if (!startupReportFile) return;
   try {
+    tryArchivePreviousReport();
     // Only ever a regular file (or nothing yet): writing "the report" over
     // a directory, a device node or a pipe is never what was meant.
     const existing = statSync(startupReportFile, { throwIfNoEntry: false });
@@ -242,6 +266,16 @@ function writeStartupStateSync(extra: Record<string, string>): void {
           harnessVersion: VERSION,
           certification: "UNVERIFIED_FOR_PRODUCTION",
           verdict: "NOT_TESTED",
+          ...(archivedPreviousRun
+            ? {
+                previousRun: {
+                  file: archivedPreviousRun.archivedPath,
+                  verdict: archivedPreviousRun.verdict,
+                  callsCount: archivedPreviousRun.callsCount,
+                  archivedAt: archivedPreviousRun.archivedAt,
+                },
+              }
+            : {}),
           ...extra,
           generatedAt: new Date().toISOString(),
         },
@@ -352,6 +386,7 @@ const PROXY_FLAGS: Record<string, FlagKind> = {
   "--audit-tools": "single",
   "--report-file": "single",
   "--allow-writes": "boolean",
+  "--license": "single",
 };
 
 function parseEnvPair(pair: string, flag: string, into: Record<string, string>): void {
@@ -376,6 +411,8 @@ async function runProxyMode(argv: string[]): Promise<void> {
   if ("error" in parsed) fail(parsed.error);
   const one = (name: string): string | undefined => parsed.values.get(name)?.[0];
   const many = (name: string): string[] => parsed.values.get(name) ?? [];
+  // Lizenz: ändert nie den Lauf, nur den Umfang der geschriebenen Ausgabe (Textbausteine, Schema-Befunde).
+  const gate = resolveProGate(one("--license"));
 
   const upstreamCommand = one("--upstream-command");
   if (!upstreamCommand) {
@@ -517,10 +554,22 @@ async function runProxyMode(argv: string[]): Promise<void> {
     }
   }
   const reportTarget = reportFile;
-
+  if (!startupReportFile && reportTarget) {
+    startupReportFile = reportTarget;
+    tryArchivePreviousReport();
+  }
   const log = (line: string): void => {
     process.stderr.write(`[cuonztech-agent-harness] ${line}\n`);
   };
+  log(
+    gate.pro
+      ? "Lizenz: gültig (Pro-Umfang)."
+      : `Keine gültige Lizenz: ${reasonSentence(gate.verdict)} Der Lauf ist vollständig, Urteil, Score und Exit-Code sind echt. ` +
+          `Im Report fehlen die Pro-Teile (Textbausteine, Schema-Befunde). Lizenz: ${PURCHASE_URL}`,
+  );
+  if (archivedPreviousRun) {
+    log(`NOTE: An earlier report with ${archivedPreviousRun.callsCount} call(s) was archived to "${archivedPreviousRun.archivedPath}".`);
+  }
   // A tool name comes from the upstream: a line break in it must not be
   // able to fake further lines of this log.
   const shown = (name: string): string =>
@@ -545,6 +594,16 @@ async function runProxyMode(argv: string[]): Promise<void> {
         ".\n" +
         "Only do that against a disposable test/staging system, never production.\n" +
         "If --upstream-command points at such a system, confirm it by adding --allow-writes.",
+    );
+  }
+
+  if (writesReachUpstream) {
+    // Wortlaut nach LICENSE Ziffer 4a: der Schalter --allow-writes ist die Bestätigung des Anwenders.
+    log(
+      "ACHTUNG: Der Harness führt die Schreibvorgänge Ihres Agenten wirklich am Upstream aus und löst " +
+        "absichtlich Fehler, Wiederholungen und Verzögerungen aus. Nur gegen ein Testsystem mit " +
+        "synthetischen Daten einsetzen, das keine Produktivumgebung ist und von der Aussenwelt " +
+        "getrennt ist (LICENSE Ziffer 4a). Mit --allow-writes bestätigen Sie das.",
     );
   }
 
@@ -720,8 +779,10 @@ async function runProxyMode(argv: string[]): Promise<void> {
     try {
       const report = generateReport(interceptor.getSession());
       const score = computeScore([report]);
-      const patches = generatePatches([report], score);
+      const patches = gate.pro ? generatePatches([report], score) : [];  // ohne Lizenz nicht erzeugt und nicht geschrieben
       const callForensics = buildCallForensics(interceptor.getSession());
+      // Ohne Lizenz: Schema-Gutachten nur mit Zusammenfassung und Risikostufe, ohne Textbausteine.
+      const reportedSchemaAudit = gate.pro ? schemaAudit : reduceSchemaAudit(schemaAudit);
       const body = JSON.stringify(
         {
           harnessVersion: VERSION,
@@ -731,19 +792,40 @@ async function runProxyMode(argv: string[]): Promise<void> {
           verdict: report.verdict,
           report,
           score,
-          patches,
+          ...(gate.pro
+            ? { patches }
+            : {
+                limitedByLicense: true,
+                licenseNotice:
+                  "Keine gültige Lizenz: Textbausteine (Härtungsvorschläge) und Schema-Befunde gehören zum Pro-Umfang und fehlen hier. " +
+                  `Lauf, Urteil, Score und Exit-Code sind echt. Frei bleiben: ${FREE_SCOPE_DE}. Lizenz: ${PURCHASE_URL}`,
+              }),
+          ...(archivedPreviousRun
+            ? {
+                previousRun: {
+                  file: archivedPreviousRun.archivedPath,
+                  verdict: archivedPreviousRun.verdict,
+                  callsCount: archivedPreviousRun.callsCount,
+                  archivedAt: archivedPreviousRun.archivedAt,
+                },
+              }
+            : {}),
           // Deutscher Prompt-Baustein und Schema-Gutachten (neu in 0.7.0, optional für Leser).
-          recommended_prompt_patch_de: generatePromptPatchDe(
-            [report],
-            classification.filter((c) => c.class === "write").map((c) => c.name),
-            classification.filter((c) => c.class === "read").map((c) => c.name),
-          ),
-          schema_audit: schemaAudit,
+          ...(gate.pro
+            ? {
+                recommended_prompt_patch_de: generatePromptPatchDe(
+                  [report],
+                  classification.filter((c) => c.class === "write").map((c) => c.name),
+                  classification.filter((c) => c.class === "read").map((c) => c.name),
+                ),
+              }
+            : {}),
+          schema_audit: reportedSchemaAudit,
           call_forensics: callForensics,
           integrity: computeReportIntegrity({
             harnessVersion: VERSION,
             report,
-            schema_audit: schemaAudit,
+            schema_audit: reportedSchemaAudit,
             call_forensics: callForensics,
           }),
           toolClassification: classification,
@@ -849,7 +931,7 @@ async function runProxyMode(argv: string[]): Promise<void> {
   process.stdin.on("close", shutdown);
 
   startupReportFile = null;
-  const server = createProxyServer(interceptor, { auditTools });
+  const server = createProxyServer(interceptor, { auditTools, patches: gate.pro });
   // The SDK closes the transport on its own when a single message exceeds
   // its buffer (about 10 MB). Without this the proxy stayed alive, deaf,
   // with its upstream child still running.

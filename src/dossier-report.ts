@@ -4,14 +4,21 @@
 // dieselbe Aussage tragen. Alles Dynamische (Tool-Namen, Argumente, Agenten-Text,
 // Kunden- und Systemnamen) wird beim Rendern maskiert, nie vorher.
 import { LIMITS, OUTCOMES, claimHeadline, verdictText, type ReportFile } from "./plain-report.js";
+import { basename } from "node:path";
 import { evaluateAgentClaim } from "./core/claim-check.js";
 import { verifyReportIntegrity } from "./core/artifact-integrity.js";
 import type { ArgumentDiffEntry, CallForensicEntry, ClaimCheckResult, SchemaRiskLevel, ToolSchemaAuditEntry } from "./types.js";
+import type { LicenseVerdict } from "./license/types.js";
+import { PURCHASE_URL } from "./license/gate.js";
 
 export interface DossierOptions {
   customerName?: string;
   systemName?: string;
   agentResponse?: string;
+  licenseVerdict?: LicenseVerdict;
+  // Ohne gültige Lizenz gekürzte Fassung: nur Kopf, Score und Urteil je Szenario. Der Befehl `report`
+  // setzt das Feld immer; ein Bibliotheksaufruf ohne Angabe rendert die volle Fassung.
+  limited?: boolean;
 }
 
 type Tone = "pass" | "fail" | "warn" | "muted";
@@ -470,12 +477,14 @@ function integritySection(file: ReportFile, options: DossierOptions): Section {
       // Mit geprüfter Antwort würde der erste Standardsatz («nicht gemessen») Sektion 4 widersprechen.
       ...(answered ? LIMITS.slice(1) : LIMITS).map(inlineMarkup),
       [answered ? "Der Harness sieht von sich aus nur die Tool-Aufrufe; die Antwort des Agenten an den Nutzer wurde in Sektion 4 nur soweit geprüft, wie sie übergeben wurde und sich mit festen Regeln aus den Tool-Aufrufen beurteilen lässt." : "Eine Antwort des Agenten an den Nutzer wurde nicht übergeben und deshalb in Sektion 4 nicht geprüft."],
+      ...(file.previousRun ? [inlineMarkup(`Der Lauf folgte auf einen früheren Lauf (archiviert unter \`${basename(file.previousRun.file)}\`). Durch den Neustart des Prüfstands gilt dieses Urteil nur für die Aufrufe nach dem Neustart.`)] : []),
     ],
   });
   return { id: "integrity", title: "6. Kryptografischer Integritäts-Nachweis & Methodische Grenzen", blocks };
 }
 
 interface Dossier {
+  limited: boolean;
   headline: string;
   explanation: string;
   verdictLabel: string;
@@ -487,11 +496,52 @@ interface Dossier {
   sections: Section[];
 }
 
+// Gekürzte Fassung ohne gültige Lizenz (wie «Nur Zahlen» bei CPCG): Kopf, Score und das Urteil je Szenario.
+// Der Lauf und sein Urteil sind echt; Details, Aufruf-Protokoll, Härtungspaket und Anhänge gehören zum Pro-Umfang.
+function limitedSection(file: ReportFile): Section {
+  const verdict = file.verdict ?? file.report?.verdict ?? "NOT_TESTED";
+  const tone: Tone = verdict === "PASS" ? "pass" : verdict === "FAIL" ? "fail" : "warn";
+  const score = file.score?.overall;
+  const scenario = file.report?.scenarioId ?? (file.report?.mode ? `Modus ${file.report.mode}` : "—");
+  return {
+    id: "scenario-verdict",
+    title: "Urteil je Szenario",
+    blocks: [
+      {
+        t: "table",
+        head: ["Szenario", "Urteil", "Resilience Score", "Aufrufe", "Schreibvorgänge"],
+        rows: [
+          [
+            [clean(scenario)],
+            [badgeOf(verdict, tone)],
+            [file.report && typeof score === "number" ? `${score} / 100` : "nicht bewertet"],
+            [String(file.report?.totalCalls ?? "—")],
+            [String(file.report?.coverage?.writeCalls ?? "—")],
+          ],
+        ],
+      },
+      {
+        t: "note",
+        title: "Umfang dieser Fassung",
+        items: [
+          ["Das Urteil, der Score und die Zahlen stammen aus dem echten Lauf und sind vollständig."],
+          ["Gekürzt ohne Lizenz: Geschäftsrisiko-Matrix, Schnittstellen-Gutachten, Aufruf-Protokoll mit Parameter-Diff, Abgleich mit der Antwort des Agenten, Härtungspaket und Integritäts-Nachweis."],
+          [`Das vollständige Prüf-Dossier gehört zum Pro-Umfang. Lizenz: ${PURCHASE_URL}`],
+        ],
+      },
+    ],
+  };
+}
+
 function build(file: ReportFile, options: DossierOptions = {}): Dossier {
   const { headline, explanation } = verdictText(file);
   const score = file.score?.overall;
-  const sections = [summarySection(file), schemaSection(file), forensicsSection(file), claimSection(file, options), hardeningSection(file), integritySection(file, options)];
+  const limited = options.limited === true;
+  const sections = limited
+    ? [limitedSection(file)]
+    : [summarySection(file), schemaSection(file), forensicsSection(file), claimSection(file, options), hardeningSection(file), integritySection(file, options)];
   return {
+    limited,
     headline,
     explanation,
     verdictLabel: headline,
@@ -504,6 +554,14 @@ function build(file: ReportFile, options: DossierOptions = {}): Dossier {
       ["Auftraggeber / Umgebung", clean(options.customerName ?? "Lokale Prüfumgebung")],
       ["Session-ID", clean(file.report?.sessionId ?? "—")],
       ["Szenario / Modus", clean(file.report?.scenarioId ?? file.report?.mode ?? "—")],
+      [
+        "Lizenzstatus",
+        options.licenseVerdict?.valid
+          ? `PRO (${options.licenseVerdict.claims?.sub ?? options.licenseVerdict.claims?.customer ?? "Aktiviert"})`
+          : limited
+            ? `EVALUATION (keine gültige Lizenz, gekürzte Fassung; Lizenz: ${PURCHASE_URL})`
+            : "EVALUATION (Bibliotheksaufruf ohne Lizenzprüfung, volle Fassung)",
+      ],
     ],
     sections,
   };
@@ -619,7 +677,7 @@ export function renderDossierHtml(file: ReportFile, options?: DossierOptions): s
     `<title>${escHtml(TITLE)}</title>`,
     `<style>${CSS}</style></head><body><main class="wrap"><header>`,
     `<div class="topline"><strong>${escHtml(TITLE)}</strong><span>${escHtml(d.date)} · ${escHtml(d.version)}</span></div>`,
-    `<div class="hero"><div><h1>${escHtml(clean(d.meta[0]![1]))}</h1><p>Dieses Dossier fasst zusammen, wie der Agent beim Schreiben in das Zielsystem vorgegangen ist, wie gut die Schnittstellen des Servers gegen Doppelausführung abgesichert sind und was zu tun ist.</p></div>`,
+    `<div class="hero"><div><h1>${escHtml(clean(d.meta[0]![1]))}</h1><p>${d.limited ? "Gekürzte Fassung ohne Lizenz: Kopf, Score und Urteil je Szenario. Der Lauf und sein Urteil sind echt." : "Dieses Dossier fasst zusammen, wie der Agent beim Schreiben in das Zielsystem vorgegangen ist, wie gut die Schnittstellen des Servers gegen Doppelausführung abgesichert sind und was zu tun ist."}</p></div>`,
     `<aside class="verdict"><span class="caption">Gesamturteil</span><strong><span class="badge ${d.tone}">${escHtml(d.verdictLabel)}</span></strong><p>${escHtml(d.explanation)}</p><p>Resilience Score: <strong>${escHtml(d.scoreText)}</strong></p></aside></div>`,
     `<dl class="meta">${d.meta.map(([l, v]) => `<div><dt>${escHtml(l)}</dt><dd>${escHtml(v)}</dd></div>`).join("")}</dl>`,
     "</header>",

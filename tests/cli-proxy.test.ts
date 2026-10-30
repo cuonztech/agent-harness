@@ -4,9 +4,16 @@
 // functions. Needs a fresh `dist/` — see "pretest" in package.json.
 import { describe, it, expect } from "vitest";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, writeFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, stat, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, basename } from "node:path";
+import {
+  archivePreviousReportSync,
+  computeArchiveReportPath,
+  inspectReportForArchive,
+} from "../src/report-file-guard.js";
+import { renderMarkdown } from "../src/plain-report.js";
+import { renderDossierMarkdown } from "../src/dossier-report.js";
 
 const UPSTREAM = [
   "--upstream-command",
@@ -41,7 +48,7 @@ function runProxy(
       }
     });
     child.on("exit", (code) => finish(true, code));
-    const timer = setTimeout(() => finish(false, null), options.timeoutMs ?? 5000);
+    const timer = setTimeout(() => finish(false, null), options.timeoutMs ?? 10000);
   });
 }
 
@@ -251,6 +258,20 @@ describe("CLI `proxy` mode (real process)", () => {
         expect(stderr).toContain("Upstream tools (");
       });
 
+      it("prints a clear warning on stderr (test system, synthetic data) when writes reach the upstream", async () => {
+        const { stderr } = await runProxy([...UPSTREAM, "--scenario", "F1"], { waitFor: "Upstream tools (" });
+        expect(stderr).toContain("ACHTUNG: Der Harness führt die Schreibvorgänge Ihres Agenten wirklich am Upstream aus");
+        expect(stderr).toContain("Nur gegen ein Testsystem mit synthetischen Daten einsetzen");
+        expect(stderr).toContain("LICENSE Ziffer 4a");
+        // The warning comes before the upstream is started.
+        expect(stderr.indexOf("ACHTUNG:")).toBeLessThan(stderr.indexOf("Upstream tools ("));
+      });
+
+      it("prints no such warning for a pure pass-through baseline", async () => {
+        const base = await runProxy(UPSTREAM, { allowWrites: false, waitFor: "Upstream tools (" });
+        expect(base.stderr).not.toContain("ACHTUNG:");
+      });
+
       it("needs no confirmation for a pure pass-through baseline or for chaos at 0%", async () => {
         const base = await runProxy(UPSTREAM, { allowWrites: false, waitFor: "Upstream tools (" });
         expect(base.exited).toBe(false);
@@ -400,6 +421,151 @@ describe("CLI `proxy` mode (real process)", () => {
       );
       expect(exited).toBe(false);
       expect(stderr).not.toContain("Error:");
+    });
+  });
+
+  describe("archive previous report before restart (0.7.1 protection)", () => {
+    it("inspectReportForArchive unterscheidet echte Läufe von Start-Platzhaltern", () => {
+      expect(
+        inspectReportForArchive({ harnessVersion: "0.7.0", status: "starting", verdict: "NOT_TESTED" })
+          .shouldArchive,
+      ).toBe(false);
+
+      expect(
+        inspectReportForArchive({ harnessVersion: "0.7.0", startupError: "script not found", verdict: "NOT_TESTED" })
+          .shouldArchive,
+      ).toBe(false);
+
+      expect(
+        inspectReportForArchive({
+          harnessVersion: "0.7.0",
+          verdict: "PASS",
+          report: {
+            calls: [{ tool: "book", outcome: "SUCCESS" }],
+          },
+        }).shouldArchive,
+      ).toBe(true);
+
+      expect(
+        inspectReportForArchive({
+          harnessVersion: "0.7.0",
+          verdict: "NOT_TESTED",
+          call_forensics: {
+            timeline: [{ tool: "check_booking" }],
+          },
+        }).shouldArchive,
+      ).toBe(true);
+
+      expect(inspectReportForArchive({ someOther: "data" }).shouldArchive).toBe(false);
+    });
+
+    it("computeArchiveReportPath erzeugt Windows-sichere Zeitstempel ohne Doppelpunkte", () => {
+      const fixedDate = new Date("2026-10-30T17:15:30.000Z");
+      const path = computeArchiveReportPath("C:\\tmp\\harness-report.json", fixedDate);
+      expect(basename(path)).not.toContain(":");
+      expect(basename(path)).toBe("harness-report.2026-10-30T17-15-30.000Z.json");
+    });
+
+    it("archivePreviousReportSync benennt vorhandene Messung atomar um", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "harness-arch-"));
+      const reportPath = join(dir, "bericht.json");
+      const content = JSON.stringify(
+        {
+          harnessVersion: "0.7.0",
+          verdict: "PASS",
+          report: { calls: [{ tool: "create_booking" }] },
+        },
+        null,
+        2,
+      );
+      await writeFile(reportPath, content, "utf-8");
+
+      const fixedDate = new Date("2026-10-30T18:00:00.000Z");
+      const res = archivePreviousReportSync(reportPath, fixedDate);
+      expect(res).not.toBeNull();
+      expect(res?.verdict).toBe("PASS");
+      expect(res?.callsCount).toBe(1);
+
+      const archivedContent = await readFile(res!.archivedPath, "utf-8");
+      expect(archivedContent).toBe(content);
+
+      await writeFile(reportPath, content, "utf-8");
+      const res2 = archivePreviousReportSync(reportPath, fixedDate);
+      expect(res2?.archivedPath).toContain(".1.json");
+    });
+
+    it("Proxy archiviert echten Vorläufer-Report bei Neustart und vermerkt previousRun", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "harness-proxy-arch-"));
+      const reportFile = join(dir, "test-report.json");
+
+      const run1Data = {
+        harnessVersion: "0.7.0",
+        verdict: "PASS",
+        report: {
+          totalCalls: 1,
+          coverage: { writeCalls: 1, readCalls: 0 },
+          operations: [{ tool: "book", attempts: 1, executions: 1, outcome: "VERIFIED_NO_RETRY" }],
+          calls: [{ tool: "book" }],
+        },
+        generatedAt: new Date().toISOString(),
+      };
+      await writeFile(reportFile, JSON.stringify(run1Data, null, 2), "utf-8");
+
+      const { code } = await runProxy([
+        "--upstream-command",
+        process.execPath,
+        "--upstream-arg",
+        "-e",
+        "--upstream-arg",
+        "process.exit(0)",
+        "--report-file",
+        reportFile,
+      ]);
+
+      const files = await readdir(dir);
+      const archiveFiles = files.filter(
+        (f) => f !== basename(reportFile) && f.startsWith("test-report.") && f.endsWith(".json"),
+      );
+      expect(archiveFiles.length).toBe(1);
+
+      const archivedContent = JSON.parse(await readFile(join(dir, archiveFiles[0]!), "utf-8"));
+      expect(archivedContent.verdict).toBe("PASS");
+      expect(archivedContent.report.totalCalls).toBe(1);
+
+      const currentContent = JSON.parse(await readFile(reportFile, "utf-8"));
+      expect(currentContent.previousRun).toBeDefined();
+      expect(currentContent.previousRun.callsCount).toBe(1);
+      expect(currentContent.previousRun.verdict).toBe("PASS");
+      expect(currentContent.previousRun.file).toContain(archiveFiles[0]!);
+    });
+
+    it("renderMarkdown und renderDossierMarkdown weisen auf archivierten Vorläufer hin", () => {
+      const fileWithPrevious = {
+        harnessVersion: "0.7.1",
+        verdict: "PASS",
+        previousRun: {
+          file: "/path/to/bericht.2026-10-30T17-00-00Z.json",
+          verdict: "PASS",
+          callsCount: 1,
+          archivedAt: "2026-10-30T17:00:00Z",
+        },
+        report: {
+          totalCalls: 2,
+          scenarioId: "F1",
+          injectedErrors: 0,
+          coverage: { writeCalls: 0, readCalls: 2, scenarioTriggered: true, unclassifiedTools: [] },
+          operations: [],
+          observations: [],
+        },
+      };
+
+      const md = renderMarkdown(fileWithPrevious);
+      expect(md).toContain("Vorläufer-Lauf archiviert");
+      expect(md).toContain("bericht.2026-10-30T17-00-00Z.json");
+      expect(md).toContain("Der Lauf folgte auf einen früheren Lauf (archiviert)");
+
+      const dossierMd = renderDossierMarkdown(fileWithPrevious);
+      expect(dossierMd).toContain("Der Lauf folgte auf einen früheren Lauf");
     });
   });
 });

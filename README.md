@@ -6,6 +6,8 @@
 
 > **Was der Harness ist und was nicht:** Er misst, was der Agent *über Tool-Aufrufe tut*. Er sieht nicht, was der Agent seinem Benutzer *sagt*, und er kennt die Fachlogik deines Systems nicht. Jedes Ergebnis ist ein Selbsttest (`UNVERIFIED_FOR_PRODUCTION`), kein Zertifikat. Die Grenzen stehen unten unter [Grenzen](#grenzen).
 
+**Lizenz in einem Satz:** Bis 0.7.0 steht das Paket unter der MIT-Lizenz; ab 0.8.0 unter einer CuonzTech-Lizenz mit freiem Umfang (Proxy, Szenarien F1 bis F5, doctor, Kompaktbericht, JSON-Report, Score, PASS/FAIL, Exit-Code: kostenlos) und Pro-Umfang (Dossier, Oberfläche, Schema-Gutachten, Textbausteine, Kampagnen-Runner). Einzelheiten: [Lizenz und Umfang](#lizenz-und-umfang).
+
 ---
 
 ## Was gemessen wird
@@ -129,8 +131,8 @@ npx cuonztech-agent-harness report harness-report.json --dossier --format html -
 npx cuonztech-agent-harness campaign --runs 1 --format html --out kampagne.html
 ```
 
-- `report <report-file> --dossier [--format html|md] [--customer <name>] [--system <name>] [--agent-response <text>]` macht aus der Messdatei das druckbare Prüf- und Architektur-Dossier (Gutachten der Tool-Schemas, Call-für-Call-Forensik, Integritäts-Nachweis). Mit `--agent-response` wird die Schlussmeldung des Agenten gegen den Messbefund geprüft (Ehrlichkeits-Check); den Text mit Leerzeichen setzt man in Anführungszeichen. `--customer` und `--system` stehen nur zusammen mit `--dossier`.
-- `campaign [--runs <n>] [--format md|html] [--out <file>]` lässt die eingebauten Beispiel-Agenten (unvorsichtig, unter Nutzer-Nachdruck einknickend, gehärtet) durch F1 bis F5 und den zweiten Gesprächszug laufen und zeigt den Vorher/Nachher-Unterschied. Es braucht keinen Upstream-Server und schreibt nur in `--out`; eine fremde Datei ersetzt der Befehl nicht.
+- `report <report-file> --dossier [--format html|md] [--customer <name>] [--system <name>] [--agent-response <text>] [--license <key>]` macht aus der Messdatei das druckbare Prüf- und Architektur-Dossier (Gutachten der Tool-Schemas, Call-für-Call-Forensik, Integritäts-Nachweis). **Pro-Umfang:** Ohne gültige Lizenz enthält das Dossier nur Kopf, Score und das Urteil je Szenario. Mit `--agent-response` wird die Schlussmeldung des Agenten gegen den Messbefund geprüft (Ehrlichkeits-Check); den Text mit Leerzeichen setzt man in Anführungszeichen. `--customer` und `--system` stehen nur zusammen mit `--dossier`. Mit `--license` (oder `AGENT_AUDIT_LICENSE`) wird ein erworbener Lizenzschlüssel (`CAUDIT-...`) offline verifiziert und im Dossier ausgewiesen.
+- `campaign [--runs <n>] [--format md|html] [--out <file>] [--license <key>]` (**Pro-Umfang**, ohne gültige Lizenz nicht ausgeführt) lässt die eingebauten Beispiel-Agenten (unvorsichtig, unter Nutzer-Nachdruck einknickend, gehärtet) durch F1 bis F5 und den zweiten Gesprächszug laufen und zeigt den Vorher/Nachher-Unterschied. Es braucht keinen Upstream-Server und schreibt nur in `--out`; eine fremde Datei ersetzt der Befehl nicht.
 
 **Ergebnis lesen:** In der Datei steht `"verdict"`:
 
@@ -217,9 +219,13 @@ Für Menschen, die keine Befehle tippen wollen. Doppelklick auf `launchers/Start
 
 ```bash
 npx cuonztech-agent-harness ui
+# oder mit Lizenzschlüssel:
+npx cuonztech-agent-harness ui --license CAUDIT-...
 ```
 
-Es öffnet sich eine Seite im Browser, die Schritt für Schritt führt: Hinweis (nur Testsystem), Demo mit zwei Beispiel-Agenten **oder** den eigenen Testserver prüfen, die fertige Konfiguration für den Agenten kopieren, und danach erscheint der Bericht in Klartext direkt in der Seite. Die Seite läuft nur auf deinem Rechner (`127.0.0.1`, zufälliger Zugriffsschlüssel im Link). Läufe und Berichte liegen unter `~/CuonzTech-Agent-Harness/`. In Schritt 3 bietet die Seite bereits konfigurierte MCP-Server dieses Rechners zur 1-Klick-Übernahme an (gelesen werden nur Name, Programm und Argumente aus Claude Desktop, Cursor und `.mcp.json`; `env`-Werte und andere Felder werden nie gelesen).
+Die Oberfläche gehört zum **Pro-Umfang**: Ohne gültigen Lizenzschlüssel (`--license` oder `AGENT_AUDIT_LICENSE`) startet sie nicht, sondern nennt den Grund und den Weg zur Lizenz (Exit 1). Der Weg über die Kommandozeile (`proxy`, `doctor`, `report`) bleibt frei.
+
+Es öffnet sich eine Seite im Browser, die Schritt für Schritt führt: Lizenzstatus & Schlüssel-Eingabe (offline via Ed25519 validiert), Hinweis (nur Testsystem), Demo mit zwei Beispiel-Agenten **oder** den eigenen Testserver prüfen, die fertige Konfiguration für den Agenten kopieren, und danach erscheint der Bericht in Klartext direkt in der Seite. Die Seite läuft nur auf deinem Rechner (`127.0.0.1`, zufälliger Zugriffsschlüssel im Link). Läufe und Berichte liegen unter `~/CuonzTech-Agent-Harness/`. In Schritt 3 bietet die Seite bereits konfigurierte MCP-Server dieses Rechners zur 1-Klick-Übernahme an (gelesen werden nur Name, Programm und Argumente aus Claude Desktop, Cursor und `.mcp.json`; `env`-Werte und andere Felder werden nie gelesen).
 
 Grenzen: Node.js ≥ 20 muss installiert sein (ein Installer ohne Node folgt). Die Oberfläche startet den Agenten nicht; die Konfiguration trägst du in Claude Code oder Claude Desktop ein. In Docker ist sie nicht freigegeben.
 
@@ -238,7 +244,7 @@ Unter Windows PowerShell statt `"$PWD"` die Schreibweise `"${PWD}"` verwenden. D
 
 ### 2. Aus einem Verstoss wird ein Prompt-Patch
 
-Für beobachtetes Fehlverhalten — und nur dafür — liefert `cuonztech__get_score` (bzw. die Report-Datei) einen Textbaustein für den System-Prompt. Beispiel nach einer Doppelausführung nach Timeout:
+Für beobachtetes Fehlverhalten — und nur dafür — liefert `cuonztech__get_score` (bzw. die Report-Datei) einen Textbaustein für den System-Prompt. Die Textbausteine gehören zum **Pro-Umfang**: Ohne gültige Lizenz bleiben Score und Urteil vollständig, die Textbausteine fehlen und ein Hinweis steht an ihrer Stelle. Beispiel nach einer Doppelausführung nach Timeout:
 
 ```
 ## [CRITICAL] GHOST_WRITE
@@ -323,7 +329,7 @@ Der Exit-Code ist 0, wenn der Harness beide Referenz-Agenten wie erwartet beurte
 
 Der naive Referenz-Agent fällt absichtlich durch; das ist Teil des Selbsttests und sagt nichts über dein System.
 
-Dieses Paket ist ein kostenloses Selbsttest-Werkzeug (MIT-Lizenz). Es stellt kein Zertifikat aus und ersetzt keine unabhängige Prüfung — siehe [Coming soon](#coming-soon-cuonztech-agent-audit).
+Der Selbsttest `benchmark` gehört zum freien Umfang und bleibt kostenlos (Lizenz: bis 0.7.0 MIT, ab 0.8.0 CuonzTech-Lizenz, siehe [Lizenz und Umfang](#lizenz-und-umfang)). Er stellt kein Zertifikat aus und ersetzt keine unabhängige Prüfung — siehe [Agent Audit](#agent-audit-prüfauftrag-auf-anfrage).
 
 ### 4. Demo-Session als MCP-Server (ohne echtes Backend)
 
@@ -381,27 +387,27 @@ Das ist eine **Demo**, keine Messung: Es gibt kein echtes Backend, Lese-Aufrufe 
 - **`retry_after` wird nur für denselben Vorgang geprüft**, anhand der Zeitstempel im Proxy. Ein anderer Aufruf desselben Tools innerhalb der Wartezeit erscheint nur als Beobachtung (`OTHER_CALL_DURING_RETRY_AFTER`): Der Proxy kann einen parallel abgeschickten Aufruf nicht von einer Reaktion auf das 429 unterscheiden. Gemessen wird die verstrichene Zeit, nicht die Absicht: Braucht dein Modell für den nächsten Schritt länger als `retry_after` (Standard 60 Sekunden), besteht auch ein Agent, der gar nicht wartet. Ein langsames lokales Modell bestand so mit 60 Sekunden und fiel mit `--retry-after 600` bei gleichem Verhalten durch. `--retry-after` deshalb deutlich über die Antwortzeit deines Modells setzen; der Report nennt bei `RECOVERED_BY_RETRY` die tatsächliche Wartezeit.
 - **Ein Lauf ist ein Datenpunkt.** LLM-Agenten verhalten sich nicht deterministisch; für eine belastbare Aussage braucht es viele Läufe.
 
-## Coming soon: CuonzTech Agent Audit
+## Agent Audit (Prüfauftrag, auf Anfrage)
 
-**In Vorbereitung — ein eigenes Produkt, nicht Teil dieses Pakets.**
+**Ein eigener Prüfauftrag auf Anfrage, nicht Teil dieses Pakets.**
 
-Dieses Werkzeug zeigt dir, ob dein Agent in einem generischen Fehlerszenario einen Schreibvorgang doppelt ausführt. Was es prinzipiell nicht kann, steht oben unter [Grenzen](#grenzen). Genau dort setzt das CuonzTech Agent Audit an — eine unabhängige Prüfung deines Agenten gegen deine Systeme, mit Zertifikat:
+Dieses Werkzeug zeigt dir, ob dein Agent in einem generischen Fehlerszenario einen Schreibvorgang doppelt ausführt. Was es prinzipiell nicht kann, steht oben unter [Grenzen](#grenzen). Genau dort setzt das CuonzTech Agent Audit an: CuonzTech führt die Prüfung deines Agenten an deinem Staging-System durch und liefert ein Prüf-Dossier mit Befunden. Das Dossier ist kein Zertifikat und keine Produktionsfreigabe.
 
-| | Agent-Harness (dieses Paket, kostenlos) | CuonzTech Agent Audit (in Vorbereitung) |
+| | Agent-Harness (dieses Paket; freier Umfang kostenlos, Pro-Umfang mit Lizenz) | CuonzTech Agent Audit (Prüfauftrag, auf Anfrage) |
 |---|---|---|
-| Wer prüft | du selbst | unabhängige Prüfung durch CuonzTech |
+| Wer prüft | du selbst | Durchführung und Auswertung durch CuonzTech |
 | Was als Duplikat gilt | gleiche Tool-Argumente | die Fachlogik deines Systems, am Backend abgeglichen |
 | Läufe | so viele, wie du startest | viele Wiederholungen mit deinem echten Agenten, statistisch ausgewertet |
 | Was der Agent dem Benutzer sagt | nicht sichtbar | wird mit dem tatsächlichen Zustand verglichen |
 | Nebenläufigkeit, echte Latenz, verspätete Antworten | nicht erzeugt | auf deine Infrastruktur zugeschnitten |
 | Prompt-Patches | Vorschläge | mit Vorher-Nachher-Messung belegt |
-| Ergebnis | Selbsttest (`UNVERIFIED_FOR_PRODUCTION`) | Prüfbericht mit Zertifikat |
+| Ergebnis | Selbsttest (`UNVERIFIED_FOR_PRODUCTION`) | Prüf-Dossier (kein Zertifikat) |
 
 Interesse oder Fragen: **[cuonztech.ch/agent-harness.html](https://cuonztech.ch/agent-harness.html)**
 
 ## Report-Format (JSON)
 
-`cuonztech__get_report` / `get_report` mit `format: "json"` liefern u. a. die Felder unten. Die `--report-file` enthält `verdict` (dasselbe wie `report.verdict`), `certification`, `report`, `score`, `patches`, `toolClassification` und `harnessVersion`; scheitert schon der Start, steht dort `verdict: "NOT_TESTED"` mit `startupError`.
+`cuonztech__get_report` / `get_report` mit `format: "json"` liefern u. a. die Felder unten. Die `--report-file` enthält `verdict` (dasselbe wie `report.verdict`), `certification`, `report`, `score`, `patches`, `toolClassification` und `harnessVersion`; scheitert schon der Start, steht dort `verdict: "NOT_TESTED"` mit `startupError`. Ohne gültige Lizenz fehlen `patches` und `recommended_prompt_patch_de`, `schema_audit` ist auf Zusammenfassung und Risikostufen gekürzt, und die Datei trägt `limitedByLicense: true` mit `licenseNotice` (siehe [Lizenz und Umfang](#lizenz-und-umfang)); `verdict`, `report`, `score` und `toolClassification` sind davon nicht betroffen.
 
 | Feld | Inhalt |
 |---|---|
@@ -453,6 +459,40 @@ npx cuonztech-agent-harness --help
 
 Keine Install-Skripte, keine Netzwerkzugriffe, keine Telemetrie.
 
-## Lizenz
+## Lizenz und Umfang
 
-MIT
+**Welche Lizenz gilt?** Die bereits veröffentlichten Versionen (bis einschliesslich 0.7.0) stehen unter der **MIT-Lizenz** und bleiben dort. Die neue Lizenz gilt erst ab der neuen Version 0.8.0: eine CuonzTech-Lizenz mit freiem Umfang und Pro-Umfang (Datei [`LICENSE`](LICENSE)). Der freie Umfang bleibt kostenlos, auch kommerziell. Der Quelltext ist einsehbar; die Software ist nicht Open Source. Die MIT-Fassung der Versionen bis 0.7.0 liegt als LICENSE-MIT-bis-0.7.0.txt im Repository.
+
+**Das Prinzip:** Der Lauf selbst wird nie verändert oder abgeschwächt. Der Proxy, die Szenarien F1 bis F5, das Urteil (PASS/FAIL/NOT_TESTED), der Resilience Score und der Exit-Code sind mit und ohne Lizenz dieselben. Ohne gültige Lizenz wird nur die **Ausgabe** gekürzt oder ein Pro-Befehl mit einem klaren Hinweis nicht ausgeführt.
+
+| Funktion | Befehl / Option | Ohne gültige Lizenz | Mit Lizenz (Pro) |
+|---|---|---|---|
+| MCP-Chaos-Proxy, Szenarien F1 bis F5 | `proxy` | frei, unverändert | frei, unverändert |
+| Vorprüfung samt Schema-Inspektion (Zusammenfassung, Risikostufe je Tool) | `doctor` | frei | frei |
+| Kompaktbericht (Klartext), JSON-Report, Resilience Score, PASS/FAIL, Exit-Code | `report <datei>`, `proxy --report-file` | frei | frei |
+| Selbsttest mit den Referenz-Agenten, Demo-Server | `benchmark`, ohne Befehl | frei | frei |
+| Prüf-Dossier (PDF über «Drucken», HTML, Markdown) | `report --dossier` | **gekürzt**: Kopf, Score und Urteil je Szenario | vollständig (6 Abschnitte, Aufruf-Protokoll, Härtungspaket, Integritäts-Nachweis) |
+| Schema-Gutachten | im Report (`schema_audit`), im Bericht, im Dossier | **gekürzt**: Zusammenfassung und Risikostufe je Tool | Befunde je Tool und kopierfertige Schema-Vorschläge |
+| Textbaustein- und Prompt-Patch-Generator (Härtungsvorschläge) | im Report (`patches`, `recommended_prompt_patch_de`), `cuonztech__get_score`, im Bericht | **gekürzt**: Score und Urteil, keine Textbausteine | Textbausteine (Deutsch und Englisch) |
+| Geführte Web-Oberfläche | `ui` | **gesperrt**: Hinweis, Exit 1 | vollständig |
+| Kampagnen-Runner für Mehrfach-Läufe | `campaign` | **gesperrt**: Hinweis, Exit 1 | vollständig |
+
+Wo sich eine Funktion sinnvoll kürzen lässt (Dossier, Schema-Gutachten, Textbausteine), wird sie gekürzt statt gesperrt. Gesperrt sind nur `ui` und `campaign`, weil dort die Ausgabe selbst die Funktion ist.
+
+**Lizenzschlüssel eingeben:** per Option `--license <KEY>` (`proxy`, `report`, `ui`, `campaign`) oder per Umgebungsvariable `AGENT_AUDIT_LICENSE`. In CI die Umgebungsvariable als Secret setzen, nicht als Argument. Der Schlüssel (`CAUDIT-…`) wird offline mit Ed25519 geprüft: kein Netzwerkzugriff, keine Telemetrie. Schlüssel für CuonzTech Privacy Chaos Gate (`CPCG-…`) berechtigen nicht zum Pro-Umfang. Die Oberfläche übernimmt einen mit `--license` übergebenen, gültigen Schlüssel in die Konfiguration, die sie für deinen Agenten erzeugt.
+
+**Ohne gültige Lizenz** (keine hinterlegt, ungültig, abgelaufen) sieht ein Pro-Befehl so aus. Er bricht nicht kryptisch ab, nennt die Funktion, den Grund, was frei bleibt, und beendet sich mit Exit 1 wie jeder Befehl, der nicht ausgeführt wurde; es gibt keinen eigenen Exit-Code für die Sperre:
+
+```text
+Keine gültige Lizenz: Der Kampagnen-Runner (campaign) gehört zum Pro-Umfang. Es ist keine Lizenz hinterlegt.
+Frei bleiben: MCP-Chaos-Proxy mit den Szenarien F1 bis F5, doctor, Kompaktbericht, JSON-Report (--report-file), Resilience Score und PASS/FAIL samt Exit-Code.
+Der Befehl wurde nicht ausgeführt. Lizenz: https://cuonztech.ch/agent-harness.html#audit
+Aktivierung: --license <KEY> oder Umgebungsvariable AGENT_AUDIT_LICENSE.
+```
+
+Bei den gekürzten Funktionen (`report --dossier`, Report-Datei, Kompaktbericht) steht der Hinweis auf stderr beziehungsweise im Dokument selbst; Exit-Code 0 bleibt, wenn der Befehl sonst gelingt. Die Report-Datei eines Proxy-Laufs ohne Lizenz trägt `"limitedByLicense": true` und `licenseNotice`; `patches` und `recommended_prompt_patch_de` fehlen, `schema_audit` enthält nur Zusammenfassung und Risikostufen. Der Integritäts-Nachweis gilt für die geschriebene Fassung. Der Lizenzstatus im Dossier lautet `PRO (…)` bei gültiger Lizenz und `EVALUATION` ohne.
+
+**Wo die Sperre sitzt:** Sie gilt für die Befehle der Kommandozeile und für den Proxy-Lauf. Das Paket ist source-available; die Sperre ist eine ehrliche Kennzeichnung des Umfangs, kein Kopierschutz. Wer die Lizenzprüfung entfernt oder umgeht, verstösst gegen `LICENSE`.
+
+Das Paket stellt kein Zertifikat aus und ersetzt keine unabhängige Prüfung; der Selbsttest bleibt `UNVERIFIED_FOR_PRODUCTION`.
+
