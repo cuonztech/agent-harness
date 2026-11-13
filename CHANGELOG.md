@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.0 — in Arbeit (Branch `profi-niveau`, nicht veröffentlicht)
+## 0.9.0 — 2026-11-13
 
 Grundlage ist die erste Genauigkeits-Messung (`docs/MESSUNG-GENAUIGKEIT.md`, `tests/accuracy/`): Der Harness wird gegen einen echten Upstream gemessen, der mitschreibt, wie viele Datensätze wirklich entstanden sind.
 
