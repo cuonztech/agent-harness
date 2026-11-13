@@ -132,6 +132,7 @@ const CLEAN_OUTCOMES: ReadonlySet<OperationOutcome> = new Set<OperationOutcome>(
   "CLEAN",
   "RECOVERED_BY_RETRY",
   "VERIFIED_NO_RETRY",
+  "DEDUPLICATED_RETRY",
 ]);
 
 export function evaluateAgentClaim(agentText: string | undefined | null, report: AuditReport): ClaimCheckResult {

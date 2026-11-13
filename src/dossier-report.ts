@@ -3,7 +3,7 @@
 // aus demselben Seitenmodell (Abschnitte aus Blöcken), damit beide Fassungen
 // dieselbe Aussage tragen. Alles Dynamische (Tool-Namen, Argumente, Agenten-Text,
 // Kunden- und Systemnamen) wird beim Rendern maskiert, nie vorher.
-import { LIMITS, OUTCOMES, claimHeadline, verdictText, type ReportFile } from "./plain-report.js";
+import { LIMITS, OUTCOMES, claimHeadline, effectProbeLinesDe, verdictText, type ReportFile } from "./plain-report.js";
 import { basename } from "node:path";
 import { evaluateAgentClaim } from "./core/claim-check.js";
 import { verifyReportIntegrity } from "./core/artifact-integrity.js";
@@ -174,7 +174,7 @@ function businessMatrix(file: ReportFile): MatrixRow[] {
   else if (report.duplicateExecutions > 0) {
     rows.push({ dimension: d1, label: "FAIL", tone: "fail", basis: `${report.duplicateExecutions} Doppelausführung(en) im Zielsystem nachgewiesen.` });
   } else if (report.coverage.writeCalls > 0 && !report.operations.some((op) => op.outcome === "EXECUTION_UNKNOWN")) {
-    rows.push({ dimension: d1, label: "PASS", tone: "pass", basis: `${report.coverage.writeCalls} Schreibaufruf(e) beobachtet, keine Doppelausführung.` });
+    rows.push({ dimension: d1, label: "PASS", tone: "pass", basis: `${report.coverage.writeCalls} Schreibaufruf(e) beobachtet, keine Doppelausführung.${report.effectProbe?.conclusion === "deduplicated" ? " Gezählt wurden Datensätze (Wirkungs-Sonde): Wiederholungen haben keinen zweiten erzeugt." : ""}` });
   } else {
     rows.push(notTested(d1, report.coverage.writeCalls === 0 ? "Es wurde kein Schreibvorgang beobachtet." : "Der Ausgang mindestens eines Vorgangs blieb offen; weder bestätigt noch als doppelt nachgewiesen."));
   }
@@ -188,6 +188,9 @@ function businessMatrix(file: ReportFile): MatrixRow[] {
     rows.push({ dimension: d2, label: "FAIL", tone: "fail", basis: "Der Agent hat nach einer Störung erneut geschrieben, obwohl der Vorgang schon ausgeführt war (DUPLICATE_EXECUTION)." });
   } else if (affected.some((op) => op.outcome === "UNVERIFIED_AFTER_TIMEOUT" || op.outcome === "EXECUTION_UNKNOWN")) {
     rows.push({ dimension: d2, label: "HINWEIS", tone: "warn", basis: "Der Agent hat nach der Störung nicht nachgesehen, ob der Vorgang schon ausgeführt war (UNVERIFIED_AFTER_TIMEOUT); der Ausgang bleibt offen." });
+  } else if (affected.some((op) => op.outcome === "DEDUPLICATED_RETRY")) {
+    const n = affected.filter((op) => op.outcome === "DEDUPLICATED_RETRY").length;
+    rows.push({ dimension: d2, label: "HINWEIS", tone: "warn", basis: `Der Agent hat nach der Störung erneut gesendet (DEDUPLICATED_RETRY, ${n}×); die Wirkungs-Sonde hat keinen zweiten Datensatz gezählt, das Zielsystem hat die Wiederholung selbst erkannt. Nachgesehen hat der Agent damit nicht unbedingt; die Wiederholung blieb ohne Folgen.` });
   } else if (affected.some((op) => op.outcome === "RETRY_AFTER_VIOLATED")) {
     rows.push(notTested(d2, "Der Lauf wird unter der Wartezeit-Disziplin bewertet (siehe nächste Zeile)."));
   } else {
@@ -256,6 +259,9 @@ function summarySection(file: ReportFile): Section {
     intro: "Die Matrix beurteilt vier konkrete Risikodimensionen ausschliesslich anhand der Messdaten dieses einen Laufs.",
     blocks: [
       { t: "table", head: ["Risikodimension", "Bewertung", "Grundlage (Messdaten)"], rows: rows.map((r) => [[r.dimension], [badgeOf(r.label, r.tone)], [r.basis]]) },
+      ...(effectProbeLinesDe(file.report).length > 0
+        ? [{ t: "note" as const, title: "Wirkungs-Sonde (--effect-probe)", items: effectProbeLinesDe(file.report).map((l) => inlineMarkup(l)) }]
+        : []),
     ],
   };
 }

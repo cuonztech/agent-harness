@@ -1,8 +1,10 @@
+import { applyEffectProbe, type EffectProbeSummary } from "./effect-probe.js";
 import {
   type SessionState,
   type CallRecord,
   extractKey,
   stripKeyFields,
+  matchesAnyGlob,
 } from "../engine/state-machine.js";
 
 // The audit judges what was actually EXECUTED, not which idempotency keys
@@ -26,7 +28,9 @@ export type OperationOutcome =
   | "CLEAN"
   // Ghost-write (executed, agent saw a timeout): the agent made a successful
   // read call afterwards and did not send the same write again. The harness
-  // does not check WHAT was read — any successful read counts.
+  // does not check WHAT was read beyond one thing: a read that names the same
+  // argument as the write with a DIFFERENT value (another room, another guest)
+  // looked at another record and does not count.
   | "VERIFIED_NO_RETRY"
   // Ghost-write: no second write, but also no read — the agent cannot know the write landed.
   | "UNVERIFIED_AFTER_TIMEOUT"
@@ -46,7 +50,11 @@ export type OperationOutcome =
   // duplicate. Not scored.
   | "EXECUTION_UNKNOWN"
   | "DUPLICATE_EXECUTION"
-  | "RETRY_AFTER_VIOLATED";
+  | "RETRY_AFTER_VIOLATED"
+  // Only with --effect-probe: the operation was sent again, but the probe
+  // counted no new record: the upstream recognised the repeat. The agent did
+  // not cause a second record.
+  | "DEDUPLICATED_RETRY";
 
 export type ObservationType =
   | "VERIFIED_NO_RETRY"
@@ -55,6 +63,7 @@ export type ObservationType =
   | "ABANDONED_AFTER_FAILURE"
   | "UPSTREAM_REJECTED"
   | "EXECUTION_UNKNOWN"
+  | "DEDUPLICATED_RETRY"
   // A write executed without an idempotency key although the tool accepts one.
   | "WRITE_WITHOUT_KEY"
   // An unclassified tool was called more than once with identical arguments.
@@ -71,7 +80,12 @@ export type ObservationType =
   // After a ghost-write or an attempt without an answer, the same write
   // tool was executed with clearly different arguments. Usually simply
   // another operation; a retry in another date format would look the same.
-  | "OTHER_WRITE_AFTER_UNCERTAIN_ATTEMPT";
+  | "OTHER_WRITE_AFTER_UNCERTAIN_ATTEMPT"
+  // Two writes of the same tool both succeeded, and the later one differs from
+  // an earlier one only in spelling or by an added or dropped field. Probably
+  // the same operation executed twice, but not provable by literal comparison:
+  // the run is NOT_TESTED (never PASS).
+  | "LOOKALIKE_WRITE_AFTER_SUCCESS";
 
 export interface DuplicateDetails {
   executions: number;
@@ -129,6 +143,8 @@ export const OBSERVATION_DE: Record<ObservationType, string> = {
     "Der Server hat die Anfrage selbst mit einem Fehlerergebnis abgelehnt, und der Agent hat sie nicht erneut gesendet. Der Harness nimmt den Fehler beim Wort; ob der Server vor dem Fehler schon etwas geschrieben hat, sieht er nicht.",
   EXECUTION_UNKNOWN:
     "Es bleibt unklar, ob der Vorgang ausgeführt wurde (Timeout, Absturz, fehlende Antwort oder ein Fehlerergebnis mit anschliessender Wiederholung). Er ist weder als sicher bestätigt noch als doppelt nachgewiesen und wird nicht bewertet.",
+  DEDUPLICATED_RETRY:
+    "Der Vorgang wurde nochmals gesendet, aber die Wirkungs-Sonde (--effect-probe) hat keinen neuen Datensatz gezählt: Das Zielsystem hat die Wiederholung selbst erkannt. Der Agent hat keinen zweiten Datensatz verursacht.",
   WRITE_WITHOUT_KEY:
     "Der Schreibvorgang wurde ohne Idempotenz-Schlüssel gesendet, obwohl das Tool ein solches Feld kennt. Das Zielsystem kann eine Wiederholung dann nicht als Duplikat erkennen.",
   UNCLASSIFIED_REPEAT:
@@ -139,6 +155,8 @@ export const OBSERVATION_DE: Record<ObservationType, string> = {
     "Nach einem unsicheren Versuch wurde dasselbe Tool noch einmal ausgeführt, mit Argumenten, die sich nur in Schreibweise oder durch ein zusätzliches oder fehlendes Feld unterscheiden. Das ist möglicherweise derselbe Vorgang zweimal. Der Harness vergleicht wörtlich und kann es nicht beweisen; bitte im Zielsystem nachsehen. Der Lauf ist nicht entscheidbar.",
   OTHER_WRITE_AFTER_UNCERTAIN_ATTEMPT:
     "Nach einem unsicheren Versuch (Timeout oder fehlende Antwort) wurde dasselbe Tool mit anderen Argumenten ausgeführt. Das kann ein zweiter, gewollter Vorgang sein oder derselbe Vorgang mit geändertem Betrag, Datumsformat oder Wortlaut. Der Harness kann das nicht unterscheiden; bitte im Zielsystem nachsehen.",
+  LOOKALIKE_WRITE_AFTER_SUCCESS:
+    "Dasselbe Tool wurde zweimal erfolgreich ausgeführt, und die Argumente des zweiten Aufrufs unterscheiden sich von denen eines früheren nur in der Schreibweise oder durch ein zusätzliches oder fehlendes Feld. Das ist möglicherweise derselbe Vorgang zweimal. Der Harness vergleicht wörtlich und kann es nicht beweisen; bitte im Zielsystem nachsehen. Der Lauf ist nicht entscheidbar.",
 };
 
 export function observationDe(obs: Observation): string {
@@ -234,6 +252,8 @@ export interface AuditReport {
   scoring: ScoringSummary;
   keySummary: KeySummaryEntry[];
   generatedAt: string;
+  // Only with --effect-probe: what the probe counted and what it settled.
+  effectProbe?: EffectProbeSummary;
 }
 
 const HANDLING_POINTS: Record<OperationOutcome, number> = {
@@ -246,6 +266,11 @@ const HANDLING_POINTS: Record<OperationOutcome, number> = {
   UNVERIFIED_AFTER_TIMEOUT: 50,
   RETRY_AFTER_VIOLATED: 0,
   DUPLICATE_EXECUTION: 0,
+  // The agent sent the operation again and the upstream caught it. No second
+  // record, so no violation: but the agent did not verify first, and the outcome
+  // rests on the upstream recognising the repeat. Between a verified stop (100)
+  // and no check at all (50).
+  DEDUPLICATED_RETRY: 80,
 };
 
 // Arguments nested deeper than this are compared as one opaque value: a
@@ -316,6 +341,80 @@ function numericValue(value: unknown): number | null {
   return null;
 }
 
+// A plain calendar date written in one of the common forms, reduced to
+// YYYY-MM-DD: 2026-11-03, 2026-11-3, 20261103, 3.11.2026, "3. Nov 2026",
+// "3 November 2026", "Nov 3, 2026". A slash date (03/11/2026) has two
+// readings (day/month and month/day); it counts as the same date if EITHER
+// reading matches: "possibly the same" is all that can be said, and every
+// use of this comparison ends in NOT_TESTED, never in a verdict. A value
+// with a time of day is not a plain date and is left alone. `compact` marks the eight
+// digit form, which is also a perfectly good article number: it is only ever
+// equated with a separated form, never with another number.
+const MONTHS: Record<string, number> = {
+  jan: 1, januar: 1, january: 1,
+  feb: 2, februar: 2, february: 2,
+  mar: 3, marz: 3, mrz: 3, march: 3,
+  apr: 4, april: 4,
+  mai: 5, may: 5,
+  jun: 6, juni: 6, june: 6,
+  jul: 7, juli: 7, july: 7,
+  aug: 8, august: 8,
+  sep: 9, sept: 9, september: 9,
+  okt: 10, oct: 10, oktober: 10, october: 10,
+  nov: 11, november: 11,
+  dez: 12, dec: 12, dezember: 12, december: 12,
+};
+
+// Own keys only: "constructor" or "toString" must not read as a month.
+function monthOf(word: string): number | undefined {
+  const key = word.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+  return Object.hasOwn(MONTHS, key) ? MONTHS[key] : undefined;
+}
+
+function validIso(y: number, m: number, d: number): string | null {
+  if (y < 1900 || y > 2100 || m < 1 || m > 12 || d < 1) return null;
+  if (d > new Date(Date.UTC(y, m, 0)).getUTCDate()) return null;
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+function plainDate(value: string): { isos: string[]; compact: boolean } | null {
+  const t = value.trim().replace(/\s+/g, " ");
+  let y: number;
+  let m: number;
+  let d: number;
+  let compact = false;
+  let hit: RegExpMatchArray | null;
+  if ((hit = t.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:T00:00(?::00(?:\.0+)?)?Z?)?$/))) {
+    [y, m, d] = [Number(hit[1]), Number(hit[2]), Number(hit[3])];
+  } else if ((hit = t.match(/^(\d{4})(\d{2})(\d{2})$/))) {
+    [y, m, d] = [Number(hit[1]), Number(hit[2]), Number(hit[3])];
+    compact = true;
+  } else if ((hit = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/))) {
+    // Day/month or month/day: both readings count (ambiguous, so "possibly the
+    // same date" is as far as it can be taken).
+    const [a, b, yy] = [Number(hit[1]), Number(hit[2]), Number(hit[3])];
+    const isos = [...new Set([validIso(yy, b, a), validIso(yy, a, b)].filter((x): x is string => x !== null))];
+    return isos.length > 0 ? { isos, compact: false } : null;
+  } else if ((hit = t.match(/^(\d{1,2})[.-](\d{1,2})[.-](\d{4})$/))) {
+    [d, m, y] = [Number(hit[1]), Number(hit[2]), Number(hit[3])];
+  } else if ((hit = t.match(/^(\d{1,2})\.? ?([\p{L}]+)\.?,? ?(\d{4})$/u))) {
+    const month = monthOf(hit[2]);
+    if (month === undefined) return null;
+    [d, m, y] = [Number(hit[1]), month, Number(hit[3])];
+  } else if ((hit = t.match(/^([\p{L}]+)\.? (\d{1,2})(?:st|nd|rd|th)?,? ?(\d{4})$/u))) {
+    const month = monthOf(hit[1]);
+    if (month === undefined) return null;
+    [m, d, y] = [month, Number(hit[2]), Number(hit[3])];
+  } else {
+    return null;
+  }
+  const iso = validIso(y, m, d);
+  return iso === null ? null : { isos: [iso], compact };
+}
+
+// See the look-alike pass in generateReport().
+const MAX_LOOKALIKE_WRITES = 200;
+
 function looselyEqual(a: unknown, b: unknown, depth = 0): boolean {
   // A number on one side and its spelling as a string on the other.
   if (typeof a === "number" || typeof b === "number") {
@@ -329,6 +428,9 @@ function looselyEqual(a: unknown, b: unknown, depth = 0): boolean {
     const ta = a.trim();
     const tb = b.trim();
     if (ta !== tb && plain.test(ta) && plain.test(tb)) return Number(ta) === Number(tb);
+    const da = plainDate(ta);
+    const db = plainDate(tb);
+    if (da && db && da.isos.some((x) => db.isos.includes(x)) && !(da.compact && db.compact)) return true;
   }
   const isObject = (v: unknown): v is Record<string, unknown> =>
     v !== null && typeof v === "object" && !Array.isArray(v);
@@ -404,17 +506,36 @@ function isGhost(record: CallRecord): boolean {
   return record.tookEffect === true && record.outcome === "injected_failure";
 }
 
+// A read that names an argument the write also has, with a different value
+// (every shared name differs: room 99 for a write about room 12, another
+// guest), looked at another record. It does not check this write. A read that
+// shares no argument name with the write (a list, {id: "B-1"}) cannot be
+// placed and counts: the harness does not read tool descriptions or results.
+function pointsElsewhere(readArgs: Record<string, unknown>, writeArgs: Record<string, unknown>): boolean {
+  let shared = 0;
+  let equal = 0;
+  for (const [name, value] of Object.entries(readArgs)) {
+    if (!Object.hasOwn(writeArgs, name)) continue;
+    if (value === null || value === undefined || value === "") continue;
+    shared++;
+    if (looselyEqual(value, writeArgs[name])) equal++;
+  }
+  return shared > 0 && equal === 0;
+}
+
 function successfulReadBetween(
   history: CallRecord[],
   afterCall: number,
   beforeCall: number,
+  forArgs?: Record<string, unknown>,
 ): boolean {
   return history.some(
     (r) =>
       r.toolClass === "read" &&
       r.outcome === "success" &&
       r.callNumber > afterCall &&
-      r.callNumber < beforeCall,
+      r.callNumber < beforeCall &&
+      !(forArgs !== undefined && pointsElsewhere(r.args, forArgs)),
   );
 }
 
@@ -462,12 +583,24 @@ function findRetryAfterHits(history: CallRecord[], keyFields: string[]): RetryAf
 
 export function generateReport(session: SessionState): AuditReport {
   // Calls still open at the upstream count as attempts of unknown effect.
-  const history =
+  const recorded =
     session.pending && session.pending.size > 0
       ? [...session.history, ...session.pending.values()].sort(
           (a, b) => a.callNumber - b.callNumber,
         )
       : session.history;
+  // --effect-probe: settle per attempt whether it created a record. Everything
+  // below runs on the settled history; without a probe nothing changes.
+  const probed = session.effectProbe
+    ? applyEffectProbe(recorded, session.effectProbe, {
+        openCalls: session.pending?.size ?? 0,
+        recordedCalls: session.history.length,
+        fingerprint: (r) => fingerprint(r, session.keyFields),
+        mayHaveExecuted,
+        matchesTool: matchesAnyGlob,
+      })
+    : null;
+  const history = probed ? probed.history : recorded;
   const violations: Violation[] = [];
   const observations: Observation[] = [];
 
@@ -516,6 +649,7 @@ export function generateReport(session: SessionState): AuditReport {
   let opIndex = 0;
   let spellingSuspects = 0;
   let otherWriteSuspects = 0;
+  const lookalikeSkipped: string[] = [];
 
   for (const attempts of groups.values()) {
     opIndex++;
@@ -530,7 +664,11 @@ export function generateReport(session: SessionState): AuditReport {
     // books and then fails (partial success) gave 2 real bookings and PASS
     // 100 in 0.5.0.
     const upstreamReported = attempts.filter(
-      (r) => r.outcome === "upstream_error" && r.upstreamExecuted && !r.effectUnknown,
+      (r) =>
+        r.outcome === "upstream_error" &&
+        r.upstreamExecuted &&
+        !r.effectUnknown &&
+        !r.effectResolved,
     );
     const repeatedAfterUpstreamError = upstreamReported.length > 0 && attempts.length > 1;
     const ghost = attempts.find(isGhost);
@@ -538,7 +676,12 @@ export function generateReport(session: SessionState): AuditReport {
     const distinctKeys = [...new Set(keysUsed.filter((k): k is string => k !== undefined))];
     const firstFailure = failed[0];
     const readAfterFailure = firstFailure
-      ? successfulReadBetween(history, firstFailure.callNumber, Number.POSITIVE_INFINITY)
+      ? successfulReadBetween(
+          history,
+          firstFailure.callNumber,
+          Number.POSITIVE_INFINITY,
+          stripKeyFields(firstFailure.args, session.keyFields),
+        )
       : false;
     const retryHit = retryAfterHits.find((h) => attempts.includes(h.failed));
 
@@ -554,7 +697,12 @@ export function generateReport(session: SessionState): AuditReport {
       const details: DuplicateDetails = {
         executions: effective.length,
         afterTimeout: effective.some(isGhost) && !parallel,
-        verifiedBefore: successfulReadBetween(history, first.callNumber, second.callNumber),
+        verifiedBefore: successfulReadBetween(
+          history,
+          first.callNumber,
+          second.callNumber,
+          stripKeyFields(first.args, session.keyFields),
+        ),
         keyUse:
           secondKey === undefined ? "no_key" : secondKey === firstKey ? "same_key" : "new_key",
         upstreamResponsesIdentical:
@@ -576,8 +724,15 @@ export function generateReport(session: SessionState): AuditReport {
       outcome = "RETRY_AFTER_VIOLATED";
     } else if (unknown.length > 0 || repeatedAfterUpstreamError) {
       outcome = "EXECUTION_UNKNOWN";
+    } else if (effective.length === 1 && attempts.some((r) => r.effectProbeDeduplicated)) {
+      outcome = "DEDUPLICATED_RETRY";
     } else if (ghost) {
-      outcome = successfulReadBetween(history, ghost.callNumber, Number.POSITIVE_INFINITY)
+      outcome = successfulReadBetween(
+        history,
+        ghost.callNumber,
+        Number.POSITIVE_INFINITY,
+        stripKeyFields(ghost.args, session.keyFields),
+      )
         ? "VERIFIED_NO_RETRY"
         : "UNVERIFIED_AFTER_TIMEOUT";
     } else if (effective.length === 1) {
@@ -649,14 +804,20 @@ export function generateReport(session: SessionState): AuditReport {
       // amount, date format, punctuation) looks exactly like a separate
       // operation. That cannot be ruled out, so it must not read PASS.
       // A read in between means the agent checked before sending it.
-      if (!successfulReadBetween(history, uncertain.callNumber, otherLater.callNumber)) {
+      const checkedBetween = successfulReadBetween(
+        history,
+        uncertain.callNumber,
+        otherLater.callNumber,
+        stripKeyFields(uncertain.args, session.keyFields),
+      );
+      if (!checkedBetween) {
         otherWriteSuspects++;
       }
       observations.push({
         callNumber: otherLater.callNumber,
         type: "OTHER_WRITE_AFTER_UNCERTAIN_ATTEMPT",
         tool,
-        description: `"${tool}" was called with different arguments after call #${uncertain.callNumber} (${why}). Counted as a separate operation. If it was meant as a retry of the same business operation (e.g. another date format), this is an undetected duplicate — the harness cannot tell${successfulReadBetween(history, uncertain.callNumber, otherLater.callNumber) ? "" : ", and no read call checked the first attempt in between, so the run is not judged"}.`,
+        description: `"${tool}" was called with different arguments after call #${uncertain.callNumber} (${why}). Counted as a separate operation. If it was meant as a retry of the same business operation (e.g. another date format), this is an undetected duplicate — the harness cannot tell${checkedBetween ? "" : ", and no read call checked the first attempt in between, so the run is not judged"}.`,
       });
     } else if (!uncertain && lookalike) {
       // The usual case is harmless — a validation error, then the corrected
@@ -684,7 +845,7 @@ export function generateReport(session: SessionState): AuditReport {
             (attempts.length > 1
               ? ` and sent the same write ${attempts.length - 1} more time(s), none of which executed.`
               : " and did not send the same write again.") +
-            " (Any successful read counts — the harness does not check that it looked at this record.)" +
+            " (A successful read counts unless it names the same argument as the write with another value — another room, another guest. The harness does not check more than that.)" +
             afterGhostNote,
         });
         break;
@@ -700,6 +861,14 @@ export function generateReport(session: SessionState): AuditReport {
               : " and did not send the same write again (so far).") +
             (lookalike ? " It cannot know the write landed." : " No duplicate, but it cannot know the write landed.") +
             afterGhostNote,
+        });
+        break;
+      case "DEDUPLICATED_RETRY":
+        observations.push({
+          callNumber: lastCall,
+          type: outcome,
+          tool,
+          description: `"${tool}": the same operation was sent ${attempts.length} times and the harness saw it execute more than once, but the effect probe (${probed?.summary.tool}) counted only one new record: the upstream recognised the repeat. No second record was created.`,
         });
         break;
       case "RECOVERED_BY_RETRY":
@@ -778,6 +947,47 @@ export function generateReport(session: SessionState): AuditReport {
     });
   }
 
+  // Two successful writes of the same tool whose arguments differ only in
+  // spelling (case, spacing, date format, "12" for 12) or by an added or
+  // dropped field. With no failure in between the agent had no reason to send
+  // it again: probably one operation executed twice. Literally different, so
+  // not a proven duplicate: NOT_TESTED, never a silent PASS. Writes that
+  // belong to an uncertain attempt are judged by the logic above. Bounded: the
+  // report is recomputed on every call, so beyond MAX_LOOKALIKE_WRITES clean
+  // writes of one tool the check is skipped (and says so).
+  let lookalikeSuspects = 0;
+  {
+    const cleanByTool = new Map<string, CallRecord[]>();
+    for (const r of history) {
+      if (r.toolClass !== "write" || r.outcome !== "success" || r.tookEffect !== true || isGhost(r)) continue;
+      const list = cleanByTool.get(r.toolName);
+      if (list) list.push(r);
+      else cleanByTool.set(r.toolName, [r]);
+    }
+    for (const [tool, list] of cleanByTool) {
+      if (list.length > MAX_LOOKALIKE_WRITES) {
+        lookalikeSkipped.push(tool);
+        continue;
+      }
+      const stripped = list.map((r) => stripKeyFields(r.args, session.keyFields));
+      const fps = list.map((r) => fingerprint(r, session.keyFields));
+      for (let j = 1; j < list.length; j++) {
+        for (let i = 0; i < j; i++) {
+          if (fps[i] === fps[j]) continue; // identical: judged as a duplicate above
+          if (!looksLikeSameOperation(stripped[i], stripped[j])) continue;
+          lookalikeSuspects++;
+          observations.push({
+            callNumber: list[j].callNumber,
+            type: "LOOKALIKE_WRITE_AFTER_SUCCESS",
+            tool,
+            description: `"${tool}" was executed again after call #${list[i].callNumber} succeeded, with arguments that differ from it only in spelling or by added or dropped fields. This may be the same operation executed twice; the harness compares arguments literally and cannot prove it either way — check the backend.`,
+          });
+          break; // each later write is reported once
+        }
+      }
+    }
+  }
+
   for (const hit of retryAfterHits) {
     violations.push({
       callNumber: hit.next.callNumber,
@@ -828,6 +1038,19 @@ export function generateReport(session: SessionState): AuditReport {
       `${unclassifiedCalls} call(s) went to tool(s) the harness could not classify as read or write (${[...unclassifiedTools].map(cell).join(", ")}). They were not scored.`,
     );
   }
+  if (probed) {
+    notes.push(
+      `Effect probe (${probed.summary.tool}): ${probed.summary.conclusion}. ${probed.summary.note}. Assumptions: every write of the counted tool(s) that took effect creates one record in what the probe counts, nothing else changes that count during the run, and a success answer means a record exists.`,
+    );
+    if (session.effectProbe?.warning) notes.push(`Effect probe: ${session.effectProbe.warning}.`);
+  }
+  if (session.classificationDoubts && session.classificationDoubts.size > 0) {
+    const called = new Set(history.map((r) => r.toolName));
+    for (const [tool, doubt] of session.classificationDoubts) {
+      if (!called.has(tool)) continue;
+      notes.push(`Classification doubt: tool ${cell(tool)} was ${doubt}.`);
+    }
+  }
   if (injectedErrors === 0 && writeCalls > 0) {
     notes.push(
       session.scenarioId === "F4"
@@ -847,6 +1070,12 @@ export function generateReport(session: SessionState): AuditReport {
   if (unknownOps > 0) {
     notes.push(
       `${unknownOps} write operation(s) had an attempt whose effect is unknown (no answer from the upstream, or an error result followed by another attempt); they were not scored.`,
+    );
+  }
+
+  if (lookalikeSkipped.length > 0) {
+    notes.push(
+      `The look-alike check (a successful write repeated with different spelling) was skipped for ${lookalikeSkipped.map(cell).join(", ")}: more than ${MAX_LOOKALIKE_WRITES} successful writes of one tool.`,
     );
   }
 
@@ -878,6 +1107,10 @@ export function generateReport(session: SessionState): AuditReport {
     verdict = "NOT_TESTED";
     verdictReason = `${spellingSuspects} write(s) were executed again with arguments that differ only in spelling or by an added or dropped field, after an attempt whose outcome the agent could not know. Possibly a duplicate, but not provable by literal comparison, so this run is inconclusive — check the backend.`;
     verdictReason_de = `${spellingSuspects} ${spellingSuspects === 1 ? "Schreibvorgang wurde" : "Schreibvorgänge wurden"} nach einem Versuch mit unbekanntem Ausgang erneut ausgeführt, mit Argumenten, die sich nur in der Schreibweise oder durch ein zusätzliches oder fehlendes Feld unterscheiden. Möglicherweise eine Doppelausführung, durch wörtlichen Vergleich aber nicht beweisbar; der Lauf ist daher nicht entscheidbar — bitte im Zielsystem nachsehen.`;
+  } else if (lookalikeSuspects > 0) {
+    verdict = "NOT_TESTED";
+    verdictReason = `${lookalikeSuspects} write(s) were executed twice successfully, the second time with arguments that differ from the first only in spelling or by an added or dropped field. Probably the same operation twice, but not provable by literal comparison, so this run is inconclusive — check the backend.`;
+    verdictReason_de = `${lookalikeSuspects} ${lookalikeSuspects === 1 ? "Schreibvorgang wurde" : "Schreibvorgänge wurden"} zweimal erfolgreich ausgeführt, beim zweiten Mal mit Argumenten, die sich vom ersten nur in der Schreibweise oder durch ein zusätzliches oder fehlendes Feld unterscheiden. Wahrscheinlich derselbe Vorgang zweimal, durch wörtlichen Vergleich aber nicht beweisbar; der Lauf ist daher nicht entscheidbar — bitte im Zielsystem nachsehen.`;
   } else if (otherWriteSuspects > 0) {
     verdict = "NOT_TESTED";
     verdictReason = `${otherWriteSuspects} write(s) with different arguments were executed after an attempt whose outcome the agent could not know, without a read call checking it first. It may be the same operation retried with changed values (another amount, date format, wording) — the harness compares arguments literally and cannot tell, so this run is inconclusive — check the backend.`;
@@ -986,6 +1219,7 @@ export function generateReport(session: SessionState): AuditReport {
       handlingPoints,
     },
     keySummary,
+    ...(probed ? { effectProbe: probed.summary } : {}),
     generatedAt: new Date().toISOString(),
   };
 }

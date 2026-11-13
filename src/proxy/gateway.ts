@@ -117,6 +117,7 @@ export function createProxyServer(
           isError: true,
         };
       }
+      await interceptor.refreshEffectProbe(true);
       const withSession = { session_id: interceptor.sessionId, format } as const;
       if (name === `${AUDIT_TOOL_PREFIX}get_report`) {
         return handleGetReport(withSession, { persist: false });

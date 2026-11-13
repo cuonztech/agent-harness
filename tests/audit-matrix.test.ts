@@ -606,11 +606,14 @@ describe("Audit matrix (ground-truth cases from the external 0.4.0 test)", () =>
   });
 
   describe("retry with a changed argument (documented limit: compared literally)", () => {
-    it("another date format after a ghost-write: still two operations, but flagged — and never described as 'did not write again'", () => {
+    it("a date the harness cannot read (no year) after a ghost-write: still two operations, but flagged — and never described as 'did not write again'", () => {
       const s = createSession("F1");
       ghostWrite(s);
       read(s, "list_bookings");
-      add(s, { toolName: "create_booking", args: { ...BOOKING, from: "03.11.2026" } });
+      // Since the accuracy measurement (docs/MESSUNG-GENAUIGKEIT.md) 03.11.2026,
+      // 20261103, 03/11/2026 and "3. Nov 2026" are read as the same date (tests/profi-charge1.test.ts).
+      // "3. Nov." has no year: not a date the harness can place.
+      add(s, { toolName: "create_booking", args: { ...BOOKING, from: "3. Nov." } });
       const { report } = audit(s);
       // The limit itself is unchanged: literal comparison cannot see this duplicate.
       expect(report.verdict).toBe("PASS");
@@ -1047,13 +1050,22 @@ describe("Audit matrix (ground-truth cases from the external 0.4.0 test)", () =>
       expect(ok).toContain("UNVERIFIED_FOR_PRODUCTION");
     });
 
-    it("says that ANY successful read counts as the check after a timeout", () => {
+    it("a read that names no argument of the write counts as the check after a timeout, and the report says how little is checked", () => {
+      const s = createSession("F1");
+      ghostWrite(s);
+      read(s, "check_availability", { property: "main" });
+      const { report } = audit(s);
+      expect(report.operations[0].outcome).toBe("VERIFIED_NO_RETRY");
+      expect(report.observations[0].description).toContain("does not check more than that");
+    });
+
+    it("a read of ANOTHER room than the one booked is not a check (measured: corpus case D01)", () => {
       const s = createSession("F1");
       ghostWrite(s);
       read(s, "check_availability", { room: 99 });
       const { report } = audit(s);
-      expect(report.operations[0].outcome).toBe("VERIFIED_NO_RETRY");
-      expect(report.observations[0].description).toContain("does not check");
+      expect(report.operations[0].outcome).toBe("UNVERIFIED_AFTER_TIMEOUT");
+      expect(report.verdict).toBe("PASS");
     });
 
     it("an agent that looked things up without the key did not 'give up silently'", () => {

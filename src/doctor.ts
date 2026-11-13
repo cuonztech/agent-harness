@@ -166,12 +166,19 @@ async function checkUpstreamProtocol(command: string, args: string[], cwd: strin
           ok: unclassified.length === 0,
           label:
             unclassified.length === 0
-              ? "Alle Tools eindeutig als Lese- oder Schreib-Tool eingeordnet"
+              ? classified.some((c) => c.doubt)
+                ? `Alle Tools eingeordnet; bei ${classified.filter((c) => c.doubt).length} widerspricht die Beschreibung dem Namen (siehe Liste unten)`
+                : "Alle Tools eindeutig als Lese- oder Schreib-Tool eingeordnet"
               : `${unclassified.length} Tool(s) nicht eindeutig einordenbar: ${unclassified.map((c) => c.name).join(", ")}`,
           fix: "Mit --write-tools bzw. --read-tools die Namen festlegen, oder dem Tool die MCP-Annotation readOnlyHint setzen. Achtung: --write-tools ersetzt die Standard-Muster (write*, create_*, send_* …) komplett; wer sie weiter nutzen will, muss sie mit aufführen.",
         },
       ],
-      toolLines: classified.map((c) => `  ${c.class.padEnd(12)} ${c.name}  (${c.source})`),
+      toolLines: classified.flatMap((c) => [
+        `  ${c.class.padEnd(12)} ${c.name}  (${c.source})`,
+        ...(c.doubt
+          ? [`  ${" ".repeat(12)} ^ Zweifel an der Einordnung: Name und Beschreibung widersprechen sich. Mit --write-tools bzw. --read-tools festlegen oder die MCP-Annotation readOnlyHint setzen.`]
+          : []),
+      ]),
       schemaAudit: auditToolSchemas(tools, patterns),
     };
   } catch (err) {

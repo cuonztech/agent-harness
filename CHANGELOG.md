@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.0 — in Arbeit (Branch `profi-niveau`, nicht veröffentlicht)
+
+Grundlage ist die erste Genauigkeits-Messung (`docs/MESSUNG-GENAUIGKEIT.md`, `tests/accuracy/`): Der Harness wird gegen einen echten Upstream gemessen, der mitschreibt, wie viele Datensätze wirklich entstanden sind.
+
+### Nicht abwärtskompatibel (Urteil ändert sich)
+
+- **Datumsformate gelten als dasselbe Datum.** Nach einem Timeout (mit oder ohne Nachsehen) ist `03.11.2026`, `20261103` oder `3. Nov 2026` statt `2026-11-03` jetzt ein möglicher Duplikat-Versuch (`POSSIBLE_DUPLICATE_DIFFERENT_ARGUMENTS`, Lauf `NOT_TESTED`) statt PASS. Vorher war das als Grenze dokumentiert und blieb nach Nachsehen unbemerkt. Ein Datum mit Schrägstrich (`03/11/2026`) hat zwei Lesarten und gilt als gleich, wenn eine passt; Daten mit Uhrzeit oder ohne Jahr werden nicht gleichgesetzt.
+- **Zweimal erfolgreich, das zweite Mal anders geschrieben → `NOT_TESTED` statt PASS** (neue Beobachtung `LOOKALIKE_WRITE_AFTER_SUCCESS`). Vorher gaben zwei erfolgreiche Writes, die sich nur in Kleinschreibung, Datumsformat oder einem zusätzlichen Feld unterschieden, PASS, wenn kein Fehler vorausgegangen war (Szenario F4 und Baseline). Wörtlich gleiche Wiederholungen bleiben FAIL.
+
+- **«Nachgesehen» ist enger gefasst.** Ein Read nach einem Timeout zählt nicht mehr als Nachsehen, wenn er ein Argument des Writes mit anderem Wert nennt (Zimmer 99 statt 12, anderer Gast). Betrifft das Etikett (`UNVERIFIED_AFTER_TIMEOUT` statt `VERIFIED_NO_RETRY`), den Score (80 statt 100, mit Verifikations-Textbaustein) und die Prüfung, ob zwischen zwei Writes nachgesehen wurde; das Urteil PASS/FAIL ändert sich dadurch nicht, ausser bei einem weiteren, anders geschriebenen Write ohne echtes Nachsehen (dann `NOT_TESTED`).
+
+### Neu
+
+- **Wirkungs-Sonde `--effect-probe <tool>`** (mit `--effect-probe-args`, `--effect-count`): Der Harness ruft ein Lese-Tool des Upstreams selbst auf und zählt Datensätze statt Ausführungen. Gegen einen Upstream, der Wiederholungen selbst erkennt, ist ein Retry mit gleichem Key kein FAIL mehr; ein Fehlertext ohne `isError` und ein Fehlerergebnis, hinter dem doch geschrieben wurde, werden aufgelöst. Es wird nur geschlossen, was aus den Zahlen zwingend folgt (Untergrenze je Vorgang; mehrere Write-Tools nur mit `--effect-tools`), sonst bleibt die Sonde ungenutzt und der Bericht sagt warum. Die Sonde liegt nicht im Antwortpfad: Messung im Hintergrund, beim Lesen des Berichts und beim Beenden; eine langsame Sonde bremst den Agenten nicht und verfälscht `retry_after` nicht. Neuer Operationsausgang `DEDUPLICATED_RETRY` (80 Punkte im Score: weniger als ein echtes Nachsehen, mehr als kein Nachsehen; im Dossier ein Hinweis), neues Berichtsfeld `effectProbe` (Schluss `confirmed`/`deduplicated`/`partial`/`inconclusive`/`no_writes`), eigener Abschnitt im Klartext-Bericht und im Dossier. Ohne `--effect-probe` ändert sich nichts. Neu: `src/core/effect-probe.ts`, `--effect-tools`, `--effect-probe-args` auch in der Schreibweise ohne Anführungszeichen (cmd.exe), Seitengrenzen-Warnung, `tests/effect-probe.test.ts`, `tests/effect-probe-model.test.ts` (1500 zufällige Läufe gegen die Wahrheit eines simulierten Upstreams), Korpus-Gruppe I.
+- **Hinweis bei widersprüchlicher Tool-Einordnung.** Entscheidet nur der Name (kein `--write-tools`/`--read-tools`, keine Annotation) und widerspricht die Beschreibung des Tools (`check_in_guest`: «… bills the first night»; `update_status_view`: «… (read only)»), warnt der Proxy beim Start, `doctor` zeigt es an, und der Bericht trägt eine Notiz («Classification doubt»), sobald das Tool aufgerufen wurde. Die Einordnung selbst bleibt unverändert. Ein Verb zählt nur an Verbstelle (Satzteilanfang, nach Komma oder Konjunktion, nicht verneint); die Beschreibung wird auf 600 Zeichen begrenzt (eine 200 KB lange Beschreibung vom Upstream hielt den Start vorher fast 10 s auf). Neu: `src/proxy/classification-doubt.ts`, `ToolClassification.doubt`.
+- Metamorphose-Tests (`tests/metamorphic.test.ts`): sieben Beziehungen (Schlüsselreihenfolge, Key-Werte, Zeitverschiebung, Wiederholbarkeit, nachgestellter Read, Strenge, Monotonie) über je 400 zufällige Läufe.
+- Genauigkeits-Korpus: 97 Fälle gegen den echten Proxy, Urteil gegen die Wahrheit des Upstreams, Dokument `docs/MESSUNG-GENAUIGKEIT.md` (vom Test erzeugt und geprüft), Urteile je Fall festgenagelt in `tests/accuracy/heute.json`.
+
 ## 0.8.0 — nicht veröffentlicht
 
 ### Nicht abwärtskompatibel

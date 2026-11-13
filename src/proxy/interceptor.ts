@@ -7,6 +7,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { VERSION } from "../version.js";
+import { classificationDoubt } from "./classification-doubt.js";
+import { parseProbeReading, type EffectProbeConfig } from "../core/effect-probe.js";
 import { readFileSync, readdirSync } from "node:fs";
 import {
   createSession,
@@ -44,6 +46,9 @@ export interface ProxyConfig {
   readToolPatterns?: string[];
   keyFields?: string[];
   retryAfterSec?: number;
+  // --effect-probe: a read tool of the upstream the harness calls itself to
+  // count records (see core/effect-probe.ts).
+  effectProbe?: EffectProbeConfig;
 }
 
 export interface UpstreamConfig {
@@ -64,6 +69,9 @@ export interface ToolClassification {
   class: ToolClass;
   // Where the decision came from, for the startup listing.
   source: string;
+  // The tool's own description contradicts a name-based classification
+  // (see classification-doubt.ts). Informational: the class is not changed.
+  doubt?: string;
 }
 
 // The result handed back to the gateway's CallTool handler. A passed-through
@@ -79,6 +87,15 @@ export type InterceptResult = Record<string, unknown> & {
 // Anything left over stays "unclassified" — and is reported as such instead
 // of being quietly treated as a harmless read.
 export function classifyUpstreamTool(
+  tool: Tool,
+  config: Pick<ProxyConfig, "writeToolPatterns" | "readToolPatterns">,
+): ToolClassification {
+  const result = classifyByRules(tool, config);
+  const doubt = classificationDoubt(tool, result.class, result.source);
+  return doubt ? { ...result, doubt } : result;
+}
+
+function classifyByRules(
   tool: Tool,
   config: Pick<ProxyConfig, "writeToolPatterns" | "readToolPatterns">,
 ): ToolClassification {
@@ -122,6 +139,7 @@ export function classifyUpstreamTool(
 }
 
 const STDERR_TAIL_CHARS = 2000;
+const PROBE_TIMEOUT_MS = 15_000;
 const MAX_TOOL_LIST_PAGES = 1000;
 
 interface ProcessRef {
@@ -196,6 +214,11 @@ export class ProxyInterceptor {
   onCallRecorded: (() => Promise<void> | void) | null = null;
   // Called once if the upstream connection drops while the proxy is running.
   onUpstreamLost: ((stderrTail: string) => void) | null = null;
+  // --effect-probe: called when a background reading of the probe has landed,
+  // so the report file can be written again with it.
+  onProbeRefreshed: (() => void) | null = null;
+  private probeTimer: ReturnType<typeof setTimeout> | null = null;
+  private probeInFlight: Promise<void> | null = null;
 
   constructor(config: ProxyConfig) {
     this.config = config;
@@ -292,6 +315,9 @@ export class ProxyInterceptor {
     );
     for (const entry of this.toolClassification) {
       this.session.toolClassOverrides.set(entry.name, entry.class);
+      if (entry.doubt) {
+        (this.session.classificationDoubts ??= new Map()).set(entry.name, entry.doubt);
+      }
     }
     for (const tool of this.upstreamTools) {
       const properties = (tool.inputSchema?.properties ?? {}) as Record<string, unknown>;
@@ -315,6 +341,113 @@ export class ProxyInterceptor {
     await this.upstreamTransport?.close().catch(() => undefined);
     this.upstreamTransport = null;
     killSurvivors(descendants);
+  }
+
+  // --effect-probe: take the baseline reading. Called once after connect, before
+  // the first agent call. Throws with a message that says what to fix.
+  async initEffectProbe(): Promise<void> {
+    const cfg = this.config.effectProbe;
+    if (!cfg) return;
+    const entry = this.toolClassification.find((t) => t.name === cfg.tool);
+    if (!entry) {
+      throw new Error(`--effect-probe "${cfg.tool}": the upstream has no such tool.`);
+    }
+    if (entry.class !== "read") {
+      throw new Error(
+        `--effect-probe "${cfg.tool}": the probe must be a READ tool, but it is taken for ${entry.class === "write" ? "a write" : "a tool that is neither read nor write"} (${entry.source}). The harness calls it itself, repeatedly: a write would change what it measures. Pick a read tool, or classify it with --read-tools.`,
+      );
+    }
+    let reading;
+    try {
+      reading = await this.readProbe();
+    } catch (err) {
+      throw new Error(`--effect-probe "${cfg.tool}": ${err instanceof Error ? err.message : String(err)}`);
+    }
+    this.session.effectProbe = {
+      ...cfg,
+      before: reading.count,
+      after: reading.count,
+      error: null,
+      readAtCalls: 0,
+      ...(reading.warning ? { warning: reading.warning } : {}),
+    };
+  }
+
+  // The probe is read OFF the answer path: after a call a trailing, debounced
+  // reading is scheduled, and the report file is written again when it lands.
+  // The agent never waits for it, and its timing (retry_after) is not touched.
+  // After an error the next scheduled reading waits 10 s.
+  scheduleEffectProbeRefresh(): void {
+    const probe = this.session.effectProbe;
+    if (!probe || this.probeTimer || this.closing) return;
+    const wait = probe.error !== null ? 10_000 : 400;
+    this.probeTimer = setTimeout(() => {
+      this.probeTimer = null;
+      void this.refreshEffectProbe().then(() => {
+        this.onProbeRefreshed?.();
+        // Calls were still open (or arrived meanwhile): the reading is behind.
+        if (probe.readAtCalls !== this.session.history.length) this.scheduleEffectProbeRefresh();
+      });
+    }, wait);
+    this.probeTimer.unref?.();
+  }
+
+  // Latest reading. `force` (a report is being read, the proxy is ending) waits
+  // for a reading even right after an error. One reading at a time; a second
+  // caller waits for the one in flight and uses it.
+  async refreshEffectProbe(force = false): Promise<void> {
+    const probe = this.session.effectProbe;
+    if (!probe) return;
+    if (this.probeInFlight) await this.probeInFlight;
+    const calls = this.session.history.length;
+    if (calls === probe.readAtCalls && probe.error === null) return;
+    if (!force && probe.error !== null && probe.lastAttemptAt !== undefined && Date.now() - probe.lastAttemptAt < 10_000) return;
+    // Calls still open: a record may be half-written. Leave the old reading;
+    // the report treats open calls as "inconclusive".
+    if ((this.session.pending?.size ?? 0) > 0) return;
+    this.probeInFlight = (async () => {
+      probe.lastAttemptAt = Date.now();
+      try {
+        const reading = await this.readProbe();
+        probe.after = reading.count;
+        probe.error = null;
+        if (reading.warning) probe.warning = reading.warning;
+        else delete probe.warning;
+      } catch (err) {
+        probe.error = err instanceof Error ? err.message : String(err);
+      }
+      // The history length BEFORE the reading: calls that arrived during it
+      // make the reading older than the history, and the report says so.
+      probe.readAtCalls = calls;
+    })();
+    try {
+      await this.probeInFlight;
+    } finally {
+      this.probeInFlight = null;
+    }
+  }
+
+  private async readProbe(): Promise<{ count: number; warning?: string }> {
+    const cfg = this.config.effectProbe;
+    if (!cfg) throw new Error("no probe configured");
+    if (!this.upstreamClient || !this.upstreamAlive) {
+      throw new Error("the upstream is not running any more");
+    }
+    let result;
+    try {
+      result = await this.upstreamClient.callTool(
+        { name: cfg.tool, arguments: cfg.args },
+        undefined,
+        { timeout: PROBE_TIMEOUT_MS },
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (/timed out/i.test(message)) {
+        throw new Error(`the probe tool did not answer within ${PROBE_TIMEOUT_MS / 1000} s (use a faster read tool, or narrow it with --effect-probe-args)`);
+      }
+      throw new Error(`the probe call failed: ${message}`);
+    }
+    return parseProbeReading(result as Parameters<typeof parseProbeReading>[0], cfg.countPath);
   }
 
   getUpstreamTools(): Tool[] {
@@ -354,6 +487,7 @@ export class ProxyInterceptor {
     } catch {
       // Reporting must never change what the agent gets back.
     }
+    this.scheduleEffectProbeRefresh();
     return result;
   }
 

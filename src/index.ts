@@ -8,6 +8,7 @@ import { computeScore } from "./benchmark/score.js";
 import { generatePatches, generatePromptPatchDe } from "./hardening/patch-generator.js";
 import { auditToolSchemas } from "./schema-audit.js";
 import { generateReport } from "./core/report-generator.js";
+import type { EffectProbeConfig } from "./core/effect-probe.js";
 import { buildCallForensics } from "./core/call-forensics.js";
 import { computeReportIntegrity } from "./core/artifact-integrity.js";
 import { ProxyInterceptor } from "./proxy/interceptor.js";
@@ -84,6 +85,26 @@ function printHelp(): void {
       `  --read-tools pat1,pat2,...     Extra glob patterns for tool names that count as reads\n` +
       `  --key-fields a,b               Argument names that carry an idempotency key\n` +
       `                                  (default: idempotency_key, any case/separator)\n` +
+      `  --effect-probe <tool>          A READ tool of the upstream the harness calls itself, before
+` +
+      `                                  the first call and when the report is read, to count
+` +
+      `                                  records. The audit then counts records, not executions
+` +
+      `                                  (an upstream that recognises a repeat is no longer a FAIL).
+` +
+      `  --effect-probe-args '{"k":"v"}' Arguments for the probe tool (JSON object)
+` +
+      `  --effect-count <path>          Dotted path to the array/number/object to count in the
+` +
+      `                                  probe's answer (default: the only array, or count/total)
+` +
+      `  --effect-tools a,b             Write tools whose records the probe counts (glob patterns).
+` +
+      `                                  Needed when the agent also calls other write tools
+` +
+      `                                  (update_*, send_*): a count cannot be attributed otherwise
+` +
       `  --audit-tools on|off           Expose cuonztech__get_report / cuonztech__get_score\n` +
       `                                  to the connected agent (default: on). For a\n` +
       `                                  measurement use off: their descriptions tell the\n` +
@@ -383,11 +404,40 @@ const PROXY_FLAGS: Record<string, FlagKind> = {
   "--write-tools": "single",
   "--read-tools": "single",
   "--key-fields": "single",
+  "--effect-probe": "single",
+  "--effect-probe-args": "single",
+  "--effect-count": "single",
+  "--effect-tools": "single",
   "--audit-tools": "single",
   "--report-file": "single",
   "--allow-writes": "boolean",
   "--license": "single",
 };
+
+// --effect-probe-args: a JSON object. cmd.exe and Windows PowerShell 5.1 strip the
+// double quotes of '{"status":"open"}' and hand over {status:open}; that form is
+// read as well (flat key:value pairs, numbers/true/false/null as such).
+function parseProbeArgs(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    // fall through to the loose form
+  }
+  const m = /^\s*\{(.*)\}\s*$/s.exec(raw);
+  if (!m || /["'\[\]{}]/.test(m[1])) return null;
+  const out: Record<string, unknown> = {};
+  for (const pair of m[1].split(",")) {
+    if (pair.trim() === "") continue;
+    const colon = pair.indexOf(":");
+    if (colon <= 0) return null;
+    const key = pair.slice(0, colon).trim();
+    const value = pair.slice(colon + 1).trim();
+    if (key === "" || value === "") return null;
+    out[key] = value === "true" ? true : value === "false" ? false : value === "null" ? null : /^-?\d+(\.\d+)?$/.test(value) ? Number(value) : value;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
 
 function parseEnvPair(pair: string, flag: string, into: Record<string, string>): void {
   const eq = pair.indexOf("=");
@@ -493,6 +543,37 @@ async function runProxyMode(argv: string[]): Promise<void> {
   const writeToolPatterns = splitList(one("--write-tools"), "--write-tools");
   const readToolPatterns = splitList(one("--read-tools"), "--read-tools");
   const keyFields = splitList(one("--key-fields"), "--key-fields");
+
+  // --effect-probe: count the upstream's records instead of its executions.
+  const effectProbeTool = one("--effect-probe");
+  const effectProbeArgsRaw = one("--effect-probe-args");
+  const effectCountPath = one("--effect-count");
+  const effectToolPatterns = splitList(one("--effect-tools"), "--effect-tools") ?? [];
+  if (effectProbeTool === undefined && (effectProbeArgsRaw !== undefined || effectCountPath !== undefined || effectToolPatterns.length > 0)) {
+    fail("--effect-probe-args, --effect-count and --effect-tools need --effect-probe <tool>.");
+  }
+  let effectProbe: EffectProbeConfig | undefined;
+  if (effectProbeTool !== undefined) {
+    let probeArgs: Record<string, unknown> = {};
+    if (effectProbeArgsRaw !== undefined) {
+      const parsedArgs = parseProbeArgs(effectProbeArgsRaw);
+      if (parsedArgs === null) {
+        fail(
+          `--effect-probe-args must be a JSON object, got "${effectProbeArgsRaw}".\n` +
+            "  bash / PowerShell 7:  --effect-probe-args '{\"status\":\"open\"}'\n" +
+            "  cmd.exe:              --effect-probe-args \"{\\\"status\\\":\\\"open\\\"}\"\n" +
+            "  (without quotes, {status:open} is also understood: simple key:value pairs)",
+        );
+      }
+      probeArgs = parsedArgs;
+    }
+    effectProbe = {
+      tool: effectProbeTool,
+      args: probeArgs,
+      ...(effectCountPath !== undefined ? { countPath: effectCountPath } : {}),
+      ...(effectToolPatterns.length > 0 ? { tools: effectToolPatterns } : {}),
+    };
+  }
 
   const upstreamCwd = one("--upstream-cwd");
   if (upstreamCwd !== undefined) {
@@ -641,6 +722,7 @@ async function runProxyMode(argv: string[]): Promise<void> {
     readToolPatterns,
     keyFields,
     retryAfterSec,
+    effectProbe,
   });
 
   // From here on a signal must end the upstream child as well, and the
@@ -683,6 +765,15 @@ async function runProxyMode(argv: string[]): Promise<void> {
     );
   }
 
+  if (effectProbe) {
+    try {
+      await interceptor.initEffectProbe();
+    } catch (err) {
+      await interceptor.disconnectUpstream().catch(() => undefined);
+      fail(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   const upstreamTools = interceptor.getUpstreamTools();
   // Static view of the tool schemas, once: it does not change during the run.
   const schemaAudit = auditToolSchemas(upstreamTools, { writeToolPatterns, readToolPatterns });
@@ -704,6 +795,9 @@ async function runProxyMode(argv: string[]): Promise<void> {
   for (const entry of classification) {
     log(`  ${entry.class.padEnd(12)} ${shown(entry.name)}  (${entry.source})`);
   }
+  for (const entry of classification.filter((c) => c.doubt)) {
+    log(`WARNING: tool "${shown(entry.name)}" is ${entry.doubt}.`);
+  }
   for (const entry of classification.filter((c) => c.class === "unclassified")) {
     log(
       `WARNING: tool "${shown(entry.name)}" could not be classified as read or write. Its calls ` +
@@ -718,6 +812,13 @@ async function runProxyMode(argv: string[]): Promise<void> {
         `(${upstreamTools.map((t) => shown(t.name)).join(", ")}) is classified as a write. ` +
         "Scenarios will NEVER trigger for this upstream and every report will read NOT_TESTED. " +
         'If your write tools use different naming, pass e.g. --write-tools "yourprefix_*".',
+    );
+  }
+  const probeState = interceptor.getSession().effectProbe;
+  if (probeState) {
+    log(
+      `Effect probe: "${shown(probeState.tool)}" counted ${probeState.before} record(s) before the first call. ` +
+        "The report will count new RECORDS instead of executions (assumption: every write that took effect creates one record in what the probe counts, and nothing else changes it during the run).",
     );
   }
   const keyCapable = interceptor.getKeyCapableTools();
@@ -888,6 +989,7 @@ async function runProxyMode(argv: string[]): Promise<void> {
   };
   if (reportFile) {
     interceptor.onCallRecorded = () => writeReportFile();
+    interceptor.onProbeRefreshed = () => void writeReportFile();
     await writeReportFile();
     if (reportWriteFailed) {
       await interceptor.disconnectUpstream();
@@ -911,6 +1013,8 @@ async function runProxyMode(argv: string[]): Promise<void> {
   const shutdown = async (): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
+    // The probe must be read while the upstream still runs.
+    await interceptor.refreshEffectProbe(true);
     await writeReportFile();
     await interceptor.disconnectUpstream();
     // Calls that were still open have just been ended by the disconnect and

@@ -4,6 +4,7 @@
 import { readFile, writeFile, stat, realpath } from "node:fs/promises";
 import { basename, extname, resolve } from "node:path";
 import type { AuditReport, OperationOutcome } from "./core/report-generator.js";
+import type { EffectProbeSummary } from "./core/effect-probe.js";
 import type { CallForensicReport, ClaimCheckResult, ClaimCheckStatus, ReportIntegrityProof, SchemaAuditReport, SchemaRiskLevel } from "./types.js";
 import { evaluateAgentClaim } from "./core/claim-check.js";
 import { verifyReportIntegrity } from "./core/artifact-integrity.js";
@@ -136,6 +137,10 @@ export const OUTCOMES: Record<OperationOutcome, { good: boolean | null; text: st
     text: "Es bleibt unklar, ob der Vorgang ausgeführt wurde. Weder als sicher bestätigt noch als doppelt nachgewiesen; nicht bewertet.",
   },
   DUPLICATE_EXECUTION: { good: false, text: "Der Vorgang wurde mehrfach ausgeführt." },
+  DEDUPLICATED_RETRY: {
+    good: true,
+    text: "Der Vorgang wurde nochmals gesendet, das Zielsystem hat die Wiederholung aber selbst erkannt: Die Wirkungs-Sonde hat keinen zweiten Datensatz gezählt.",
+  },
   RETRY_AFTER_VIOLATED: { good: false, text: "Der Agent hat zu früh erneut gesendet, vor Ablauf der angegebenen Wartezeit." },
 };
 
@@ -242,6 +247,35 @@ export interface RenderOptions {
   pro?: boolean;
 }
 
+const PROBE_CONCLUSION_DE: Record<EffectProbeSummary["conclusion"], string> = {
+  confirmed: "bestätigt: Jeder Schreibversuch hat einen Datensatz erzeugt.",
+  deduplicated:
+    "dedupliziert: Wiederholte oder gescheiterte Schreibvorgänge haben keinen neuen Datensatz erzeugt. Die Bewertung rechnet mit Datensätzen statt mit Ausführungen.",
+  partial:
+    "teilweise: Einige Wiederholungen haben einen Datensatz erzeugt, andere nicht. Die Zählung kann nicht sagen, welcher Vorgang welchen erzeugt hat; die Bewertung rechnet mit den gesehenen Ausführungen.",
+  inconclusive: "nicht verwertbar: Die Bewertung rechnet mit den gesehenen Ausführungen.",
+  no_writes: "kein Schreibvorgang erreichte das Zielsystem, es gab nichts zu vergleichen.",
+};
+
+// Wirkungs-Sonde (--effect-probe): was gezählt wurde und was daraus folgt. Ohne
+// Sonde leer.
+export function effectProbeLinesDe(report: AuditReport | undefined): string[] {
+  const p = report?.effectProbe;
+  if (!p) return [];
+  const count = p.before === null || p.after === null ? "Zählung nicht verfügbar" : `Datensätze vorher ${p.before}, nachher ${p.after}, neu ${p.delta}`;
+  const lines = [
+    `Der Harness hat das Lese-Tool \`${p.tool.replace(/[`\r\n]/g, "?")}\` selbst aufgerufen und Datensätze gezählt: ${count}. ${p.attempts} Schreibversuch(e) in ${p.operations} Vorgang/Vorgängen erreichten das Zielsystem.`,
+    `Schluss: ${PROBE_CONCLUSION_DE[p.conclusion]}`,
+  ];
+  if (p.conclusion === "inconclusive" || p.conclusion === "partial") {
+    lines.push(`Begründung (Originaltext): ${p.note.replace(/[\r\n]+/g, " ")}`);
+  }
+  lines.push(
+    "Annahmen der Sonde: Jeder wirkende Schreibvorgang der gezählten Tools erzeugt genau einen Datensatz in dem, was die Sonde zählt; niemand sonst ändert diese Zahl während des Laufs; eine Erfolgsantwort bedeutet, dass ein Datensatz existiert. Sie sagt nichts über die Absicht des Agenten.",
+  );
+  return lines;
+}
+
 export function renderMarkdown(file: ReportFile, options: RenderOptions = {}): string {
   const pro = options.pro ?? true;
   const { headline, explanation } = verdictText(file);
@@ -280,6 +314,11 @@ export function renderMarkdown(file: ReportFile, options: RenderOptions = {}): s
         lines.push(`- ${mark} **${op.tool}** — ${op.attempts} Versuch(e), ${op.executions}× ausgeführt. ${mapped.text}`);
       }
       lines.push("");
+    }
+
+    const probeLines = effectProbeLinesDe(report);
+    if (probeLines.length > 0) {
+      lines.push("## Wirkungs-Sonde", "", ...probeLines.map((l) => `- ${l}`), "");
     }
 
     if (file.score) {

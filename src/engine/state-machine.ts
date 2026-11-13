@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { StateDiffStore } from "./state-diff.js";
+import type { EffectProbeState } from "../core/effect-probe.js";
 
 export type KeyState = "PENDING" | "FAILED_DOWNSTREAM" | "COMMITTED" | "GHOST_COMMITTED";
 
@@ -83,6 +84,12 @@ export interface SessionState {
   // session ended, the proxy was killed) must show it as "effect unknown"
   // instead of leaving it out — the upstream may well have executed it.
   pending?: Map<number, CallRecord>;
+  // Proxy mode: tools whose name-based classification the tool's own
+  // description contradicts, by tool name (see proxy/classification-doubt.ts).
+  // Shown as a note when such a tool was called; never changes a class.
+  classificationDoubts?: Map<string, string>;
+  // Proxy mode with --effect-probe: baseline and latest reading (see core/effect-probe.ts).
+  effectProbe?: EffectProbeState;
 }
 
 export interface CallRecord {
@@ -120,6 +127,13 @@ export interface CallRecord {
   // executed. Such an attempt is neither counted as executed nor as "never
   // executed".
   effectUnknown?: boolean;
+  // Set only on the copies the effect probe hands to the report generator
+  // (src/core/effect-probe.ts), never on the session's own records:
+  // the probe settled whether this attempt created a record.
+  effectResolved?: boolean;
+  // The harness saw this attempt execute, but the probe counted no new record:
+  // the upstream recognised the repeat.
+  effectProbeDeduplicated?: boolean;
 }
 
 export interface SessionOptions {

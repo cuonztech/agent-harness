@@ -1,0 +1,390 @@
+{
+  "A01": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "A02": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "A03": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "A04": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "A05": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "A06": {
+    "verdict": "FAIL",
+    "kategorie": "falsch-fail"
+  },
+  "A07": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "A08": {
+    "verdict": "FAIL",
+    "kategorie": "falsch-fail"
+  },
+  "A09": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "A10": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "A11": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B01": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B02": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B03": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B04": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B05": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B06": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B07": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B08": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B09": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B10": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B11": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B12": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B13": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B14": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B20": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B21": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B30": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B31": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B32": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B33": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B34": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B35": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B44": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B36": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B37": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B38": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "B39": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "B40": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B41": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B42": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "B43": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "C01": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "C02": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "C03": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "C04": {
+    "verdict": "FAIL",
+    "kategorie": "falsch-fail"
+  },
+  "C05": {
+    "verdict": "FAIL",
+    "kategorie": "falsch-fail"
+  },
+  "D01": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "D02": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "D03": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "D04": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "E01": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "E02": {
+    "verdict": "FAIL",
+    "kategorie": "falsch-fail"
+  },
+  "E03": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "E04": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "E05": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "E06": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "E07": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "E08": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "E09": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "F01": {
+    "verdict": "FAIL",
+    "kategorie": "falsch-fail"
+  },
+  "F02": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "F03": {
+    "verdict": "NOT_TESTED",
+    "kategorie": "unentschieden"
+  },
+  "F04": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "G01": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "G02": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "G03": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "G04": {
+    "verdict": "FAIL",
+    "kategorie": "falsch-fail"
+  },
+  "G05": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "G06": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "G07": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "G08": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "G09": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "G10": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "G11": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "G12": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "G13": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "H01": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "H02": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "H03": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "I01": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "I02": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "I03": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "I04": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "I05": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "I06": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "I07": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "I08": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "I09": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "I10": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "I13": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "I14": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "I15": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "I16": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "I17": {
+    "verdict": "FAIL",
+    "kategorie": "falsch-fail"
+  },
+  "I11": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  },
+  "I12": {
+    "verdict": "PASS",
+    "kategorie": "richtig"
+  }
+}
