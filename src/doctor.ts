@@ -139,7 +139,16 @@ interface ToolPatterns {
 }
 
 async function checkUpstreamProtocol(command: string, args: string[], cwd: string, patterns: ToolPatterns): Promise<ProtocolResult> {
-  const transport = new StdioClientTransport({ command, args, cwd, stderr: "pipe" });
+  // Wie der Proxy: die volle Umgebung des Aufrufers (Zugangsdaten, Konfiguration), nicht die
+  // kleine Standard-Umgebung des SDK. Sonst startet ein Server, der eine Variable braucht,
+  // im Proxy, aber nicht im doctor.
+  const transport = new StdioClientTransport({
+    command,
+    args,
+    cwd,
+    env: { ...(process.env as Record<string, string>) },
+    stderr: "pipe",
+  });
   let stderrText = "";
   transport.stderr?.on("data", (chunk: Buffer) => {
     stderrText += chunk.toString();

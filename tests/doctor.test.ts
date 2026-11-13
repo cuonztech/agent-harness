@@ -19,6 +19,35 @@ function runDoctor(args: string[]): Promise<{ stdout: string; code: number | nul
   });
 }
 
+describe("doctor reicht die Umgebung an den Upstream durch (wie der Proxy)", () => {
+  it("ein Server, der eine Umgebungsvariable braucht, startet im doctor, wenn sie gesetzt ist", async () => {
+    const child = spawn(process.execPath, ["dist/index.js", "doctor", "--upstream-command", process.execPath, "--upstream-arg", "tests/fixtures/upstream-needs-env.mjs"], {
+      env: { ...process.env, HARNESS_NEEDS_ENV: "1" },
+    });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d.toString()));
+    child.stderr.on("data", (d) => (out += d.toString()));
+    const code: number | null = await new Promise((res) => child.on("exit", res));
+    expect(out).toContain("Upstream-Server startet und antwortet");
+    expect(out).toContain("Tools gefunden: 13");
+    expect(out).not.toContain("startet nicht");
+    // Exit-Code hier nicht geprueft: das Fixture hat Tools, die doctor nicht einordnen kann.
+    expect(code).not.toBeNull();
+  }, 40_000);
+
+  it("ohne die Variable scheitert er mit der Meldung des Servers (Gegenprobe)", async () => {
+    const env = { ...process.env };
+    delete env.HARNESS_NEEDS_ENV;
+    const child = spawn(process.execPath, ["dist/index.js", "doctor", "--upstream-command", process.execPath, "--upstream-arg", "tests/fixtures/upstream-needs-env.mjs"], { env });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d.toString()));
+    child.stderr.on("data", (d) => (out += d.toString()));
+    const code: number | null = await new Promise((res) => child.on("exit", res));
+    expect(out).toContain("HARNESS_NEEDS_ENV fehlt");
+    expect(code).not.toBe(0);
+  }, 40_000);
+});
+
 describe("doctor (real process)", () => {
   it("reports OK for Node and a working server with explicit tool patterns", async () => {
     const { stdout, code } = await runDoctor([
