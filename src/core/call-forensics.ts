@@ -2,6 +2,7 @@
 // exaktem Parameter-Diff, wenn ein Schreib-Tool mehrfach aufgerufen wurde. Sie
 // beschreibt nur, was der Harness gesehen hat (Aufrufe und Antworten), nicht, was
 // der Agent dem Nutzer gesagt hat.
+import { effectiveHistory } from "./report-generator.js";
 import {
   classifyTool,
   extractKey,
@@ -83,6 +84,7 @@ function summarize(
   toolClass: CallForensicEntry["toolClass"],
   previous: CallRecord | undefined,
   differentOperation = false,
+  partlyChanged = false,
 ): string {
   const effect = record.tookEffect === true;
   const unknown = record.effectUnknown === true;
@@ -118,11 +120,18 @@ function summarize(
   }
   if (toolClass === "read") return lead("Leseaufruf erfolgreich ausgeführt.");
   if (toolClass === "unclassified") return lead("Aufruf eines nicht eingeordneten Tools erfolgreich ausgeführt.");
+  if (record.effectProbeDeduplicated === true) {
+    return lead("Vom Zielsystem als Erfolg beantwortet; die Wirkungs-Sonde hat keinen neuen Datensatz gezählt: das Zielsystem hat die Wiederholung selbst erkannt.");
+  }
   if (!effect) return lead("Erfolgreich beantwortet; im Zielsystem wurde nichts neu geschrieben (Wiederholung aus dem Zwischenspeicher).");
   if (!previous) return "Schreibbefehl erfolgreich im Zielsystem ausgeführt.";
   if (differentOperation) return `${prefix}im Zielsystem ausgeführt (voraussichtlich ein anderer Vorgang).`;
   if (previous.tookEffect === true) {
-    return `${prefix}erneut im Zielsystem ausgeführt (Doppelausführung).`;
+    // Gleiche Argumente: eine Doppelausfuehrung. Teilweise geaenderte Argumente koennen auch ein
+    // anderer Vorgang sein; der Bericht sagt das im Urteil.
+    return partlyChanged
+      ? `${prefix}erneut im Zielsystem ausgeführt (mögliche Doppelausführung: Argumente teilweise geändert).`
+      : `${prefix}erneut im Zielsystem ausgeführt (Doppelausführung).`;
   }
   if (previous.effectUnknown === true) {
     return `${prefix}im Zielsystem ausgeführt; ob der vorherige Versuch ebenfalls ausgeführt wurde, ist unbekannt (mögliche Doppelausführung).`;
@@ -132,10 +141,8 @@ function summarize(
 
 export function buildCallForensics(session: SessionState): CallForensicReport {
   // Noch offene Aufrufe zählen wie im Bericht als Versuche mit unbekannter Wirkung.
-  const records =
-    session.pending && session.pending.size > 0
-      ? [...session.history, ...session.pending.values()]
-      : [...session.history];
+  // Wie der Bericht: mit dem Ergebnis der Wirkungs-Sonde, damit die Zeitleiste ihm nicht widerspricht.
+  const records = [...effectiveHistory(session).history];
   records.sort((a, b) => a.callNumber - b.callNumber);
 
   const entries: CallForensicEntry[] = [];
@@ -175,7 +182,7 @@ export function buildCallForensics(session: SessionState): CallForensicReport {
       outcome: record.outcome,
       previousWriteCallNumber: previous ? previous.callNumber : null,
       argumentDiff,
-      summaryDe: summarize(record, toolClass, previous, differentOperation),
+      summaryDe: summarize(record, toolClass, previous, differentOperation, changedNonKey.length > 0),
     });
 
     if (toolClass === "write") lastWriteByTool.set(record.toolName, record);

@@ -53,7 +53,7 @@ function tokenize(clause: string): string[] {
   return clause.toLowerCase().match(/[\p{L}\p{N}']+|,/gu) ?? [];
 }
 
-function describesWriting(description: string): string | null {
+export function describesWriting(description: string): string | null {
   const text = description.slice(0, MAX_DESCRIPTION).replace(/\s+/g, " ");
   for (const clause of text.split(/[.;!?]+/)) {
     const tokens = tokenize(clause);
@@ -79,6 +79,23 @@ const READ_ONLY_PHRASES = [
   "does not modify any", "does not change any", "does not write", "nur lesend", "schreibgeschützt",
   "schreibgeschuetzt", "nur lesen",
 ];
+
+// The description opens with a read verb ("Returns the commit history", "Gets …", "Lists …"):
+// it says what the tool gives back, not what it changes.
+const READ_OPENERS = new Set([
+  "returns", "gets", "lists", "fetches", "retrieves", "shows", "searches", "finds", "reads", "describes",
+  "looks", "displays", "queries", "counts", "checks", "return", "get", "list", "fetch", "retrieve", "show",
+  "search", "find", "read", "describe", "query", "liefert", "zeigt", "listet", "gibt", "sucht", "liest", "holt",
+]);
+export function descriptionOpensWithReadVerb(description: string): boolean {
+  const first = description.slice(0, 200).trim().toLowerCase().match(/^[\p{L}]+/u);
+  return first !== null && READ_OPENERS.has(first[0]);
+}
+
+export function descriptionSaysReadOnly(description: string): boolean {
+  const sentence = firstSentence(description);
+  return READ_ONLY_PHRASES.some((p) => sentence.includes(p));
+}
 
 function firstSentence(description: string): string {
   const text = description.slice(0, MAX_DESCRIPTION).replace(/\s+/g, " ").trim();

@@ -88,6 +88,9 @@ export interface SessionState {
   // description contradicts, by tool name (see proxy/classification-doubt.ts).
   // Shown as a note when such a tool was called; never changes a class.
   classificationDoubts?: Map<string, string>;
+  // Proxy mode: tools classified from a verb inside their name only (a guess). Named in the report
+  // when called, because a wrong guess is invisible otherwise.
+  verbWordGuesses?: Set<string>;
   // Proxy mode with --effect-probe: baseline and latest reading (see core/effect-probe.ts).
   effectProbe?: EffectProbeState;
 }

@@ -20,10 +20,10 @@ describe("Zweifel an der Namens-Einordnung", () => {
     });
 
     it.each([
-      ["get_or_create_customer", "Returns the customer, or creates one if none exists."],
-      ["fetch_and_send", "Fetches the report and sends it to the customer."],
+      ["get_customer", "Returns the customer, or creates one if none exists."],
+      ["fetch_report", "Fetches the report and sends it to the customer."],
       ["check_out", "Closes the stay and charges the card."],
-      ["list_then_cancel", "Lists bookings and cancels the oldest."],
+      ["list_stale", "Lists bookings and cancels the oldest."],
       ["verify_payment", "Verifies a payment and stores the result."],
     ])("%s", (name, description) => {
       const c = classifyUpstreamTool(tool(name, description), cfg);

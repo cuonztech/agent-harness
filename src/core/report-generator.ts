@@ -586,16 +586,16 @@ function findRetryAfterHits(history: CallRecord[], keyFields: string[]): RetryAf
   return hits;
 }
 
-export function generateReport(session: SessionState): AuditReport {
-  // Calls still open at the upstream count as attempts of unknown effect.
+// The calls the audit judges: recorded calls plus those still open (attempts of unknown effect),
+// settled by the effect probe when there is one. The timeline (call-forensics) uses the same history,
+// so it cannot contradict the verdict.
+export function effectiveHistory(session: SessionState): { history: CallRecord[]; probed: ReturnType<typeof applyEffectProbe> | null } {
   const recorded =
     session.pending && session.pending.size > 0
       ? [...session.history, ...session.pending.values()].sort(
           (a, b) => a.callNumber - b.callNumber,
         )
       : session.history;
-  // --effect-probe: settle per attempt whether it created a record. Everything
-  // below runs on the settled history; without a probe nothing changes.
   const probed = session.effectProbe
     ? applyEffectProbe(recorded, session.effectProbe, {
         openCalls: session.pending?.size ?? 0,
@@ -605,7 +605,13 @@ export function generateReport(session: SessionState): AuditReport {
         matchesTool: matchesAnyGlob,
       })
     : null;
-  const history = probed ? probed.history : recorded;
+  return { history: probed ? probed.history : recorded, probed };
+}
+
+export function generateReport(session: SessionState): AuditReport {
+  // --effect-probe: settle per attempt whether it created a record. Everything
+  // below runs on the settled history; without a probe nothing changes.
+  const { history, probed } = effectiveHistory(session);
   const violations: Violation[] = [];
   const observations: Observation[] = [];
 
@@ -974,7 +980,9 @@ export function generateReport(session: SessionState): AuditReport {
   {
     const cleanByTool = new Map<string, CallRecord[]>();
     for (const r of history) {
-      if (r.toolClass !== "write" || r.outcome !== "success" || r.tookEffect !== true || isGhost(r)) continue;
+      // A write the effect probe settled as executed counts like a success, whatever the upstream answered
+      // (an error result behind which it wrote): a respelled repeat of it is a look-alike all the same.
+      if (r.toolClass !== "write" || (r.outcome !== "success" && r.effectResolved !== true) || r.tookEffect !== true || isGhost(r)) continue;
       const list = cleanByTool.get(r.toolName);
       if (list) list.push(r);
       else cleanByTool.set(r.toolName, [r]);
@@ -1058,6 +1066,15 @@ export function generateReport(session: SessionState): AuditReport {
       `Effect probe (${probed.summary.tool}): ${probed.summary.conclusion}. ${probed.summary.note}. Assumptions: every write of the counted tool(s) that took effect creates one record in what the probe counts, nothing else changes that count during the run, and a success answer means a record exists.`,
     );
     if (session.effectProbe?.warning) notes.push(`Effect probe: ${session.effectProbe.warning}.`);
+  }
+  if (session.verbWordGuesses && session.verbWordGuesses.size > 0) {
+    const called = new Set(history.map((r) => r.toolName));
+    const guessedCalled = [...session.verbWordGuesses].filter((t) => called.has(t));
+    if (guessedCalled.length > 0) {
+      notes.push(
+        `Classification by name only (a guess): ${guessedCalled.map(cell).join(", ")} ${guessedCalled.length === 1 ? "was" : "were"} classified from a verb inside the name, not from an annotation or a pattern. If a guess is wrong, duplicates through that tool are not seen as such; check with --write-tools / --read-tools.`,
+      );
+    }
   }
   if (session.classificationDoubts && session.classificationDoubts.size > 0) {
     const called = new Set(history.map((r) => r.toolName));

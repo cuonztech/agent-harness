@@ -27,6 +27,8 @@ interface ParsedArgs {
   reportFile?: string;
   writeTools: string[];
   readTools: string[];
+  // --upstream-env / --upstream-env-var: extra environment for the upstream, as for the proxy.
+  env: Record<string, string>;
   unknown: string[];
   // Options given without a usable value; the proxy rejects those too.
   empty: string[];
@@ -37,7 +39,12 @@ function splitList(raw: string): string[] {
 }
 
 function parseDoctorArgs(argv: string[]): ParsedArgs {
-  const out: ParsedArgs = { upstreamArgs: [], writeTools: [], readTools: [], unknown: [], empty: [] };
+  const out: ParsedArgs = { upstreamArgs: [], writeTools: [], readTools: [], env: {}, unknown: [], empty: [] };
+  const addEnv = (pair: string, flag: string): void => {
+    const at = pair.indexOf("=");
+    if (at <= 0) out.empty.push(`${flag} (${pair || "leer"} ist nicht KEY=VALUE)`);
+    else out.env[pair.slice(0, at).trim()] = pair.slice(at + 1);
+  };
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
     const eq = token.indexOf("=");
@@ -61,6 +68,12 @@ function parseDoctorArgs(argv: string[]): ParsedArgs {
         break;
       case "--report-file":
         out.reportFile = takeValue();
+        break;
+      case "--upstream-env":
+        for (const pair of takeValue().split(",")) if (pair.trim() !== "") addEnv(pair, "--upstream-env");
+        break;
+      case "--upstream-env-var":
+        addEnv(takeValue(), "--upstream-env-var");
         break;
       case "--write-tools":
         out.writeTools = splitList(takeValue());
@@ -138,7 +151,7 @@ interface ToolPatterns {
   readToolPatterns: string[];
 }
 
-async function checkUpstreamProtocol(command: string, args: string[], cwd: string, patterns: ToolPatterns): Promise<ProtocolResult> {
+async function checkUpstreamProtocol(command: string, args: string[], cwd: string, patterns: ToolPatterns, extraEnv: Record<string, string> = {}): Promise<ProtocolResult> {
   // Wie der Proxy: die volle Umgebung des Aufrufers (Zugangsdaten, Konfiguration), nicht die
   // kleine Standard-Umgebung des SDK. Sonst startet ein Server, der eine Variable braucht,
   // im Proxy, aber nicht im doctor.
@@ -146,7 +159,7 @@ async function checkUpstreamProtocol(command: string, args: string[], cwd: strin
     command,
     args,
     cwd,
-    env: { ...(process.env as Record<string, string>) },
+    env: { ...(process.env as Record<string, string>), ...extraEnv },
     stderr: "pipe",
   });
   let stderrText = "";
@@ -223,6 +236,7 @@ export interface DoctorInput {
   reportFile?: string;
   writeTools: string[];
   readTools: string[];
+  env?: Record<string, string>;
 }
 
 export interface DoctorResult {
@@ -258,7 +272,7 @@ export async function collectDoctor(input: DoctorInput): Promise<DoctorResult> {
       const protocol = await checkUpstreamProtocol(input.command, input.upstreamArgs, cwd, {
         writeToolPatterns: input.writeTools,
         readToolPatterns: input.readTools,
-      });
+      }, input.env);
       checks.push(...protocol.checks);
       toolLines = protocol.toolLines;
       schemaAudit = protocol.schemaAudit;
@@ -275,7 +289,7 @@ export async function runDoctor(argv: string[]): Promise<number> {
   process.stdout.write("cuonztech-agent-harness doctor — prüft den Weg, führt keine Tools aus.\n\n");
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(
-      "Nutzung: doctor --upstream-command <cmd> [--upstream-arg <arg> ...] [--upstream-cwd <dir>] [--write-tools a,b] [--read-tools a,b] [--report-file <datei>]\n\n" +
+      "Nutzung: doctor --upstream-command <cmd> [--upstream-arg <arg> ...] [--upstream-cwd <dir>] [--write-tools a,b] [--read-tools a,b] [--upstream-env-var KEY=VALUE] [--upstream-env K=V,K2=V2] [--report-file <datei>]\n\n" +
         "Startet deinen MCP-Server, fragt nur initialize und tools/list ab und prüft Node-Version, Start-Datei, Tool-Einordnung und Report-Pfad.\n" +
         "Es wird nie ein Tool ausgeführt. Optionen wie beim Proxy.\n",
     );
@@ -289,7 +303,7 @@ export async function runDoctor(argv: string[]): Promise<number> {
   }
   if (parsed.unknown.length > 0) {
     process.stdout.write(`Unbekannte Option(en): ${parsed.unknown.join(" ")}\n`);
-    process.stdout.write("Nutzung: doctor --upstream-command <cmd> [--upstream-arg <arg> ...] [--upstream-cwd <dir>] [--write-tools a,b] [--read-tools a,b] [--report-file <datei>]\n");
+    process.stdout.write("Nutzung: doctor --upstream-command <cmd> [--upstream-arg <arg> ...] [--upstream-cwd <dir>] [--write-tools a,b] [--read-tools a,b] [--upstream-env-var KEY=VALUE] [--upstream-env K=V,K2=V2] [--report-file <datei>]\n");
     return 1;
   }
 

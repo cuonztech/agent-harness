@@ -67,11 +67,10 @@ describe("Verb im Namen (nur fuer Tools, die sonst nicht einzuordnen waeren)", (
     expect(classifyUpstreamTool(tool("slack_get_users"), { writeToolPatterns: [], readToolPatterns: ["list_*"] }).class).toBe("unclassified");
   });
 
-  it("bekannte Grenze: ein Lese-Wort im Namen eines Tools, das schreibt, wird als Read eingeordnet; die Beschreibung widerspricht", () => {
-    const t: Tool = { ...tool("firecrawl_search_feedback"), description: "Submit feedback about a search result." };
-    const c = classifyUpstreamTool(t, cfg);
-    expect(c.class).toBe("read");
-    expect(c.doubt).toContain("submit");
+  it("ein Lese-Wort im Namen eines Tools, das schreibt: mit Beschreibung bleibt es unklar, ohne eine benannte Vermutung", () => {
+    const withDescription: Tool = { ...tool("firecrawl_search_feedback"), description: "Submit feedback about a search result." };
+    expect(classifyUpstreamTool(withDescription, cfg).class).toBe("unclassified");
+    expect(classifyUpstreamTool(tool("firecrawl_search_feedback"), cfg)).toMatchObject({ class: "read", guess: true });
   });
 });
 

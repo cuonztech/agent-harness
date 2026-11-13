@@ -8,7 +8,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { VERSION } from "../version.js";
 import { classificationDoubt } from "./classification-doubt.js";
-import { classifyByVerbWords } from "./verb-words.js";
+import { classifyByVerbWords, readPrefixThenWrites } from "./verb-words.js";
 import { looksLikeErrorAnswer } from "./error-answer.js";
 import { parseProbeReading, type EffectProbeConfig } from "../core/effect-probe.js";
 import { readFileSync, readdirSync } from "node:fs";
@@ -74,6 +74,8 @@ export interface ToolClassification {
   // The tool's own description contradicts a name-based classification
   // (see classification-doubt.ts). Informational: the class is not changed.
   doubt?: string;
+  // Taken from a verb inside the name: a guess, named as such at startup and in the report.
+  guess?: boolean;
 }
 
 // The result handed back to the gateway's CallTool handler. A passed-through
@@ -135,13 +137,17 @@ function classifyByRules(
     return { name, class: "write", source: "default write pattern" };
   }
   if (isReadTool(name)) {
+    // "get_or_create_user", "read_and_delete": the read prefix alone would call a write a read.
+    if (explicitWrite.length === 0 && readPrefixThenWrites(name)) {
+      return { name, class: "unclassified", source: "read prefix, but a write verb follows (and/or/then)" };
+    }
     return { name, class: "read", source: "read prefix" };
   }
   // Last resort for what nothing above could place: a verb inside the name (`slack_post_message`).
   // Not when the caller gave explicit patterns: then they decide what writes and what reads.
   if (explicitWrite.length === 0 && explicitRead.length === 0) {
-    const byWord = classifyByVerbWords(name);
-    if (byWord !== "unclassified") return { name, class: byWord, source: "verb word in name" };
+    const byWord = classifyByVerbWords(name, tool.description);
+    if (byWord !== "unclassified") return { name, class: byWord, source: "verb word in name", guess: true };
   }
   return { name, class: "unclassified", source: "no annotation, no pattern match" };
 }
@@ -326,6 +332,7 @@ export class ProxyInterceptor {
       if (entry.doubt) {
         (this.session.classificationDoubts ??= new Map()).set(entry.name, entry.doubt);
       }
+      if (entry.guess) (this.session.verbWordGuesses ??= new Set()).add(entry.name);
     }
     for (const tool of this.upstreamTools) {
       const properties = (tool.inputSchema?.properties ?? {}) as Record<string, unknown>;

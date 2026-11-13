@@ -801,6 +801,14 @@ async function runProxyMode(argv: string[]): Promise<void> {
   for (const entry of classification) {
     log(`  ${entry.class.padEnd(12)} ${shown(entry.name)}  (${entry.source})`);
   }
+  const guessed = classification.filter((c) => c.guess);
+  if (guessed.length > 0) {
+    log(
+      `NOTE: ${guessed.length} tool(s) were classified only from a verb inside their name (a guess): ` +
+        guessed.map((c) => `${shown(c.name)} (${c.class})`).join(", ") +
+        '. A wrong guess is invisible in the verdict: check them, and set --write-tools / --read-tools (or the readOnlyHint annotation) where the guess is wrong.',
+    );
+  }
   for (const entry of classification.filter((c) => c.doubt)) {
     log(`WARNING: tool "${shown(entry.name)}" is ${entry.doubt}.`);
   }
