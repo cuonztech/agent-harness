@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.10.0 — 2026-11-13
+
+Grundlage: eine Messung an echten Servern (`docs/MESSUNG-ECHTE-SERVER.md`, 376 Tools aus 24 öffentlichen MCP-Servern) und der kontextfreie Test von 0.9.0.
+
+### Nicht abwärtskompatibel (Einordnung und Urteil ändern sich)
+
+- **Tools werden nach einem Verb im Namen eingeordnet**, wenn sonst nichts sie einordnet (kein `--write-tools`/`--read-tools`, keine Annotation, kein Präfix-Muster): `slack_post_message`, `API-patch-page`, `kubectl_apply`, `ps_scale` gelten als Write, `slack_get_users`, `API-retrieve-a-page`, `kubectl_describe` als Read. Schreib- und Lesewort zusammen (`get_or_create_user`) bleibt unklar. Folge: Läufe gegen Server, deren Tools bisher «nicht eingeordnet» waren, liefern jetzt ein Urteil (PASS/FAIL) statt NOT_TESTED, und Szenarien lösen auf diesen Tools aus. Gemessen: nur nach Name 39 % → 76 % (Menge A) und 48 % → 68 % (Menge B) richtig; ein Write wird neu als Read eingeordnet (`firecrawl_search_feedback`, der Zweifels-Hinweis erkennt ihn), zwei Reads als Write.
+- **Erfolgsantwort, die wie ein Fehler aussieht** (kein `isError`, Text beginnt mit «Fehler:»/«Error:»/«failed» o. ä. oder JSON mit `error`, `success: false`, `status: "error"`): neue Beobachtung `SUCCESS_ANSWER_LOOKS_LIKE_ERROR`. Mit `--effect-probe` wird die Sonde bei **mehreren Vorgängen** dann nicht mehr benutzt (`inconclusive`). Vorher konnte ein solcher Fehlertext neben einem echten Duplikat zu PASS führen (Befund 1 des kontextfreien Tests von 0.9.0). Ohne Sonde bleibt das Urteil unverändert; bei einem einzelnen Vorgang löst die Sonde es weiter auf.
+
+### Behoben
+
+- Zeitleiste und Dossier nannten einen anderen Gast, ein anderes Datum und einen anderen Betrag «Wiederholung von Aufruf #n … Doppelausführung». Unterscheiden sich mindestens zwei Felder und mindestens die Hälfte, heisst es jetzt «Weiterer Aufruf des Tools mit anderen Argumenten». Die Zählung der Retries bleibt unverändert.
+- Die Startmeldung bei `--scenario F4` behauptete eine aktive Fehlerinjektion; F4 spielt nichts ein und sagt das jetzt.
+
+### Neu
+
+- `docs/MESSUNG-ECHTE-SERVER.md` und `tests/accuracy/real-servers.json`/`real-servers.test.ts`: die Messung als Datensatz mit festgenagelten Zahlen.
+- `src/proxy/verb-words.ts`, `src/proxy/error-answer.ts`.
+- Korpus: Fall I18 (Fehlertext ohne `isError` neben einem echten Duplikat), Modelltest der Sonde erzeugt Fehlertext jetzt auch bei mehreren Vorgängen (ohne den Schutz findet er Seeds mit Falsch-PASS).
+- Modell-Läufe gegen 0.9.0 (qwen3:14b, 4 × 10, alle stimmig) in der Übergabe dokumentiert.
+
 ## 0.9.0 — 2026-11-13
 
 Grundlage ist die erste Genauigkeits-Messung (`docs/MESSUNG-GENAUIGKEIT.md`, `tests/accuracy/`): Der Harness wird gegen einen echten Upstream gemessen, der mitschreibt, wie viele Datensätze wirklich entstanden sind.

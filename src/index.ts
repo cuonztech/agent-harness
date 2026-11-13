@@ -694,6 +694,12 @@ async function runProxyMode(argv: string[]): Promise<void> {
         "reports a timeout to the agent. Only point --upstream-command at a disposable " +
         "test/staging backend, never production.",
     );
+  } else if (scenarioId === "F4") {
+    log(
+      "NOTE: scenario F4 injects no failure. Every call is passed through unchanged; the audit only " +
+        "watches whether the agent executes the same write twice on its own. Point --upstream-command at a " +
+        "disposable test/staging backend anyway: the agent's writes are executed for real.",
+    );
   } else if (scenarioId || (chaosMode === "chaos" && !chaosInjectsNothing)) {
     log(
       "WARNING: failure injection is active — the agent will receive errors for calls " +

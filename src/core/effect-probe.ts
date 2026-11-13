@@ -244,6 +244,16 @@ export function applyEffectProbe(
       `${tools.length} different write tools reached the upstream (${tools.join(", ")}): a count cannot say which of them created which record. Name the tool(s) the probe counts with --effect-tools`,
     );
   }
+  // An answer that reads like an error but came back as a success: "a success answer means a
+  // record exists" is not safe for it. With one operation the count still settles it (that
+  // operation is the only one a record can belong to); with several it cannot be attributed.
+  const doubtful = counted.filter((r) => r.answerLooksLikeError === true);
+  if (doubtful.length > 0 && operations >= 2) {
+    return none(
+      "inconclusive",
+      `${doubtful.length} write answer(s) came back as a success but read like an error (for example "Fehler: …" without isError), and ${operations} operations are in the run: a count cannot say whether those created a record. Report such errors with isError so the harness can tell`,
+    );
+  }
   if (counted.length === 0) return none("no_writes", "no write of a counted tool reached the upstream, nothing to compare");
 
   // Per operation: at least one record if one of its attempts looks executed,

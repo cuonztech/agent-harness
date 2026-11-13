@@ -134,6 +134,10 @@ export interface CallRecord {
   // The harness saw this attempt execute, but the probe counted no new record:
   // the upstream recognised the repeat.
   effectProbeDeduplicated?: boolean;
+  // A write the upstream answered as a success (no isError) whose content says it failed
+  // (proxy/error-answer.ts). The harness counts it as executed; the effect probe cannot rely
+  // on "a success answer means a record exists" for it.
+  answerLooksLikeError?: boolean;
 }
 
 export interface SessionOptions {

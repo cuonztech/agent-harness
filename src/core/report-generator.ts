@@ -85,7 +85,10 @@ export type ObservationType =
   // an earlier one only in spelling or by an added or dropped field. Probably
   // the same operation executed twice, but not provable by literal comparison:
   // the run is NOT_TESTED (never PASS).
-  | "LOOKALIKE_WRITE_AFTER_SUCCESS";
+  | "LOOKALIKE_WRITE_AFTER_SUCCESS"
+  // A write answered as a success (no isError) whose content says it failed. Counted as executed;
+  // an effect probe is not used across several operations because of it.
+  | "SUCCESS_ANSWER_LOOKS_LIKE_ERROR";
 
 export interface DuplicateDetails {
   executions: number;
@@ -155,6 +158,8 @@ export const OBSERVATION_DE: Record<ObservationType, string> = {
     "Nach einem unsicheren Versuch wurde dasselbe Tool noch einmal ausgeführt, mit Argumenten, die sich nur in Schreibweise oder durch ein zusätzliches oder fehlendes Feld unterscheiden. Das ist möglicherweise derselbe Vorgang zweimal. Der Harness vergleicht wörtlich und kann es nicht beweisen; bitte im Zielsystem nachsehen. Der Lauf ist nicht entscheidbar.",
   OTHER_WRITE_AFTER_UNCERTAIN_ATTEMPT:
     "Nach einem unsicheren Versuch (Timeout oder fehlende Antwort) wurde dasselbe Tool mit anderen Argumenten ausgeführt. Das kann ein zweiter, gewollter Vorgang sein oder derselbe Vorgang mit geändertem Betrag, Datumsformat oder Wortlaut. Der Harness kann das nicht unterscheiden; bitte im Zielsystem nachsehen.",
+  SUCCESS_ANSWER_LOOKS_LIKE_ERROR:
+    "Das Zielsystem hat diesen Schreibaufruf als Erfolg gemeldet (kein isError), der Inhalt der Antwort liest sich aber wie ein Fehler. Der Harness zählt ihn als ausgeführt. Meldet das Zielsystem Fehler nur im Text, kann ein korrektes Retry als Duplikat erscheinen; mit --effect-probe wird die Zählung bei mehreren Vorgängen deshalb nicht benutzt. Fehler mit isError melden.",
   LOOKALIKE_WRITE_AFTER_SUCCESS:
     "Dasselbe Tool wurde zweimal erfolgreich ausgeführt, und die Argumente des zweiten Aufrufs unterscheiden sich von denen eines früheren nur in der Schreibweise oder durch ein zusätzliches oder fehlendes Feld. Das ist möglicherweise derselbe Vorgang zweimal. Der Harness vergleicht wörtlich und kann es nicht beweisen; bitte im Zielsystem nachsehen. Der Lauf ist nicht entscheidbar.",
 };
@@ -955,6 +960,16 @@ export function generateReport(session: SessionState): AuditReport {
   // belong to an uncertain attempt are judged by the logic above. Bounded: the
   // report is recomputed on every call, so beyond MAX_LOOKALIKE_WRITES clean
   // writes of one tool the check is skipped (and says so).
+  for (const r of history) {
+    if (r.answerLooksLikeError === true) {
+      observations.push({
+        callNumber: r.callNumber,
+        type: "SUCCESS_ANSWER_LOOKS_LIKE_ERROR",
+        tool: r.toolName,
+        description: `"${r.toolName}" answered as a success (no isError), but the content reads like an error. Counted as executed. If the upstream reports failures only in text, a correct retry can look like a duplicate; report errors with isError.`,
+      });
+    }
+  }
   let lookalikeSuspects = 0;
   {
     const cleanByTool = new Map<string, CallRecord[]>();

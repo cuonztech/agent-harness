@@ -363,6 +363,10 @@
     "verdict": "FAIL",
     "kategorie": "richtig"
   },
+  "I18": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
   "I14": {
     "verdict": "PASS",
     "kategorie": "richtig"

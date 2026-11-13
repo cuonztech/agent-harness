@@ -1,6 +1,6 @@
 # Messung Genauigkeit: wie oft stimmt das Urteil des Harness?
 
-Gemessen an Version 0.9.0, 97 Fälle, jeder gegen den echten, gebauten Proxy (`dist/index.js proxy`) und einen echten Upstream, der mitschreibt, wie viele Datensätze wirklich entstanden sind (`tests/accuracy/corpus-upstream.mjs`). Der Harness sieht dieses Protokoll nie.
+Gemessen an Version 0.9.0, 98 Fälle, jeder gegen den echten, gebauten Proxy (`dist/index.js proxy`) und einen echten Upstream, der mitschreibt, wie viele Datensätze wirklich entstanden sind (`tests/accuracy/corpus-upstream.mjs`). Der Harness sieht dieses Protokoll nie.
 
 Erzeugt von `tests/accuracy/accuracy.test.ts` (`ACC_WRITE=1 npx vitest run tests/accuracy`), nicht von Hand ändern: Ein Test prüft, dass dieses Dokument der Messung entspricht.
 
@@ -17,13 +17,13 @@ Erzeugt von `tests/accuracy/accuracy.test.ts` (`ACC_WRITE=1 npx vitest run tests
 
 | | Fälle | richtig | NOT_TESTED | FALSCH-PASS | FALSCH-FAIL |
 |---|---:|---:|---:|---:|---:|
-| alle Fälle | 97 | 50 (52 %) | 39 | 0 | 8 |
-| Soll FAIL (es gab ein Duplikat oder einen Regelverstoss) | 56 | 22 (39 %) | 34 | 0 | 0 |
+| alle Fälle | 98 | 51 (52 %) | 39 | 0 | 8 |
+| Soll FAIL (es gab ein Duplikat oder einen Regelverstoss) | 57 | 23 (40 %) | 34 | 0 | 0 |
 | Soll PASS (nichts Falsches passiert) | 41 | 28 (68 %) | 5 | 0 | 8 |
 
-- **Falsch-PASS-Quote** (Anteil der Soll-FAIL-Fälle mit PASS): 0 von 56 (0 %).
+- **Falsch-PASS-Quote** (Anteil der Soll-FAIL-Fälle mit PASS): 0 von 57 (0 %).
 - **Falsch-FAIL-Quote** (Anteil der Soll-PASS-Fälle mit FAIL): 8 von 41 (20 %).
-- **Ohne Aussage** (NOT_TESTED): 39 von 97 (40 %).
+- **Ohne Aussage** (NOT_TESTED): 39 von 98 (40 %).
 - **Beschriftung der Operation** (z. B. `VERIFIED_NO_RETRY` nur bei richtigem Nachsehen): 6 von 6 Fällen richtig.
 
 ## Nach Gruppe
@@ -40,7 +40,7 @@ Erzeugt von `tests/accuracy/accuracy.test.ts` (`ACC_WRITE=1 npx vitest run tests
 | F. Fehlerdarstellung des Upstreams | 4 | 1 | 2 | 0 | 1 |
 | G. Weitere Szenarien | 13 | 12 | 0 | 0 | 1 |
 | H. Mehrere Vorgaenge | 3 | 3 | 0 | 0 | 0 |
-| I. Wirkungs-Sonde (--effect-probe) | 17 | 16 | 0 | 0 | 1 |
+| I. Wirkungs-Sonde (--effect-probe) | 18 | 17 | 0 | 0 | 1 |
 
 ## Alle Fälle
 
@@ -189,6 +189,7 @@ Erzeugt von `tests/accuracy/accuracy.test.ts` (`ACC_WRITE=1 npx vitest run tests
 | I09 | Wie F03: Teilerfolg (geschrieben, dann isError), Retry | FAIL | FAIL | 2 (1) | richtig |  |
 | I10 | Zwei Vorgaenge: A dedupliziert (gleicher Key), B doppelt (ohne Key) | FAIL | FAIL | 3 (2) | richtig |  |
 | I13 | Abgelehnter Vorgang (Max) neben einem echten Duplikat (Anna zweimal) | FAIL | FAIL | 2 (1) | richtig |  |
+| I18 | Fehlertext ohne isError (Max) neben einem echten Duplikat (Anna zweimal) | FAIL | FAIL | 2 (1) | richtig |  |
 | I14 | Abgelehnter Vorgang (Max) neben einem korrekten Retry (Anna, gleicher Key, Upstream dedupliziert) | PASS | PASS | 1 (2) | richtig |  |
 | I15 | Duplikat plus update_booking (Write ohne Datensatz), --effect-tools create_booking | FAIL | FAIL | 2 (1) | richtig |  |
 | I16 | Retry gegen deduplizierenden Upstream plus update_booking, --effect-tools create_booking | PASS | PASS | 1 (1) | richtig |  |

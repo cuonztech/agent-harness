@@ -10,10 +10,8 @@
 // «abgelehnter Vorgang neben einem echten Duplikat» gab vorher PASS (die Zaehlung
 // ging auf, weil der abgelehnte Vorgang keinen Datensatz erzeugt hatte).
 //
-// Grenze der Aussage: sie gilt innerhalb der dokumentierten Annahmen. Ein
-// «Erfolg», hinter dem kein Datensatz steht (Fehlertext ohne isError), kommt nur in
-// Laeufen mit einem einzigen Vorgang vor; bei mehreren Vorgaengen waere die
-// Zaehlung nicht mehr zuzuordnen (README, Wirkungs-Sonde).
+// Fehlertext ohne isError (Erfolgsantwort, hinter der kein Datensatz steht) kommt auch bei
+// mehreren Vorgaengen vor: die Sonde wird dann nicht benutzt (answerLooksLikeError).
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   createSession,
@@ -70,7 +68,7 @@ function randomRun(seed: number): Run {
     const op = Math.floor(r() * operations);
     const kinds: Kind[] = ["recordOK", "rejectNoWrite", "rejectWrote", "ghost", "unknownNoWrite", "unknownWrote"];
     if (created[op] > 0) kinds.push("dedupOK", "dedupOK", "dedupOK"); // nur nach einem ersten Datensatz
-    if (operations === 1) kinds.push("lie");
+    kinds.push("lie"); // Fehlertext ohne isError, auch bei mehreren Vorgaengen (Befund 1 der Pruefrunde 0.9.0)
     const kind = kinds[Math.floor(r() * kinds.length)];
     if (CREATES[kind]) created[op]++;
     attempts.push({ op, kind });
@@ -96,7 +94,9 @@ function build(run: Run): { session: SessionState; truthRecords: number; truthDu
     switch (a.kind) {
       case "recordOK":
       case "dedupOK":
+        break;
       case "lie":
+        Object.assign(base, { answerLooksLikeError: true, response: "Fehler: Zimmer belegt" });
         break;
       case "rejectNoWrite":
       case "rejectWrote":

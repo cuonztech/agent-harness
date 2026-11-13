@@ -8,6 +8,8 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { VERSION } from "../version.js";
 import { classificationDoubt } from "./classification-doubt.js";
+import { classifyByVerbWords } from "./verb-words.js";
+import { looksLikeErrorAnswer } from "./error-answer.js";
 import { parseProbeReading, type EffectProbeConfig } from "../core/effect-probe.js";
 import { readFileSync, readdirSync } from "node:fs";
 import {
@@ -134,6 +136,12 @@ function classifyByRules(
   }
   if (isReadTool(name)) {
     return { name, class: "read", source: "read prefix" };
+  }
+  // Last resort for what nothing above could place: a verb inside the name (`slack_post_message`).
+  // Not when the caller gave explicit patterns: then they decide what writes and what reads.
+  if (explicitWrite.length === 0 && explicitRead.length === 0) {
+    const byWord = classifyByVerbWords(name);
+    if (byWord !== "unclassified") return { name, class: byWord, source: "verb word in name" };
   }
   return { name, class: "unclassified", source: "no annotation, no pattern match" };
 }
@@ -709,6 +717,9 @@ export class ProxyInterceptor {
           outcome,
           toolClass,
           tookEffect: toolClass === "write" && !upstreamIsError,
+          ...(toolClass === "write" && !upstreamIsError && looksLikeErrorAnswer(upstreamText)
+            ? { answerLooksLikeError: true }
+            : {}),
           scenarioTriggered: decision.scenarioTriggered && !ghostRejected,
           upstreamResponse: upstreamText ?? "",
         }),

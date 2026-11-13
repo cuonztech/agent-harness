@@ -89,7 +89,7 @@ function firstSentence(description: string): string {
 export function classificationDoubt(tool: Tool, cls: ToolClass, source: string): string | undefined {
   const description = tool.description;
   if (!description) return undefined;
-  const nameBased = source === "default write pattern" || source === "read prefix";
+  const nameBased = source === "default write pattern" || source === "read prefix" || source === "verb word in name";
   if (!nameBased) return undefined;
   if (cls === "read") {
     const verb = describesWriting(description);

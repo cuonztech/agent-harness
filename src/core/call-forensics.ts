@@ -82,10 +82,17 @@ function summarize(
   record: CallRecord,
   toolClass: CallForensicEntry["toolClass"],
   previous: CallRecord | undefined,
+  differentOperation = false,
 ): string {
   const effect = record.tookEffect === true;
   const unknown = record.effectUnknown === true;
-  const prefix = previous ? `Wiederholung von Aufruf #${previous.callNumber}: ` : "";
+  // Mindestens zwei Felder und mindestens die Haelfte anders: kein Wiederholungsversuch, sondern
+  // ein anderer Vorgang desselben Tools (anderer Gast, anderes Datum, anderer Betrag).
+  const prefix = previous
+    ? differentOperation
+      ? `Weiterer Aufruf des Tools mit anderen Argumenten als Aufruf #${previous.callNumber}: `
+      : `Wiederholung von Aufruf #${previous.callNumber}: `
+    : "";
   const lead = (text: string): string => `${prefix}${text}`;
 
   if (unknown) {
@@ -113,6 +120,7 @@ function summarize(
   if (toolClass === "unclassified") return lead("Aufruf eines nicht eingeordneten Tools erfolgreich ausgeführt.");
   if (!effect) return lead("Erfolgreich beantwortet; im Zielsystem wurde nichts neu geschrieben (Wiederholung aus dem Zwischenspeicher).");
   if (!previous) return "Schreibbefehl erfolgreich im Zielsystem ausgeführt.";
+  if (differentOperation) return `${prefix}im Zielsystem ausgeführt (voraussichtlich ein anderer Vorgang).`;
   if (previous.tookEffect === true) {
     return `${prefix}erneut im Zielsystem ausgeführt (Doppelausführung).`;
   }
@@ -141,6 +149,9 @@ export function buildCallForensics(session: SessionState): CallForensicReport {
     const toolClass = record.toolClass ?? classifyTool(session, record.toolName);
     const previous = toolClass === "write" ? lastWriteByTool.get(record.toolName) : undefined;
     const argumentDiff = previous ? diffArguments(previous.args, record.args) : null;
+    const nonKey = argumentDiff ? argumentDiff.filter((d) => !isKeyField(d.field, session.keyFields)) : [];
+    const changedNonKey = nonKey.filter((d) => d.kind !== "unchanged");
+    const differentOperation = changedNonKey.length >= 2 && changedNonKey.length * 2 >= nonKey.length;
 
     if (previous && argumentDiff) {
       writeRetriesCount++;
@@ -164,7 +175,7 @@ export function buildCallForensics(session: SessionState): CallForensicReport {
       outcome: record.outcome,
       previousWriteCallNumber: previous ? previous.callNumber : null,
       argumentDiff,
-      summaryDe: summarize(record, toolClass, previous),
+      summaryDe: summarize(record, toolClass, previous, differentOperation),
     });
 
     if (toolClass === "write") lastWriteByTool.set(record.toolName, record);
