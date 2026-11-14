@@ -18,6 +18,7 @@ import { runVerifyMode } from "./verify.js";
 import { archivePreviousReportSync, isReplaceableReportFile, isReservedFileName, notReplaceableMessage, type ArchivedReportInfo } from "./report-file-guard.js";
 import { runUiMode } from "./ui/server.js";
 import { runCampaignMode } from "./campaign/runner.js";
+import { runBenchMode } from "./bench/cli.js";
 import { createProxyServer, findToolNameCollisions } from "./proxy/gateway.js";
 import { resolveProGate, reduceSchemaAudit, reasonSentence, FREE_SCOPE_DE, PURCHASE_URL } from "./license/index.js";
 import { getScenarioById, ALL_SCENARIOS } from "./scenarios/f1-f5.js";
@@ -58,6 +59,12 @@ function printHelp(): void {
       `                                             no model, no prompt) incl. the two-turn user-pressure\n` +
       `                                             scenario; measures neither your upstream nor your agent.\n` +
       `                                             (German report; runs are deterministic.)\n` +
+      `  cuonztech-agent-harness bench --upstream-command <cmd> --allow-writes (--model <name> | --agent-command <cmd>) [opts]    (Pro)\n` +
+      `                                             REAL multi-run measurement of YOUR agent (or a model with your\n` +
+      `                                             prompt) against YOUR test system: n runs per condition (without /\n` +
+      `                                             with the harness prompt patch), share of runs with a duplicate\n` +
+      `                                             write after a timeout (95 % Wilson interval), honesty of the\n` +
+      `                                             answers, sealed bench-report.json. Details: bench --help\n` +
       `  cuonztech-agent-harness proxy --upstream-command <cmd> [opts]\n` +
       `                                             Run as a transparent chaos proxy\n` +
       `                                             in front of a real upstream MCP server\n\n` +
@@ -128,9 +135,9 @@ function printHelp(): void {
       `Lizenz (Schlüssel CAUDIT-..., Prüfung offline):\n` +
       `  Der Lauf selbst ist immer vollständig; Urteil, Score und Exit-Code sind echt.\n` +
       `  Frei: ${FREE_SCOPE_DE}.\n` +
-      `  Pro: report --dossier (ohne Lizenz nur Kopf, Score, Urteil), ui, campaign, Schema-Befunde\n` +
+      `  Pro: report --dossier (ohne Lizenz nur Kopf, Score, Urteil), ui, campaign, bench, Schema-Befunde\n` +
       `  und Textbausteine (Härtungsvorschläge) im Report.\n` +
-      `  Angabe per --license <key> (proxy, report, ui, campaign) oder Umgebungsvariable AGENT_AUDIT_LICENSE.\n` +
+      `  Angabe per --license <key> (proxy, report, ui, campaign, bench) oder Umgebungsvariable AGENT_AUDIT_LICENSE.\n` +
       `  Lizenz erwerben: ${PURCHASE_URL}\n\n` +
       `The proxy is a long-running server: its exit code says nothing about the verdict.\n` +
       `Read the verdict from --report-file. Exit code 1 means the run itself broke\n` +
@@ -388,6 +395,8 @@ async function main(): Promise<void> {
     process.exitCode = await runVerifyMode(args.slice(1));
   } else if (mode === "campaign") {
     process.exitCode = await runCampaignMode(args.slice(1));
+  } else if (mode === "bench") {
+    process.exitCode = await runBenchMode(args.slice(1));
   } else if (mode === "ui") {
     process.exitCode = await runUiMode(args.slice(1));
   } else if (mode === undefined) {
@@ -397,7 +406,7 @@ async function main(): Promise<void> {
     server.server.onclose = () => process.exit(0);
     await startStdio(server);
   } else {
-    fail(`unknown command "${mode}". Commands: benchmark, proxy, doctor, report, verify, ui, campaign, version, --help (no command = MCP server).`);
+    fail(`unknown command "${mode}". Commands: benchmark, proxy, doctor, report, verify, ui, campaign, version, bench, --help (no command = MCP server).`);
   }
 }
 

@@ -11,7 +11,7 @@ export const PURCHASE_URL = "https://cuonztech.ch/agent-harness.html#audit";
 // Alte Adresse aus früheren Texten des Verifizierers; die Website leitet weiter.
 const LEGACY_URL = "https://cuonztech.ch/agent-audit";
 
-export type ProFeature = "dossier" | "ui" | "campaign" | "schema-audit" | "hardening";
+export type ProFeature = "dossier" | "ui" | "campaign" | "bench" | "schema-audit" | "hardening";
 
 // Zuordnung frei/Pro. Dieselbe Tabelle steht in der README (Abschnitt «Lizenz und Umfang»).
 export const PRO_FEATURES: Record<ProFeature, { name: string; command: string; mode: "gesperrt" | "gekürzt"; free: string }> = {
@@ -32,6 +32,12 @@ export const PRO_FEATURES: Record<ProFeature, { name: string; command: string; m
     command: "campaign",
     mode: "gesperrt",
     free: "Der Selbsttest (benchmark) und jeder einzelne Proxy-Lauf",
+  },
+  bench: {
+    name: "Die Mehrlauf-Messung am eigenen Agenten (bench)",
+    command: "bench",
+    mode: "gesperrt",
+    free: "Der Selbsttest (benchmark), jeder einzelne Proxy-Lauf und die Prüfung eines Bench-Berichts (verify)",
   },
   "schema-audit": {
     name: "Das Schema-Gutachten (Befunde je Tool und Schema-Vorschläge)",

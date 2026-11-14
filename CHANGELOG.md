@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.12.0 — in Arbeit (nicht veröffentlicht)
+
+Grundlage: `docs/PRO-MEHRLAUF-KONZEPT.md` (intern). Stufe A: der Kern von `bench`. Das Dossier-Kapitel «Mehrlauf-Messung» (Stufe B) ist noch nicht gebaut.
+
+### Neu
+
+- **`bench`: Mehrlauf-Messung am eigenen Agenten (Pro).** Der Harness führt einen Agenten (eingebauter Agenten-Loop mit einem Modell, oder ein eigener Agent per `--agent-command`) je Bedingung n-mal gegen das eigene Testsystem aus, einmal ohne (`baseline`) und einmal mit dem Textbaustein des Harness im System-Prompt (`patch`), und rechnet aus, in wie vielen Läufen der Agent nach einem Timeout doppelt schreibt. Je Lauf ein frischer Proxy- und Upstream-Prozess, eigener Report, Zeitlimit je Lauf und je Schritt. Wahrheit je Lauf ist der Report des Proxys (mit `--effect-probe` die Datensätze, sonst die Ausführungen mit dem Zusatz «gezählt als Ausführungen»). Ungültige Läufe (Netzwerk, Zeitüberschreitung, leere oder ungültige Modellantwort, Agent-Fehler, Szenario nie ausgelöst) zählen weder als sauber noch als Duplikat; sind weniger als die Hälfte der Läufe einer Bedingung gültig, bricht die Messung ab. Aggregate mit Wilson-Intervall (95 %), Anteil «hat nachgesehen», Ehrlichkeits-Check der ersten Antwort (gegen den Zwischenstand nach dem ersten Zug) und der Schlussantwort, Vergleich baseline gegen patch mit Differenz nach Newcombe («Intervalle überlappen» / «überlappen nicht», «kleine Stichprobe» unter 10, keine Aussage unter 5 gültigen Läufen). Ausgabe: `bench-report.json` (eigenes Format `cuonztech-agent-harness-bench`, Siegel Format 2 wie beim Report), `bench-report.md`, `runs/*.jsonl` (Rohverlauf) und `runs/*.report.json` (Report des Proxys je Lauf). Optionen: siehe README, Abschnitt «Mehrlauf-Messung (`bench`, Pro)».
+  - **Eingebauter Agenten-Loop** gegen die OpenAI-kompatible Schnittstelle (`/v1/chat/completions`) und die native Ollama-Schnittstelle (`/api/chat`, `think:false` bei `--think off`), mit einem MCP-Client am Proxy. Er bekommt nur die Werkzeuge des Proxys (keine Audit-Werkzeuge) und verändert den Wortlaut der Tool-Antworten nie. Der API-Schlüssel kommt aus einer Umgebungsvariable (`--api-key-env <NAME>`), geht nur als Header an den Modell-Server und steht in keiner Ausgabe.
+  - **`--agent-command`-Vertrag:** Umgebung `HARNESS_MCP_COMMAND`, `HARNESS_MCP_ARGS` (JSON-Liste), `HARNESS_TASK`, `HARNESS_FOLLOWUP`, `HARNESS_SYSTEM_PROMPT_EXTRA`; der Agent schreibt `ANSWER_1:` und `ANSWER_2:` nach stdout (fehlen beide, gilt der ganze stdout als Antwort 2) und endet mit Exit 0; Lizenzmaterial wird ihm nicht weitergereicht.
+  - **Platzhalter `{RUN_ID}` und `{RUN_DIR}`** in `--upstream-arg` und `--upstream-env-var`: ein Pfad je Lauf, zum Beispiel für eine eigene Protokolldatei des Testsystems («Wahrheit» je Lauf).
+  - **Lizenz:** neue Pro-Funktion `bench` (`PRO_FEATURES.bench`, gesperrt wie `campaign` und `ui`, mit `lockedNotice`, Exit 1, nichts geschrieben). Meldungen nennen nie einen Lizenzcode oder API-Schlüssel (Lizenzcodes und Schlüssel werden aus jedem geschriebenen Text entfernt).
+  - **Vorbedingungen, nichts geschrieben bei Fehler:** ohne `--allow-writes`, ohne Lizenz, mit nicht leerem `--out` (ausser `--force`: Bestehendes wird nach `_vorher-<Zeit>/` verschoben, nichts gelöscht), mit `--runs` unter 5, ohne Upstream oder Agent, mit zwei Agenten, mit nicht erreichbarem Modell oder Upstream (Vorprüfung vor dem ersten Lauf).
+- **`verify` prüft den Bench-Bericht** (`verify bench-report.json [--expect <sha256>]`): OK oder MISMATCH mit den geänderten Feldern (Aggregate, Läufe, Modell, n, Prompt-Hash, …), Exit 0 oder 1, ohne Lizenz; liegt `runs/` neben der Datei, wird auch jede Lauf-Datei gegen ihren Hash im Bericht geprüft.
+- `src/bench/` (`args.ts`, `agent-loop.ts`, `agent-command.ts`, `run.ts`, `stats.ts`, `report.ts`, `cli.ts`), reine Statistik-Funktionen (`wilson`, `differenceInterval`) mit Vergleichswerten getestet; `benchPromptPatch` und die als Konstanten herausgezogenen englischen Textbausteine in `src/hardening/patch-generator.ts` (der Text, den `generatePatches` ausgibt, bleibt Wort für Wort derselbe).
+- Tests: `tests/bench-stats.test.ts`, `tests/bench-loop.test.ts` (Loop gegen einen gefälschten OpenAI-kompatiblen und Ollama-kompatiblen Server), `tests/bench-run.test.ts` (echter Proxy mit dem Korpus-Upstream, Ledger als Wahrheit, `--agent-command`, Fehlerfälle, Siegel, keine Geheimnisse), `tests/helpers/fake-model-server.ts`, `tests/fixtures/bench-agent.mjs`. Der Genauigkeits-Korpus (`tests/accuracy`) ist unverändert.
+
+### Geändert
+
+- `campaign` (die Simulation) verweist in Hilfe und Bericht auf `bench` («für eine echte Messung»). Sonst unverändert.
+
+### Bewusst nicht gebaut (Stufe A)
+
+- Das Dossier-Kapitel «Mehrlauf-Messung» und `verify <dossier> --bench` (Stufe B), eine Änderung an `ui` oder am Kampagnen-Runner.
+
 ## 0.11.1 — 2026-11-14
 
 Grundlage: zwei unabhängige Prüfungen von 0.11.0 (Pro-Umfang und Gate). Jeder Befund wurde zuerst mit einem Test nachgestellt (`tests/release-0111.test.ts`, Abschnitte P1 bis P13) und dann behoben.

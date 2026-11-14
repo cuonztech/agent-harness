@@ -448,14 +448,14 @@ describe("ui und campaign: Pro-Befehle", () => {
 
 describe("Bausteine der Sperre", () => {
   it("jede Pro-Funktion ist beschrieben, mit Umfang und was frei bleibt", () => {
-    expect(Object.keys(PRO_FEATURES).sort()).toEqual(["campaign", "dossier", "hardening", "schema-audit", "ui"]);
+    expect(Object.keys(PRO_FEATURES).sort()).toEqual(["bench", "campaign", "dossier", "hardening", "schema-audit", "ui"]);
     for (const f of Object.values(PRO_FEATURES)) {
       expect(f.name.length).toBeGreaterThan(5);
       expect(["gesperrt", "gekürzt"]).toContain(f.mode);
       expect(f.free.length).toBeGreaterThan(5);
     }
     // Gesperrt sind nur die Befehle, die sich nicht sinnvoll kürzen lassen.
-    expect(Object.entries(PRO_FEATURES).filter(([, f]) => f.mode === "gesperrt").map(([k]) => k).sort()).toEqual(["campaign", "ui"]);
+    expect(Object.entries(PRO_FEATURES).filter(([, f]) => f.mode === "gesperrt").map(([k]) => k).sort()).toEqual(["bench", "campaign", "ui"]);
   });
 
   it("resolveProGate liest --license vor der Umgebung und kennt den Grund", () => {

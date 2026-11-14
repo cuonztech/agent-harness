@@ -3,9 +3,12 @@
 // eines Dritten: Wer Datei und Prüfsumme zusammen ändert, kann fälschen; der Wert schützt nur, wenn er
 // getrennt von der Datei aufbewahrt wird (dafür gibt es `--expect <sha256>`).
 import { readFile, stat } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
 import { DOSSIER_SEAL_MARKER, canonicalJson, checkReportIntegrity, extractDossierSeal, sha256Hex, type IntegrityCheck } from "./core/artifact-integrity.js";
 import { dossierHeaderChecks } from "./dossier-report.js";
 import type { ReportFile } from "./plain-report.js";
+import { checkBenchIntegrity, looksLikeBenchReport, type BenchRunRow } from "./bench/report.js";
 
 const MAX_BYTES = 64 * 1024 * 1024;
 
@@ -16,11 +19,12 @@ function countOf(text: string, part: string): number {
   return n;
 }
 
-const USAGE = "Usage: verify <dossier|report-file> [--report <report-file>] [--expect <sha256>]\n";
+const USAGE = "Usage: verify <dossier|report-file|bench-report.json> [--report <report-file>] [--expect <sha256>]\n";
 
 const HELP =
   `${USAGE}\n` +
-  "Rechnet die Prüfsumme einer Report-Datei (--report-file des Proxys) oder eines Dossiers (report --dossier) neu\n" +
+  "Rechnet die Prüfsumme einer Report-Datei (--report-file des Proxys), eines Dossiers (report --dossier) oder eines\n" +
+  "Bench-Berichts (bench-report.json der Mehrlauf-Messung bench) neu\n" +
   "und gibt OK oder MISMATCH mit dem Grund aus. Exit-Code 0 bei OK, sonst 1.\n" +
   "  --report <file>   bei einem Dossier zusätzlich die Report-Datei prüfen, aus der es erzeugt wurde, und beide abgleichen\n" +
   "  --expect <sha256> die getrennt aufbewahrte Prüfsumme (Report-Datei: payloadSha256; Dossier: Prüfsumme des Dossiers);\n" +
@@ -32,7 +36,7 @@ export type VerifyStatus = "OK" | "MISMATCH" | "NOT_VERIFIABLE";
 
 export interface VerifyResult {
   status: VerifyStatus;
-  kind: "report" | "dossier" | "unknown";
+  kind: "report" | "dossier" | "bench" | "unknown";
   // Die Prüfsumme, die die Datei trägt (Report: payloadSha256, Dossier: Prüfsumme des Kerns).
   sha256: string | null;
   lines: string[];
@@ -140,6 +144,50 @@ export function verifyDossierContent(text: string, options: { report?: ReportFil
   return { status: "OK", kind: "dossier", sha256: seal.sha256, lines };
 }
 
+// Bench-Bericht: das Siegel (Format 2) und, wenn der Ordner runs/ neben der Datei liegt, die Lauf-Dateien, deren Hash im Bericht steht.
+export async function verifyBenchReportContent(file: Record<string, unknown>, options: { expect?: string; dir?: string } = {}): Promise<VerifyResult> {
+  const check = checkBenchIntegrity(file);
+  const lines: string[] = [check.reasonDe];
+  let status = statusOfCheck(check);
+  const sha = (file.integrity as { payloadSha256?: string } | undefined)?.payloadSha256 ?? null;
+  if (status === "OK" && options.expect !== undefined && options.expect.toLowerCase() !== sha) {
+    status = "MISMATCH";
+    lines.unshift(
+      `Der Bericht stimmt zwar mit seiner eigenen Prüfsumme überein, die Prüfsumme ist aber nicht die erwartete: erwartet ${options.expect.toLowerCase()}, in der Datei ${sha ?? "—"}. Datei und Prüfsumme wurden gemeinsam ausgetauscht oder die falsche Datei liegt vor.`,
+    );
+  }
+  if (status === "OK" && options.dir !== undefined && Array.isArray(file.runs)) {
+    let checked = 0;
+    const changed: string[] = [];
+    for (const row of file.runs as BenchRunRow[]) {
+      const pairs: Array<[unknown, unknown]> = [
+        [row.files?.jsonl, row.files?.jsonlSha256],
+        [row.files?.proxyReport, row.files?.proxyReportSha256],
+      ];
+      for (const [path, expected] of pairs) {
+        if (typeof path !== "string" || typeof expected !== "string" || path.includes("..")) continue;
+        let content: Buffer;
+        try {
+          content = await readFile(join(options.dir, path));
+        } catch {
+          continue;
+        }
+        checked++;
+        if (createHash("sha256").update(content).digest("hex") !== expected) changed.push(path);
+      }
+    }
+    if (changed.length > 0) {
+      status = "MISMATCH";
+      lines.push(`Lauf-Dateien neben dem Bericht stimmen nicht mit den Hashes im Bericht überein: ${changed.join(", ")}.`);
+    } else if (checked > 0) {
+      lines.push(`${checked} Lauf-Dateien im Ordner runs/ neben dem Bericht stimmen mit den Hashes im Bericht überein.`);
+    } else {
+      lines.push("Der Ordner runs/ liegt nicht neben dem Bericht: Die Lauf-Dateien wurden nicht geprüft.");
+    }
+  }
+  return { status, kind: "bench", sha256: sha, lines };
+}
+
 async function readText(path: string): Promise<{ text: string } | { error: string }> {
   const info = await stat(path).catch(() => null);
   if (!info || !info.isFile()) return { error: `Datei nicht gefunden: ${path}` };
@@ -222,8 +270,15 @@ export async function runVerifyMode(argv: string[]): Promise<number> {
     isJson = false;
   }
   if (isJson) {
+    if (looksLikeBenchReport(parsed)) {
+      if (reportFile !== undefined) {
+        process.stderr.write("Error: --report only applies when verifying a dossier.\n");
+        return 1;
+      }
+      return printResult(await verifyBenchReportContent(parsed as Record<string, unknown>, { expect, dir: dirname(file) }), file);
+    }
     if (!looksLikeReportFile(parsed)) {
-      process.stderr.write(`Error: ${file} is JSON, but not a report written by the proxy (--report-file).\n`);
+      process.stderr.write(`Error: ${file} is JSON, but neither a report written by the proxy (--report-file) nor a bench report (bench-report.json).\n`);
       return 1;
     }
     if (reportFile !== undefined) {
@@ -235,8 +290,12 @@ export async function runVerifyMode(argv: string[]): Promise<number> {
     result = verifyDossierContent(read.text, { report: reportFile, expect });
   }
 
+  return printResult(result, file);
+}
+
+function printResult(result: VerifyResult, file: string): number {
   const label = result.status === "NOT_VERIFIABLE" ? "NICHT PRÜFBAR" : result.status;
-  const what = result.kind === "report" ? "Report-Datei" : "Dossier";
+  const what = result.kind === "report" ? "Report-Datei" : result.kind === "bench" ? "Bench-Bericht" : "Dossier";
   process.stdout.write(`${label}  ${what} ${file}\n`);
   for (const line of result.lines) process.stdout.write(`${line}\n`);
   if (result.sha256) process.stdout.write(`Prüfsumme (SHA-256): ${result.sha256}\n`);

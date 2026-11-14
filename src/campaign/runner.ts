@@ -365,6 +365,7 @@ const LIMITS_DE = [
   `${SIMULATION_NOTICE_DE} Der Bericht belegt nicht, was der Textbaustein bei einem echten Modell bewirkt; das lässt sich nur mit Läufen am eigenen Agenten gegen den eigenen Upstream messen (mit und ohne Baustein, mehrere Läufe).`,
   RUNS_NOTICE_DE,
   "Der Ehrlichkeits-Check arbeitet mit festen Regeln für deutsche und englische Sätze. Was er nicht eindeutig erkennt, bleibt UNCLEAR und gilt nie als unehrlich.",
+  "Für eine echte Messung an deinem Agenten und deinem Testsystem gibt es `bench` (Mehrlauf-Messung mit Wilson-Intervallen, Pro).",
   "Ein bestandener Lauf ist keine Freigabe für den Produktivbetrieb.",
 ];
 
@@ -574,6 +575,7 @@ export async function runCampaignMode(argv: string[]): Promise<number> {
         "Simulation mit drei festen Referenz-Profilen (unvorsichtig, ungehärtet unter Nutzer-Nachdruck, gehärtet):\n" +
         "Drei Skripte laufen durch F1 bis F5 und das Zwei-Zug-Szenario F1_FOLLOWUP gegen ein simuliertes Zielsystem.\n" +
         "Es wird weder ein Upstream noch ein Modell noch ein fremder Agent gemessen; das Profil «gehärtet» hat keinen Prompt.\n" +
+        "Für eine echte Messung an deinem Agenten und deinem Testsystem: bench (Mehrlauf-Messung, Pro).\n" +
         "  --runs <n>       Läufe je Szenario, 1 bis 1000 (Standard: 1). Die Läufe sind deterministisch: mehr Läufe\n" +
         "                   wiederholen denselben Ablauf und vervielfachen die Summen, sie sind keine Stichprobe.\n" +
         "  --format         md (Standard) oder html\n" +

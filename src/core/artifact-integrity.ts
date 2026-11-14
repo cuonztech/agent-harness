@@ -94,8 +94,8 @@ export interface IntegrityCheck {
 export const LEGACY_REASON_DE =
   "Prüfsumme aus Harness < 0.11.1, nicht prüfbar: Sie hat Format 1 und deckt nur Bericht, Schema-Gutachten und Aufruf-Protokoll ab, nicht Urteil und Score. Den Lauf mit 0.11.1 oder neuer wiederholen.";
 
-function changedFieldsOf(file: ReportFile, proof: ReportIntegrityProof): string[] {
-  const covered = coveredFields(file as unknown as Record<string, unknown>);
+export function changedFieldsOf(file: object, proof: ReportIntegrityProof): string[] {
+  const covered = coveredFields(file as Record<string, unknown>);
   const recorded = proof.fieldSha256 && typeof proof.fieldSha256 === "object" ? proof.fieldSha256 : {};
   const changed = new Set<string>();
   for (const key of Object.keys(covered)) {
