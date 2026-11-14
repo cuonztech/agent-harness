@@ -38,7 +38,7 @@ function printHelp(): void {
       `Usage:\n` +
       `  cuonztech-agent-harness                   Start as an MCP server (stdio, demo/self-test sessions)\n` +
       `  cuonztech-agent-harness --version         Print the version (also: -v, version)\n` +
-      `  cuonztech-agent-harness verify <dossier|report-file> [--report <file>] [--expect <sha256>]\n` +
+      `  cuonztech-agent-harness verify <dossier|report-file> [--report <file>] [--bench <bench-report.json>] [--expect <sha256>]\n` +
       `                                             Recompute the checksum of a report file or dossier and\n` +
       `                                             print OK or MISMATCH with the reason (exit 0 / 1).\n` +
       `  cuonztech-agent-harness --help            Print this help (also: -h, help)\n` +
@@ -51,7 +51,7 @@ function printHelp(): void {
       `  cuonztech-agent-harness ui [--port <n>] [--no-open]    (Pro: needs a license)\n` +
       `                                             Guided web interface for people without a terminal\n` +
       `                                             (local only, 127.0.0.1): demo, setup check, result.\n` +
-      `  cuonztech-agent-harness report <report-file> [--format md|html] [--out <file>]\n` +
+      `  cuonztech-agent-harness report <report-file> [--format md|html] [--out <file>] [--dossier [--bench <bench-report.json>]]\n` +
       `                                             Turn the proxy's --report-file into a plain-language\n` +
       `                                             page (German): result, what the agent did, limits.\n` +
       `  cuonztech-agent-harness campaign [--runs <n>] [--format md|html] [--out <file>]    (Pro)\n` +

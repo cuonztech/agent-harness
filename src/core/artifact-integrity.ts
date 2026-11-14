@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto";
 import type { ReportFile } from "../plain-report.js";
 import type { CallForensicReport, ReportIntegrityProof } from "../types.js";
+import type { DossierBenchCore } from "../dossier-bench.js";
 
 export const INTEGRITY_FORMAT = 2;
 // Felder oberster Ebene, die nicht in die Prüfsumme eingehen.
@@ -175,6 +176,8 @@ export function verifyReportIntegrity(file: ReportFile): { valid: boolean; reaso
 // `verify <dossier>` rechnet beides nach und prüft, dass der sichtbare Kopf genau dem Kern
 // entspricht. Der Fliesstext der Abschnitte 1 bis 6 ist nicht gesiegelt; die Operationen und die
 // Prüfsumme der Report-Datei stehen im Kern, werden aber nicht gegen die Abschnitte abgeglichen.
+// Mit Mehrlauf-Messung (0.12.0) steht auch das Kapitel «Mehrlauf-Messung» im Kern (`bench`); `verify` baut es daraus nach und
+// verlangt, dass es unverändert und genau einmal im sichtbaren Text steht (und mit `--bench` zum Bench-Bericht passt).
 
 export const DOSSIER_SEAL_MARKER = "cuonztech-agent-harness-dossier-seal:";
 
@@ -216,6 +219,8 @@ export interface DossierCore {
     callChainHeadSha256: string | null;
     callChainLength: number | null;
   };
+  // Nur im Dossier mit Mehrlauf-Messung (report --bench, Pro): Methode und Zahlen des Kapitels. Fehlt das Feld, gibt es kein Kapitel.
+  bench?: DossierBenchCore;
 }
 
 export interface DossierSeal {

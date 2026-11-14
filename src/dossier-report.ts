@@ -30,6 +30,7 @@ import {
   type IntegrityCheck,
 } from "./core/artifact-integrity.js";
 import { VERSION } from "./version.js";
+import { BENCH_CHAPTER_ID, BENCH_CHAPTER_NO, benchAgentShort, benchScopeText, benchSection, type DossierBenchCore } from "./dossier-bench.js";
 import type { ArgumentDiffEntry, CallForensicEntry, ClaimCheckResult, SchemaRiskLevel, ToolSchemaAuditEntry } from "./types.js";
 import type { LicenseVerdict } from "./license/types.js";
 import { PURCHASE_URL, reasonSentence } from "./license/gate.js";
@@ -42,13 +43,17 @@ export interface DossierOptions {
   // Ohne gültige Lizenz gekürzte Fassung: nur Kopf, Score und Urteil je Szenario. Der Befehl `report`
   // setzt das Feld immer; ein Bibliotheksaufruf ohne Angabe rendert die volle Fassung.
   limited?: boolean;
+  // Kern der Mehrlauf-Messung (Bench-Bericht, Befehl `report --bench`). Das Kapitel erscheint nur in der vollen Fassung;
+  // in der gekürzten Fassung steht nur ein Satz, dass es Pro ist.
+  bench?: DossierBenchCore;
 }
 
-type Tone = "pass" | "fail" | "warn" | "muted";
-type RichPart = string | { badge: string; tone: Tone } | { code: string } | { strong: string } | { mark: string };
-type Rich = RichPart[];
+export type Tone = "pass" | "fail" | "warn" | "muted";
+// `user`: Text aus fremden Dateien (Modellname, Aufgabe, Antworten): in Markdown wird zusätzlich `&`, `_`, `~`, `#` maskiert.
+type RichPart = string | { badge: string; tone: Tone } | { code: string } | { strong: string } | { mark: string } | { user: string };
+export type Rich = RichPart[];
 
-type Block =
+export type Block =
   | { t: "p"; rich: Rich }
   | { t: "h3"; text: string }
   | { t: "list"; items: Rich[] }
@@ -59,7 +64,7 @@ type Block =
   | { t: "quote"; text: string }
   | { t: "note"; title: string; items: Rich[] };
 
-interface Section {
+export interface Section {
   id: string;
   title: string;
   intro?: string;
@@ -130,6 +135,8 @@ function escMd(text: string): string {
   return clean(text).replace(/[\\`*[\]|<>]/g, (c) => (c === "`" ? "'" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : `\\${c}`));
 }
 
+const escMdUser = (text: string): string => escMd(clean(text).replace(/&/g, "&amp;")).replace(/[_~#!]/g, (c) => `\\${c}`);
+
 function richHtml(rich: Rich): string {
   return rich
     .map((part) => {
@@ -137,6 +144,7 @@ function richHtml(rich: Rich): string {
       if ("badge" in part) return `<span class="badge ${part.tone}">${escHtml(clean(part.badge))}</span>`;
       if ("code" in part) return `<code>${escHtml(clean(part.code))}</code>`;
       if ("strong" in part) return `<strong>${escHtml(clean(part.strong))}</strong>`;
+      if ("user" in part) return escHtml(clean(part.user));
       return `<mark>${escHtml(clean(part.mark))}</mark>`;
     })
     .join("");
@@ -152,6 +160,7 @@ function richMd(rich: Rich): string {
         return /[<>]/.test(part.code) ? escMd(part.code) : `\`${clean(part.code).replace(/`/g, "'").replace(/\|/g, "\\|")}\``;
       }
       if ("strong" in part) return `**${escMd(part.strong)}**`;
+      if ("user" in part) return escMdUser(part.user);
       return `**${escMd(part.mark)}**`;
     })
     .join("");
@@ -522,7 +531,11 @@ function integrityWarningDe(check: IntegrityCheck): string | null {
   }
 }
 
-function integritySection(file: ReportFile, options: DossierOptions, check: IntegrityCheck, seal: DossierSeal): Section {
+// Mit Mehrlauf-Messung darf der erste Standardsatz («Ob der Agent ehrlich berichtet, ist nicht gemessen») nicht mehr stehen.
+const BENCH_LIMIT_FIRST_DE =
+  "Im aufgezeichneten Einzellauf sieht der Harness nur die Tool-Aufrufe des Agenten. Die Antworten der Mehrlauf-Messung wurden mit festen Regeln gegen die Tool-Aufrufe abgeglichen; das ist ein Befund der Regeln, kein Beweis, dass ein Agent ehrlich oder unehrlich berichtet.";
+
+function integritySection(file: ReportFile, options: DossierOptions, check: IntegrityCheck, seal: DossierSeal, benchOn: boolean): Section {
   const badge = integrityBadge(check);
   const blocks: Block[] = [
     {
@@ -551,7 +564,7 @@ function integritySection(file: ReportFile, options: DossierOptions, check: Inte
     head: ["Merkmal", "Wert"],
     rows: [
       [["Prüfsumme dieses Dossiers (SHA-256 über den eingebetteten Kern)"], [{ code: seal.sha256 }]],
-      [["Kern"], ["Urteil, Score, Szenario, Operationen, Kunden- und Systemname, Lizenzstatus, Harness-Version, Zählweise, die Prüfsumme der Report-Datei und der sichtbare Kopf; als JSON-Kommentar am Ende dieses Dokuments"]],
+      [["Kern"], [`Urteil, Score, Szenario, Operationen, Kunden- und Systemname, Lizenzstatus, Harness-Version, Zählweise, die Prüfsumme der Report-Datei und der sichtbare Kopf${benchOn ? `; dazu Methode und Zahlen der Mehrlauf-Messung (Abschnitt ${BENCH_CHAPTER_NO}) samt Prüfsumme des Bench-Berichts` : ""}; als JSON-Kommentar am Ende dieses Dokuments`]],
     ],
   });
   blocks.push({
@@ -562,8 +575,13 @@ function integritySection(file: ReportFile, options: DossierOptions, check: Inte
       ["Es ist eine Prüfsumme ohne Signatur eines Dritten und kein Zertifikat. Wer die Datei und die Prüfsumme zusammen ändert, kann fälschen. Sie schützt nur, wenn der Wert getrennt von der Datei aufbewahrt wird (zum Beispiel in der Übergabe-Mail oder im Ticket) und beim Prüfen mit dem aufbewahrten Wert verglichen wird."],
       ["Gesiegelt ist der Kopf dieses Dossiers: die Titelzeile mit Datum und Harness-Version, alle Kopfzeilen (Prüfgegenstand, Auftraggeber, Session-ID, Szenario, Umfang, Datum der Aufzeichnung, Harness-Version, Modell / Agent, Zählweise, Lizenzstatus, Einordnung), das Gesamturteil mit seinem Erklärsatz, der Score und die Hinweise direkt unter dem Urteil. verify gleicht sie mit dem Siegel ab; ein geänderter, gelöschter oder doppelter Eintrag ist ein MISMATCH."],
       ["Im Siegel stehen ausserdem die Operationen (Tool, Versuche, Ausführungen, Ergebnis) und die Prüfsumme der Report-Datei. verify gleicht sie nicht mit den Abschnitten ab."],
-      ["Nicht gesiegelt ist der Fliesstext der Abschnitte 1 bis 6 (Management-Matrix, Schema-Gutachten, Zeitleiste und Argumente, Abgleich mit der Antwort des Agenten, Prompt-Baustein, dieser Abschnitt). Wer ihn ändert, bleibt bei verify unbemerkt, auch mit --report: Die Option prüft nur, dass die Report-Datei unverändert ist und zu diesem Dossier gehört, nicht den Text gegen die Report-Datei. Wer dem Text nicht traut, erzeugt das Dossier aus der Report-Datei neu und vergleicht."],
-      ["Zur Kopfzeile «Modell / Agent»: Der Harness erfasst das Modell und den Agenten nicht. Die Zeile steht fest auf «nicht erfasst» und ist gesiegelt; ein anderer Eintrag fällt bei verify auf. Dieses Dossier belegt nicht, mit welchem Modell oder Agenten der Lauf entstand."],
+      ...(benchOn
+        ? [
+            [`Gesiegelt ist ausserdem das ganze Kapitel «Mehrlauf-Messung» (Abschnitt ${BENCH_CHAPTER_NO}): Methode, alle Zahlen, Vergleich, Grenzen und Reproduktionsbefehl. verify baut es aus dem Siegel nach und prüft, dass es unverändert und genau einmal im Text steht; jede geänderte Zahl ist ein MISMATCH. Mit verify <dossier> --bench bench-report.json wird zusätzlich geprüft, dass die Zahlen zum (selbst gesiegelten) Bench-Bericht passen.`],
+          ]
+        : []),
+      [`Nicht gesiegelt ist der Fliesstext der Abschnitte ${benchOn ? `1 bis 5 und ${BENCH_CHAPTER_NO + 1}` : "1 bis 6"} (Management-Matrix, Schema-Gutachten, Zeitleiste und Argumente, Abgleich mit der Antwort des Agenten, Prompt-Baustein, dieser Abschnitt). Wer ihn ändert, bleibt bei verify unbemerkt, auch mit --report: Die Option prüft nur, dass die Report-Datei unverändert ist und zu diesem Dossier gehört, nicht den Text gegen die Report-Datei. Wer dem Text nicht traut, erzeugt das Dossier aus der Report-Datei neu und vergleicht.`],
+      [benchOn ? "Zur Kopfzeile «Modell / Agent»: Der Harness erfasst das Modell und den Agenten des aufgezeichneten Einzellaufs nicht; dafür steht fest «nicht erfasst». Das Modell der Mehrlauf-Messung stammt aus dem Bench-Bericht. Die Zeile ist gesiegelt; ein anderer Eintrag fällt bei verify auf. Dieses Dossier belegt nicht, mit welchem Modell der Einzellauf entstand." : "Zur Kopfzeile «Modell / Agent»: Der Harness erfasst das Modell und den Agenten nicht. Die Zeile steht fest auf «nicht erfasst» und ist gesiegelt; ein anderer Eintrag fällt bei verify auf. Dieses Dossier belegt nicht, mit welchem Modell oder Agenten der Lauf entstand."],
     ],
   });
   // Dieselbe Quelle wie Sektion 4: eine bereits in der Datei stehende Prüfung oder die übergebene Antwort.
@@ -574,12 +592,12 @@ function integritySection(file: ReportFile, options: DossierOptions, check: Inte
     title: "Methodische Grenzen dieses Berichts",
     items: [
       // Mit geprüfter Antwort würde der erste Standardsatz («nicht gemessen») Sektion 4 widersprechen.
-      ...(answered ? LIMITS.slice(1) : LIMITS).map(inlineMarkup),
+      ...(answered ? LIMITS.slice(1) : benchOn ? [BENCH_LIMIT_FIRST_DE, ...LIMITS.slice(1)] : LIMITS).map(inlineMarkup),
       [answered ? "Der Harness sieht von sich aus nur die Tool-Aufrufe; die Antwort des Agenten an den Nutzer wurde in Sektion 4 nur soweit geprüft, wie sie übergeben wurde und sich mit festen Regeln aus den Tool-Aufrufen beurteilen lässt." : "Eine Antwort des Agenten an den Nutzer wurde nicht übergeben und deshalb in Sektion 4 nicht geprüft."],
       ...(file.previousRun ? [inlineMarkup(`Der Lauf folgte auf einen früheren Lauf (archiviert unter \`${basename(file.previousRun.file)}\`). Durch den Neustart des Prüfstands gilt dieses Urteil nur für die Aufrufe nach dem Neustart.`)] : []),
     ],
   });
-  return { id: "integrity", title: "6. Prüfsumme (Hash) & Methodische Grenzen", blocks };
+  return { id: "integrity", title: `${benchOn ? BENCH_CHAPTER_NO + 1 : 6}. Prüfsumme (Hash) & Methodische Grenzen`, blocks };
 }
 
 interface Dossier {
@@ -602,7 +620,7 @@ interface Dossier {
 
 // Gekürzte Fassung ohne gültige Lizenz (wie «Nur Zahlen» bei CPCG): Kopf, Score und das Urteil je Szenario.
 // Der Lauf und sein Urteil sind echt; Details, Aufruf-Protokoll, Härtungspaket und Anhänge gehören zum Pro-Umfang.
-function limitedSection(file: ReportFile, seal: DossierSeal, check: IntegrityCheck): Section {
+function limitedSection(file: ReportFile, seal: DossierSeal, check: IntegrityCheck, benchRequested: boolean): Section {
   const verdict = file.verdict ?? file.report?.verdict ?? "NOT_TESTED";
   const tone: Tone = verdict === "PASS" ? "pass" : verdict === "FAIL" ? "fail" : "warn";
   const score = file.score?.overall;
@@ -631,6 +649,7 @@ function limitedSection(file: ReportFile, seal: DossierSeal, check: IntegrityChe
           ["Das Urteil, der Score und die Zahlen stammen aus dem echten Lauf und sind vollständig."],
           ["Gekürzt ohne Lizenz: Geschäftsrisiko-Matrix, Schnittstellen-Gutachten, Aufruf-Protokoll mit Parameter-Diff, Abgleich mit der Antwort des Agenten und Härtungspaket."],
           [`Das vollständige Prüf-Dossier gehört zum Pro-Umfang. Lizenz: ${PURCHASE_URL}`],
+          ...(benchRequested ? [["Das Kapitel «Mehrlauf-Messung» (report --bench) ist Pro und entfällt in dieser Fassung ohne gültige Lizenz."]] : []),
           [`Prüfsumme dieses Dossiers (SHA-256): ${seal.sha256}. Selbstprüfung der Report-Datei: ${integrityBadge(check).label}. Nachprüfen mit verify <Dossier-Datei>; die Prüfsumme ist keine Signatur und schützt nur, wenn sie getrennt von der Datei aufbewahrt wird.`],
         ],
       },
@@ -657,6 +676,8 @@ function build(file: ReportFile, options: DossierOptions = {}): Dossier {
   const { headline, explanation } = verdictText(file);
   const score = file.score?.overall;
   const limited = options.limited === true;
+  // Das Kapitel «Mehrlauf-Messung» gibt es nur in der vollen Fassung (Pro).
+  const bench = limited ? undefined : options.bench;
   const check = checkReportIntegrity(file);
   const basis = countingBasis(file.report);
   const system = clean(options.systemName ?? "MCP-Tool-Server");
@@ -673,16 +694,19 @@ function build(file: ReportFile, options: DossierOptions = {}): Dossier {
     notes.push(BASELINE_NOTE_DE);
     if ((file.schema_audit?.highRiskToolsCount ?? 0) > 0) notes.push(SCHEMA_VS_RUN_DE);
   }
+  if (bench && bench.sealStatus !== "ok") {
+    notes.push("ACHTUNG: Der Bench-Bericht besteht seine eigene Prüfsumme nicht (oder trägt keine): Die Zahlen des Kapitels «Mehrlauf-Messung» sind nicht belastbar.");
+  }
   const warning = integrityWarningDe(check);
   const meta: Array<[string, string]> = [
     ["Prüfgegenstand / System", system],
     ["Auftraggeber / Umgebung", customer],
     ["Session-ID", clean(file.report?.sessionId ?? "—")],
     ["Szenario / Modus", scenarioText],
-    ["Umfang", "Ein Lauf, ein Szenario; keine Mehrlauf-Auswertung"],
+    ["Umfang", bench ? benchScopeText(bench) : "Ein Lauf, ein Szenario; keine Mehrlauf-Auswertung"],
     ["Datum der Aufzeichnung", date],
     ["Harness-Version (Lauf)", file.harnessVersion ? clean(file.harnessVersion) : "nicht angegeben"],
-    ["Modell / Agent", "nicht erfasst"],
+    ["Modell / Agent", bench ? `Einzellauf: nicht erfasst; Mehrlauf-Messung: ${benchAgentShort(bench.agent)}` : "nicht erfasst"],
     ["Zählweise", clean(basis.textDe)],
     ["Einordnung", "Selbsttest: keine Produktionsfreigabe, kein Zertifikat"],
     ["Lizenzstatus", licenseStatus],
@@ -713,11 +737,20 @@ function build(file: ReportFile, options: DossierOptions = {}): Dossier {
       callChainHeadSha256: file.integrity?.callChainHeadSha256 ?? null,
       callChainLength: typeof file.integrity?.callChainLength === "number" ? file.integrity.callChainLength : null,
     },
+    ...(bench ? { bench } : {}),
   };
   const seal = sealDossierCore(core);
   const sections = limited
-    ? [limitedSection(file, seal, check)]
-    : [summarySection(file), schemaSection(file), forensicsSection(file), claimSection(file, options), hardeningSection(file), integritySection(file, options, check, seal)];
+    ? [limitedSection(file, seal, check, options.bench !== undefined)]
+    : [
+        summarySection(file),
+        schemaSection(file),
+        forensicsSection(file),
+        claimSection(file, options),
+        hardeningSection(file),
+        ...(bench ? [benchSection(bench)] : []),
+        integritySection(file, options, check, seal, bench !== undefined),
+      ];
   return {
     limited,
     headline,
@@ -776,6 +809,78 @@ const htmlMetaCell = (label: string, value: string): string => `<div><dt>${escHt
 const htmlVerdictBadge = (tone: string, label: string): string => `<span class="badge ${tone}">${escHtml(label)}</span>`;
 const htmlScoreLine = (score: string): string => `Resilience Score: <strong>${escHtml(score)}</strong>`;
 
+// ---------- Kapitel «Mehrlauf-Messung»: Abgleich mit dem sichtbaren Text ----------
+
+// `verify` baut das Kapitel aus dem gesiegelten Kern nach (dieselben Funktionen wie beim Rendern) und verlangt, dass es als Ganzes
+// genau einmal im sichtbaren Text steht. Schlägt das fehl, nennen die Teile (Absatz, Listenpunkt, Tabellenzeile), welche Stelle abweicht.
+export interface BenchPartCheck {
+  label: string;
+  needle: string;
+  // So oft kommt der Teil im nachgebauten Kapitel vor; im Text muss er genauso oft vorkommen.
+  expected: number;
+}
+
+export interface BenchChapterChecks {
+  whole: string;
+  parts: BenchPartCheck[];
+}
+
+function labelOfPart(md: string): string {
+  const t = md.replace(/[|*`#>\\-]+/g, " ").replace(/\s+/g, " ").trim();
+  return t.length > 70 ? `${t.slice(0, 67)}...` : t;
+}
+
+function occurrences(text: string, part: string): number {
+  if (part === "") return 0;
+  let n = 0;
+  for (let i = text.indexOf(part); i !== -1; i = text.indexOf(part, i + part.length)) n++;
+  return n;
+}
+
+function partsOf(block: Block): Array<{ md: string; html: string }> {
+  switch (block.t) {
+    case "p":
+      return [{ md: richMd(block.rich), html: `<p>${richHtml(block.rich)}</p>` }];
+    case "h3":
+      return [{ md: `### ${escMd(block.text)}`, html: `<h3>${escHtml(clean(block.text))}</h3>` }];
+    case "list":
+      return block.items.map((i) => ({ md: `- ${richMd(i)}`, html: `<li>${richHtml(i)}</li>` }));
+    case "note":
+      return [
+        { md: `### ${escMd(block.title)}`, html: `<h3>${escHtml(block.title)}</h3>` },
+        ...block.items.map((i) => ({ md: `- ${richMd(i)}`, html: `<li>${richHtml(i)}</li>` })),
+      ];
+    case "table": {
+      const cell = (r: Rich): string => richMd(r) || " ";
+      return [
+        { md: `| ${block.head.map(escMd).join(" | ")} |`, html: `<thead><tr>${block.head.map((h) => `<th scope="col">${escHtml(h)}</th>`).join("")}</tr></thead>` },
+        ...block.rows.map((row) => ({ md: `| ${row.map(cell).join(" | ")} |`, html: `<tr>${row.map((c) => `<td>${richHtml(c)}</td>`).join("")}</tr>` })),
+      ];
+    }
+    default:
+      return [{ md: blockMd(block, 4).join("\n").trimEnd(), html: blockHtml(block) }];
+  }
+}
+
+export function dossierBenchChecks(bench: DossierBenchCore): { md: BenchChapterChecks; html: BenchChapterChecks } {
+  const section = benchSection(bench);
+  // Wie beim Schreiben des Dokuments (renderDossierMarkdown) werden drei und mehr Zeilenumbrüche zu zwei.
+  const mdWhole = sectionMdLines(section).join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+  const htmlWhole = sectionHtml(section);
+  const pieces = [
+    { md: `## ${escMd(section.title)}`, html: `<h2>${escHtml(section.title)}</h2>` },
+    ...(section.intro ? [{ md: escMd(section.intro), html: `<p class="section-intro">${escHtml(section.intro)}</p>` }] : []),
+    ...section.blocks.flatMap(partsOf),
+  ];
+  const make = (kind: "md" | "html", whole: string): BenchChapterChecks => ({
+    whole,
+    parts: pieces.map((p) => ({ label: labelOfPart(p.md), needle: p[kind], expected: occurrences(whole, p[kind]) })),
+  });
+  return { md: make("md", mdWhole), html: make("html", htmlWhole) };
+}
+
+export const BENCH_CHAPTER_ANCHOR = { md: `<a id="${BENCH_CHAPTER_ID}"></a>`, html: `id="${BENCH_CHAPTER_ID}"` };
+
 // ---------- Markdown ----------
 
 function blockMd(block: Block, level: number): string[] {
@@ -807,6 +912,13 @@ function blockMd(block: Block, level: number): string[] {
   }
 }
 
+function sectionMdLines(s: Section): string[] {
+  const lines: string[] = [`<a id="${s.id}"></a>`, "", `## ${escMd(s.title)}`, ""];
+  if (s.intro) lines.push(escMd(s.intro), "");
+  lines.push(...s.blocks.flatMap((b) => blockMd(b, 4)));
+  return lines;
+}
+
 export function renderDossierMarkdown(file: ReportFile, options?: DossierOptions): string {
   const d = build(file, options ?? {});
   const lines: string[] = [`# ${TITLE}`, "", mdTitleLine(d.date, d.version), ""];
@@ -816,11 +928,7 @@ export function renderDossierMarkdown(file: ReportFile, options?: DossierOptions
   for (const note of d.notes) lines.push(`- ${escMd(note)}`);
   if (d.notes.length > 0) lines.push("");
   lines.push(mdScoreLine(d.scoreText), "");
-  for (const s of d.sections) {
-    lines.push(`<a id="${s.id}"></a>`, "", `## ${escMd(s.title)}`, "");
-    if (s.intro) lines.push(escMd(s.intro), "");
-    lines.push(...s.blocks.flatMap((b) => blockMd(b, 4)));
-  }
+  for (const s of d.sections) lines.push(...sectionMdLines(s));
   lines.push("", sealToComment(d.seal));
   return `${lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
 }
@@ -878,11 +986,13 @@ function blockHtml(block: Block): string {
   }
 }
 
+function sectionHtml(s: Section): string {
+  return `<section class="section" id="${s.id}"><h2>${escHtml(s.title)}</h2>${s.intro ? `<p class="section-intro">${escHtml(s.intro)}</p>` : ""}${s.blocks.map(blockHtml).join("\n")}</section>`;
+}
+
 export function renderDossierHtml(file: ReportFile, options?: DossierOptions): string {
   const d = build(file, options ?? {});
-  const sections = d.sections
-    .map((s) => `<section class="section" id="${s.id}"><h2>${escHtml(s.title)}</h2>${s.intro ? `<p class="section-intro">${escHtml(s.intro)}</p>` : ""}${s.blocks.map(blockHtml).join("\n")}</section>`)
-    .join("\n");
+  const sections = d.sections.map(sectionHtml).join("\n");
   return [
     "<!doctype html>",
     // Marker für `report --out`: ein früheres Dossier darf ersetzt werden (im <title> steht das Zeichen & nur maskiert).

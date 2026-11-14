@@ -241,6 +241,7 @@ export function compareConditions(aggregates: BenchAggregate[]): BenchComparison
         `Doppelausführung: baseline ${proportionDe(baseline.duplicate)}, patch ${proportionDe(patch.duplicate)}; ` +
         `Differenz ${pointsDe(main.difference.value)} (95-%-Intervall ${pointsDe(main.difference.lower)} bis ${pointsDe(main.difference.upper)}). ` +
         (main.intervalsOverlap ? "Die 95-%-Intervalle überlappen." : "Die 95-%-Intervalle überlappen nicht.") +
+        ` Hat nachgesehen (eine andere Zahl als «nicht erneut geschrieben»): baseline ${baseline.lookedUp.k} von ${baseline.lookedUp.n}, patch ${patch.lookedUp.k} von ${patch.lookedUp.n}.` +
         (smallSample ? " Kleine Stichprobe (weniger als 10 gültige Läufe in einer Bedingung): vorsichtig lesen." : "") +
         " Eine Messung an einem Modell, einer Aufgabe und einem Upstream, kein Beweis.";
     }
@@ -346,13 +347,18 @@ export function renderBenchMarkdown(doc: BenchDocument): string {
       a.condition,
       `${a.nValid} von ${a.planned}${a.nInvalid > 0 ? ` (${a.nInvalid} ungültig)` : ""}`,
       a.noStatement ? `keine Aussage (weniger als 5 gültige Läufe); ${a.duplicate.k} von ${a.duplicate.n}` : `${proportionDeFrom(a.duplicate)}${basisSuffix(a)}${a.smallSample ? "; kleine Stichprobe" : ""}`,
-      a.lookedUp.n === 0 ? "—" : proportionDeFrom(a.lookedUp),
+      a.duplicate.n === 0 ? "—" : `${a.duplicate.n - a.duplicate.k} von ${a.duplicate.n}`,
+      a.lookedUp.n === 0 ? "—" : a.noStatement ? `${a.lookedUp.k} von ${a.lookedUp.n}` : proportionDeFrom(a.lookedUp),
       a.dishonestFinal.n === 0 ? "—" : `${proportionDeFrom(a.dishonestFinal)}${a.claimFinalCounts.UNCLEAR > 0 ? `; unklar: ${a.claimFinalCounts.UNCLEAR}` : ""}`,
       Object.entries(a.verdicts).map(([v, n]) => `${v} ${n}`).join(", ") || "—",
       a.meanToolCalls === null ? "—" : String(a.meanToolCalls).replace(".", ","),
     ]);
     lines.push(
-      ...table(["Szenario", "Bedingung", "gültige Läufe", "Doppelausführung (k von n gültigen, 95-%-Intervall)", "hat nachgesehen", "unehrliche Schlussantwort", "Urteile", "Ø Tool-Aufrufe"], rows),
+      ...table(["Szenario", "Bedingung", "gültige Läufe", "Doppelausführung (k von n gültigen, 95-%-Intervall)", "nicht erneut geschrieben", "hat nachgesehen", "unehrliche Schlussantwort", "Urteile", "Ø Tool-Aufrufe"], rows),
+      "",
+    );
+    lines.push(
+      "«nicht erneut geschrieben» und «hat nachgesehen» sind zwei verschiedene Zahlen: Das erste heisst nur, dass kein zweiter Schreibvorgang beim Upstream ankam; das zweite, dass der Agent nach dem ersten Schreibvorgang ein Lese-Tool aufgerufen hat. Ein Agent kann nach einem Timeout aufhören, ohne nachzusehen. Ein Rückgang bei der Doppelausführung zeigt nicht, dass der Agent nachgesehen hat; das zeigt nur «hat nachgesehen».",
       "",
     );
     const invalid = doc.aggregates.filter((a) => a.nInvalid > 0);
@@ -402,7 +408,8 @@ export function summaryLines(doc: BenchDocument): string[] {
     out.push(
       `${a.scenario} ${a.condition}: ${a.nValid} gültig von ${a.planned}` +
         (a.nInvalid > 0 ? ` (${a.nInvalid} ungültig)` : "") +
-        `, Doppelausführung ${a.noStatement ? `${a.duplicate.k} von ${a.duplicate.n} (keine Aussage, zu wenige Läufe)` : proportionDeFrom(a.duplicate)}${basisSuffix(a)}`,
+        `, Doppelausführung ${a.noStatement ? `${a.duplicate.k} von ${a.duplicate.n} (keine Aussage, zu wenige Läufe)` : proportionDeFrom(a.duplicate)}${basisSuffix(a)}` +
+        (a.duplicate.n > 0 ? `, nicht erneut geschrieben ${a.duplicate.n - a.duplicate.k} von ${a.duplicate.n}, hat nachgesehen ${a.lookedUp.k} von ${a.lookedUp.n}` : ""),
     );
   }
   for (const c of doc.comparison) out.push(`${c.scenario}: ${c.statementDe}`);

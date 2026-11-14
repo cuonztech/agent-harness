@@ -12,6 +12,8 @@ import { isReservedFileName } from "./report-file-guard.js";
 import { renderDossierHtml, renderDossierMarkdown } from "./dossier-report.js";
 import { resolveProGate, shortenedNotice, PURCHASE_URL } from "./license/index.js";
 import { expandEqualsForm, optionName, redactSecrets } from "./cli-args.js";
+import { checkBenchIntegrity, looksLikeBenchReport, type BenchDocument } from "./bench/report.js";
+import { benchCoreOf, validateBenchDocument, type DossierBenchCore } from "./dossier-bench.js";
 
 export interface PreviousRunSummary {
   file: string;
@@ -585,7 +587,7 @@ export function renderHtml(file: ReportFile, options: RenderOptions = {}): strin
 }
 
 const REPORT_USAGE =
-  "Usage: report <report-file> [--format md|html] [--out <file>] [--dossier [--customer <name>] [--system <name>]] [--agent-response <text>]\n";
+  "Usage: report <report-file> [--format md|html] [--out <file>] [--dossier [--customer <name>] [--system <name>] [--bench <bench-report.json>]] [--agent-response <text>]\n";
 // Every rendering carries one of these headings/titles; they mark a file that an
 // earlier `report` run wrote (plain report or --dossier) and that may be replaced.
 const OWN_OUTPUT_MARKERS = ["Ergebnis des Agent-Tests", "Technisches Prüf- & Architektur-Dossier"];
@@ -601,7 +603,7 @@ async function mayReplaceOutput(path: string): Promise<boolean> {
 export async function runReportMode(argv: string[]): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(
-      "report <report-file> [--format md|html] [--out <file>] [--dossier] [--customer <name>] [--system <name>] [--agent-response <text>]\n\n" +
+      "report <report-file> [--format md|html] [--out <file>] [--dossier] [--customer <name>] [--system <name>] [--bench <bench-report.json>] [--agent-response <text>]\n\n" +
         "Turns the file written by the proxy's --report-file into a plain-language page (German).\n" +
         "  --format          md (default) or html\n" +
         "  --out             write to this file instead of the terminal. An existing file is only\n" +
@@ -610,6 +612,10 @@ export async function runReportMode(argv: string[]): Promise<number> {
         "                    Without a valid license it is shortened to header, score and verdict per scenario (Pro scope).\n" +
         "  --customer <name> client / environment named in the dossier (needs --dossier)\n" +
         "  --system <name>   system under test named in the dossier (needs --dossier)\n" +
+        "  --bench <file>    bench-report.json of the multi-run measurement (command bench): adds the chapter «Mehrlauf-Messung»\n" +
+        "                    (method, table per scenario and condition, comparison baseline against patch, limits, reproduction\n" +
+        "                    command) to the dossier and seals its numbers (needs --dossier; Pro, without a valid license\n" +
+        "                    the chapter is left out)\n" +
         "  --agent-response <text>\n" +
         "                    the agent's final answer to the user; it is checked against what the\n" +
         "                    target system actually did (honesty check)\n" +
@@ -619,7 +625,7 @@ export async function runReportMode(argv: string[]): Promise<number> {
     return 0;
   }
   // --flag=wert gilt wie --flag wert, auch für --license.
-  argv = expandEqualsForm(argv, new Set(["--license", "--format", "--out", "--customer", "--system", "--agent-response"]));
+  argv = expandEqualsForm(argv, new Set(["--license", "--format", "--out", "--customer", "--system", "--agent-response", "--bench"]));
   let file: string | undefined;
   let format: "md" | "html" | undefined;
   let outPath: string | undefined;
@@ -628,6 +634,7 @@ export async function runReportMode(argv: string[]): Promise<number> {
   let systemName: string | undefined;
   let agentResponse: string | undefined;
   let licenseKey: string | undefined;
+  let benchPath: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
     if (token === "--dossier") {
@@ -639,6 +646,13 @@ export async function runReportMode(argv: string[]): Promise<number> {
         return 1;
       }
       licenseKey = v;
+    } else if (token === "--bench") {
+      const v = argv[++i];
+      if (v === undefined || v.startsWith("--") || v.trim() === "") {
+        process.stderr.write(`Error: --bench needs the bench-report.json of a bench measurement.\n${REPORT_USAGE}`);
+        return 1;
+      }
+      benchPath = v;
     } else if (token === "--customer" || token === "--system") {
       const v = argv[++i];
       if (v === undefined || v.startsWith("--") || v.trim() === "") {
@@ -711,6 +725,44 @@ export async function runReportMode(argv: string[]): Promise<number> {
     process.stderr.write(`Error: --customer and --system only apply together with --dossier.\n${REPORT_USAGE}`);
     return 1;
   }
+  if (!dossier && benchPath !== undefined) {
+    process.stderr.write(`Error: --bench only applies together with --dossier.\n${REPORT_USAGE}`);
+    return 1;
+  }
+  // Mehrlauf-Messung: der Bench-Bericht wird immer gelesen und geprüft (ein falscher Pfad ist ein Fehler); das Kapitel entsteht nur mit Lizenz.
+  let benchCore: DossierBenchCore | undefined;
+  if (benchPath !== undefined) {
+    const info = await stat(benchPath).catch(() => null);
+    if (!info || !info.isFile()) {
+      process.stderr.write(`Error: bench report not found: ${benchPath}\nHint: the command bench writes it as bench-report.json in its output folder.\n`);
+      return 1;
+    }
+    if (info.size > 64 * 1024 * 1024) {
+      process.stderr.write(`Error: bench report too large: ${benchPath}\n`);
+      return 1;
+    }
+    let benchParsed: unknown;
+    try {
+      benchParsed = JSON.parse(await readFile(benchPath, "utf8"));
+    } catch {
+      process.stderr.write(`Error: ${benchPath} is not valid JSON.\n`);
+      return 1;
+    }
+    if (!looksLikeBenchReport(benchParsed)) {
+      process.stderr.write(`Error: ${benchPath} is not a bench report (bench-report.json written by the bench command).\n`);
+      return 1;
+    }
+    const invalid = validateBenchDocument(benchParsed);
+    if (invalid !== null) {
+      process.stderr.write(`Error: ${invalid}\n`);
+      return 1;
+    }
+    const benchCheck = checkBenchIntegrity(benchParsed as Record<string, unknown>);
+    if (benchCheck.status !== "ok") {
+      process.stderr.write(`WARNUNG: Der Bench-Bericht besteht seine eigene Prüfung nicht: ${benchCheck.reasonDe} Das Kapitel trägt einen entsprechenden Hinweis; die Zahlen sind nicht belastbar.\n`);
+    }
+    benchCore = benchCoreOf(benchParsed as BenchDocument, benchCheck);
+  }
   if (agentResponse !== undefined) {
     if (parsed.report) parsed.claim_check = evaluateAgentClaim(agentResponse, parsed.report);
     else process.stderr.write("Hinweis: Die Datei enthält noch keinen Bericht; die Antwort des Agenten kann nicht geprüft werden.\n");
@@ -736,7 +788,10 @@ export async function runReportMode(argv: string[]): Promise<number> {
     const named = [customerName !== undefined ? "--customer" : null, systemName !== undefined ? "--system" : null].filter(Boolean).join(" und ");
     process.stderr.write(`Hinweis: ${named} ${named.includes(" und ") ? "erscheinen" : "erscheint"} nur im vollen Dossier (Pro-Umfang) und fehl${named.includes(" und ") ? "en" : "t"} in der gekürzten Fassung ohne gültige Lizenz.\n`);
   }
-  const dossierOptions = { customerName, systemName, agentResponse, licenseVerdict, limited: !pro };
+  if (!pro && benchCore !== undefined) {
+    process.stderr.write(`WARNUNG: --bench gehört zum Pro-Umfang. Ohne gültige Lizenz entfällt das Kapitel «Mehrlauf-Messung»: Das Dossier ist die gekürzte Fassung ohne dieses Kapitel (der Exit-Code bleibt 0).\n`);
+  }
+  const dossierOptions = { customerName, systemName, agentResponse, licenseVerdict, limited: !pro, bench: benchCore };
   const text = dossier
     ? chosen === "html" ? renderDossierHtml(parsed, dossierOptions) : renderDossierMarkdown(parsed, dossierOptions)
     : chosen === "html" ? renderHtml(parsed, { pro }) : renderMarkdown(parsed, { pro });

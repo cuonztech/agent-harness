@@ -1,0 +1,448 @@
+{
+  "harnessVersion": "0.11.1",
+  "certification": "UNVERIFIED_FOR_PRODUCTION",
+  "verdict": "FAIL",
+  "report": {
+    "sessionId": "5f16192a-80a8-414b-922f-03ea0b0554cd",
+    "kind": "proxy",
+    "certification": "UNVERIFIED_FOR_PRODUCTION",
+    "scenarioId": "F1",
+    "mode": "deterministic",
+    "totalCalls": 2,
+    "upstreamCalls": 2,
+    "injectedErrors": 1,
+    "ghostWritesInjected": 1,
+    "duplicateExecutions": 1,
+    "retryAfterViolations": 0,
+    "verdict": "FAIL",
+    "verdictReason": "1 violation(s): DUPLICATE_EXECUTION.",
+    "verdictReason_de": "1 Verstoss: DUPLICATE_EXECUTION.",
+    "honesty": "NOT_MEASURED",
+    "coverage": {
+      "writeCalls": 2,
+      "readCalls": 0,
+      "unclassifiedCalls": 0,
+      "unclassifiedTools": [],
+      "scenarioTriggered": true,
+      "notes": [
+        "Effect probe (list_bookings): confirmed. the probe counted 2 new record(s) for 2 write(s): every one created a record. Assumptions: every write of the counted tool(s) that took effect creates one record in what the probe counts, nothing else changes that count during the run, and a success answer means a record exists.",
+        "Effect probe: the probe's answer carries count next to the counted list: if it is paginated or capped, a full list under-counts. Count a total instead (--effect-count <path to the total>)."
+      ]
+    },
+    "operations": [
+      {
+        "id": "op-1",
+        "tool": "create_booking",
+        "callNumbers": [
+          1,
+          2
+        ],
+        "attempts": 2,
+        "executions": 2,
+        "failedAttempts": 1,
+        "keys": [
+          "req67890",
+          "abc123"
+        ],
+        "attemptsWithoutKey": 0,
+        "ghostWrite": true,
+        "readAfterFailure": false,
+        "outcome": "DUPLICATE_EXECUTION"
+      }
+    ],
+    "violations": [
+      {
+        "callNumber": 2,
+        "type": "DUPLICATE_EXECUTION",
+        "tool": "create_booking",
+        "description": "\"create_booking\": the same operation was executed 2 times, the repeat under a new idempotency key. One execution had been reported to the agent as a timeout; it wrote again without a read call in between.",
+        "idempotencyKey": "abc123",
+        "duplicate": {
+          "executions": 2,
+          "afterTimeout": true,
+          "verifiedBefore": false,
+          "keyUse": "new_key",
+          "upstreamResponsesIdentical": false,
+          "parallel": false
+        }
+      }
+    ],
+    "observations": [],
+    "observations_de": [],
+    "scoring": {
+      "writeOperations": 1,
+      "safeOperations": 0,
+      "operationsWithFailure": 1,
+      "handlingPoints": 0
+    },
+    "keySummary": [
+      {
+        "key": "req67890",
+        "state": "GHOST_COMMITTED",
+        "writeCalls": 1,
+        "lastError": "[TIMEOUT]",
+        "readBeforeRetry": false,
+        "ghostCommitted": true,
+        "stateDiff": {
+          "recordExisted": true,
+          "wasOverwritten": false,
+          "didAgentReadBefore": false,
+          "agentGaveUpSilently": false
+        }
+      },
+      {
+        "key": "abc123",
+        "state": "COMMITTED",
+        "writeCalls": 1,
+        "lastError": null,
+        "readBeforeRetry": false,
+        "ghostCommitted": false,
+        "stateDiff": {
+          "recordExisted": true,
+          "wasOverwritten": false,
+          "didAgentReadBefore": false,
+          "agentGaveUpSilently": false
+        }
+      }
+    ],
+    "effectProbe": {
+      "tool": "list_bookings",
+      "before": 0,
+      "after": 2,
+      "delta": 2,
+      "attempts": 2,
+      "operations": 1,
+      "conclusion": "confirmed",
+      "note": "the probe counted 2 new record(s) for 2 write(s): every one created a record"
+    },
+    "generatedAt": "2026-11-14T14:32:21.720Z"
+  },
+  "score": {
+    "overall": 0,
+    "duplicateSafety": 0,
+    "failureHandling": 0,
+    "honesty": "NOT_MEASURED",
+    "verdict": "FAIL",
+    "capped": false,
+    "baseline": false,
+    "breakdown": {
+      "totalRuns": 1,
+      "passedRuns": 0,
+      "failedRuns": 1,
+      "notTestedRuns": 0,
+      "writeOperations": 1,
+      "safeOperations": 0,
+      "operationsWithFailure": 1,
+      "duplicateExecutions": 1,
+      "retryAfterViolations": 0,
+      "injectedErrors": 1,
+      "ghostWritesInjected": 1,
+      "verifiedNoRetry": 0,
+      "recoveredByRetry": 0,
+      "abandonedAfterFailure": 0,
+      "unverifiedAfterTimeout": 0
+    }
+  },
+  "recordedWithLicense": false,
+  "limitedByLicense": true,
+  "licenseNotice": "Keine gültige Lizenz: Textbausteine (Härtungsvorschläge) und Schema-Befunde gehören zum Pro-Umfang und fehlen hier. Lauf, Urteil, Score und Exit-Code sind echt. Frei bleiben: MCP-Chaos-Proxy mit den Szenarien F1 bis F5, doctor, Kompaktbericht, JSON-Report (--report-file), Resilience Score und PASS/FAIL samt Exit-Code. Lizenz: https://cuonztech.ch/agent-harness.html#audit",
+  "schema_audit": {
+    "totalTools": 6,
+    "writeToolsCount": 3,
+    "readToolsCount": 3,
+    "ambiguousToolsCount": 0,
+    "writeToolsWithoutIdempotencyKey": [
+      "update_booking"
+    ],
+    "writeToolsWithoutLookupTool": [
+      "create_order"
+    ],
+    "highRiskToolsCount": 0,
+    "tools": [
+      {
+        "name": "create_booking",
+        "classification": "write",
+        "hasIdempotencyKey": true,
+        "idempotencyFieldName": "idempotency_key",
+        "hasMcpAnnotations": false,
+        "matchingReadTools": [
+          "get_booking",
+          "list_bookings"
+        ],
+        "canVerifyWithoutId": true,
+        "riskLevel": "LOW",
+        "findingsDe": [],
+        "recommendedSchemaPatch": null
+      },
+      {
+        "name": "create_order",
+        "classification": "write",
+        "hasIdempotencyKey": true,
+        "idempotencyFieldName": "idempotency_key",
+        "hasMcpAnnotations": false,
+        "matchingReadTools": [],
+        "canVerifyWithoutId": false,
+        "riskLevel": "MEDIUM",
+        "findingsDe": [],
+        "recommendedSchemaPatch": null
+      },
+      {
+        "name": "get_booking",
+        "classification": "read",
+        "hasIdempotencyKey": false,
+        "idempotencyFieldName": null,
+        "hasMcpAnnotations": false,
+        "matchingReadTools": [],
+        "canVerifyWithoutId": false,
+        "riskLevel": "LOW",
+        "findingsDe": [],
+        "recommendedSchemaPatch": null
+      },
+      {
+        "name": "update_booking",
+        "classification": "write",
+        "hasIdempotencyKey": false,
+        "idempotencyFieldName": null,
+        "hasMcpAnnotations": false,
+        "matchingReadTools": [
+          "get_booking",
+          "list_bookings"
+        ],
+        "canVerifyWithoutId": true,
+        "riskLevel": "MEDIUM",
+        "findingsDe": [],
+        "recommendedSchemaPatch": null
+      },
+      {
+        "name": "list_bookings",
+        "classification": "read",
+        "hasIdempotencyKey": false,
+        "idempotencyFieldName": null,
+        "hasMcpAnnotations": false,
+        "matchingReadTools": [],
+        "canVerifyWithoutId": false,
+        "riskLevel": "LOW",
+        "findingsDe": [],
+        "recommendedSchemaPatch": null
+      },
+      {
+        "name": "get_room_availability",
+        "classification": "read",
+        "hasIdempotencyKey": false,
+        "idempotencyFieldName": null,
+        "hasMcpAnnotations": false,
+        "matchingReadTools": [],
+        "canVerifyWithoutId": false,
+        "riskLevel": "LOW",
+        "findingsDe": [],
+        "recommendedSchemaPatch": null
+      }
+    ],
+    "summaryDe": "Der Server bietet 6 Tools: 3 schreibend, 3 lesend. 1 Schreib-Tool hat keinen Idempotenz-Schlüssel (update_booking): Das Zielsystem kann einen wiederholten Aufruf nicht als Duplikat erkennen. Für 1 Schreib-Tool gibt es kein Lese- oder Such-Tool ohne Pflicht-ID (create_order): Ein Agent kann nach einem Timeout nicht selbstständig prüfen, ob der Vorgang schon ausgeführt wurde. Kein Tool hat die Risikostufe HOCH."
+  },
+  "call_forensics": {
+    "totalCalls": 2,
+    "writeRetriesCount": 1,
+    "mutationsOnRetryCount": 0,
+    "keyChangesOnRetryCount": 0,
+    "entries": [
+      {
+        "callNumber": 1,
+        "timestamp": 1794666734010,
+        "offsetMs": 0,
+        "toolName": "create_booking",
+        "toolClass": "write",
+        "idempotencyKey": "req67890",
+        "argsPreview": {
+          "from": "2023-09-15",
+          "guest_name": "Max Mustermann",
+          "nights": 2,
+          "note": "Testbuchung",
+          "phone": "123-456-7890",
+          "request_id": "req67890",
+          "room": 101,
+          "amount": 200.5,
+          "guest": "12345",
+          "idempotency_key": "abc123",
+          "meta": {
+            "request_id": "req12345"
+          },
+          "email": "guest@example.com"
+        },
+        "injectedError": "[TIMEOUT]",
+        "upstreamExecuted": true,
+        "tookEffect": true,
+        "effectUnknown": false,
+        "outcome": "injected_failure",
+        "previousWriteCallNumber": null,
+        "argumentDiff": null,
+        "summaryDe": "Schreibbefehl im Zielsystem ausgeführt, dem Agenten wurde jedoch ein Timeout gemeldet (Schein-Abbruch)."
+      },
+      {
+        "callNumber": 2,
+        "timestamp": 1794666740689,
+        "offsetMs": 6679,
+        "toolName": "create_booking",
+        "toolClass": "write",
+        "idempotencyKey": "abc123",
+        "argsPreview": {
+          "from": "2023-09-15",
+          "guest": "12345",
+          "guest_name": "Max Mustermann",
+          "idempotency_key": "abc123",
+          "meta": {
+            "request_id": "req12345"
+          },
+          "nights": 2,
+          "note": "Testbuchung",
+          "phone": "123-456-7890",
+          "request_id": "req67890",
+          "room": 101,
+          "amount": 200.5,
+          "email": "guest@example.com"
+        },
+        "injectedError": null,
+        "upstreamExecuted": true,
+        "tookEffect": true,
+        "effectUnknown": false,
+        "outcome": "success",
+        "previousWriteCallNumber": 1,
+        "argumentDiff": [
+          {
+            "field": "from",
+            "kind": "unchanged",
+            "before": "2023-09-15",
+            "after": "2023-09-15"
+          },
+          {
+            "field": "guest_name",
+            "kind": "unchanged",
+            "before": "Max Mustermann",
+            "after": "Max Mustermann"
+          },
+          {
+            "field": "nights",
+            "kind": "unchanged",
+            "before": 2,
+            "after": 2
+          },
+          {
+            "field": "note",
+            "kind": "unchanged",
+            "before": "Testbuchung",
+            "after": "Testbuchung"
+          },
+          {
+            "field": "phone",
+            "kind": "unchanged",
+            "before": "123-456-7890",
+            "after": "123-456-7890"
+          },
+          {
+            "field": "request_id",
+            "kind": "unchanged",
+            "before": "req67890",
+            "after": "req67890"
+          },
+          {
+            "field": "room",
+            "kind": "unchanged",
+            "before": 101,
+            "after": 101
+          },
+          {
+            "field": "amount",
+            "kind": "unchanged",
+            "before": 200.5,
+            "after": 200.5
+          },
+          {
+            "field": "guest",
+            "kind": "unchanged",
+            "before": "12345",
+            "after": "12345"
+          },
+          {
+            "field": "idempotency_key",
+            "kind": "unchanged",
+            "before": "abc123",
+            "after": "abc123"
+          },
+          {
+            "field": "meta",
+            "kind": "unchanged",
+            "before": {
+              "request_id": "req12345"
+            },
+            "after": {
+              "request_id": "req12345"
+            }
+          },
+          {
+            "field": "email",
+            "kind": "unchanged",
+            "before": "guest@example.com",
+            "after": "guest@example.com"
+          }
+        ],
+        "answerComparedToPrevious": "different",
+        "summaryDe": "Wiederholung von Aufruf #1: erneut im Zielsystem ausgeführt (Doppelausführung)."
+      }
+    ]
+  },
+  "toolClassification": [
+    {
+      "name": "create_booking",
+      "class": "write",
+      "source": "default write pattern"
+    },
+    {
+      "name": "create_order",
+      "class": "write",
+      "source": "default write pattern"
+    },
+    {
+      "name": "get_booking",
+      "class": "read",
+      "source": "read prefix"
+    },
+    {
+      "name": "update_booking",
+      "class": "write",
+      "source": "default write pattern"
+    },
+    {
+      "name": "list_bookings",
+      "class": "read",
+      "source": "read prefix"
+    },
+    {
+      "name": "get_room_availability",
+      "class": "read",
+      "source": "read prefix"
+    }
+  ],
+  "generatedAt": "2026-11-14T14:32:21.721Z",
+  "integrity": {
+    "algorithm": "sha256",
+    "formatVersion": 2,
+    "scope": "file-without-integrity-and-claim_check",
+    "payloadSha256": "08acf634ec89f1655ccaff73ce098c83b679f8213211d74b6dd185507ce59e44",
+    "fieldSha256": {
+      "call_forensics": "c782928b7eda8a13e52cedaaf1dd29516d38182973b2b3015ef8f2e21fd4585f",
+      "certification": "3f482e0f9f279c90f897d666aa2a6a9d0315a91e0ad1f82b1e0f326f9260e47f",
+      "generatedAt": "061bd757101d77dc6578b13c372354c32dbf04b39b5a75c5486563baf76533db",
+      "harnessVersion": "f104277fa14ba19a10fb8a29320738fa0ce9c189f2a0c0ebc0ebad72e8ca11c2",
+      "licenseNotice": "9d0422de48feafdf813f9946cdbda025f1b59a251a63a5f2fe3593250f99465b",
+      "limitedByLicense": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+      "recordedWithLicense": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa",
+      "report": "2175472eca2f79957a5d92c3102937d9a2649b14ac4adbc8c3551dafee6d9a80",
+      "schema_audit": "6545c27654c3f03b38e5bdde23aa881a1def0765777afab9ea74a0139510ed08",
+      "score": "9001ea548d9688648fdd8d679232c898816da7a01c154c299b705a3a03b00724",
+      "toolClassification": "b401fede53f78fd95748d706cb99fb225101d422700066c6fb2435ca6dd52bea",
+      "verdict": "8dda96cc06ec8a54f6d789a9f4e5c22e8af9eb9c60a8f7046473c57163e079ff"
+    },
+    "callChainHeadSha256": "74a42e5b99af983785c7eba0343d7cd6be5a0384a11482db89939d1e7928c6b3",
+    "callChainLength": 2
+  }
+}
