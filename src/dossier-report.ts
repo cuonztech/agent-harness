@@ -138,11 +138,14 @@ function escHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+// Markdown: spitze Klammern, senkrechte Striche und Markdown-Zeichen werden mit Backslash maskiert (CommonMark: \< ist ein wörtliches <, \& ein wörtliches &).
+// Im Markdown-Text stehen keine HTML-Entitäten (&lt; &amp;): Sie wären in jedem Textbetrachter unlesbar (E3f, C3).
 function escMd(text: string): string {
-  return clean(text).replace(/[\\`*[\]|<>]/g, (c) => (c === "`" ? "'" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : `\\${c}`));
+  // «&» bleibt, ausser es beginnt eine Entität («&lt;»): Die würde ein Betrachter als «<» zeigen.
+  return clean(text).replace(/[\\`*[\]|<>]/g, (c) => (c === "`" ? "'" : `\\${c}`)).replace(/&(?=#?[A-Za-z0-9]+;)/g, "\\&");
 }
 
-const escMdUser = (text: string): string => escMd(clean(text).replace(/&/g, "&amp;")).replace(/[_~#!]/g, (c) => `\\${c}`);
+const escMdUser = (text: string): string => escMd(clean(text)).replace(/[_~#!]/g, (c) => `\\${c}`);
 
 function richHtml(rich: Rich): string {
   return rich
@@ -278,7 +281,7 @@ function businessMatrix(file: ReportFile): MatrixRow[] {
       dimension: d4,
       label: "KEY-FELD VORHANDEN",
       tone: "muted",
-      basis: `Das Schema bietet bei allen ${audit.writeToolsCount} Schreib-Tool(s) ein Key-Feld und ein Nachsehen ohne ID (Risiko NIEDRIG). Ob der Upstream das Feld beachtet, zeigt der Lauf (erste Zeile).${duplicateRecordsProven(report) ? " Im Lauf sind trotzdem zwei Datensätze entstanden (Wirkungs-Sonde): Das Feld allein schützt nicht." : (report?.duplicateExecutions ?? 0) > 0 ? " Im Lauf hat der Upstream den Vorgang mehrfach ausgeführt (gezählt als Ausführungen); ob dabei zwei Datensätze entstanden, ist ohne --effect-probe offen." : ""}`,
+      basis: `Das Schema bietet bei allen ${audit.writeToolsCount} Schreib-Tool(s) ein Key-Feld und ein Nachsehen ohne ID (Risiko NIEDRIG). Ob der Upstream das Feld beachtet, zeigt der Lauf (erste Zeile).${duplicateRecordsProven(report) ? (report?.operations ?? []).some((op) => op.keys.length > 0) ? " Im Lauf sind trotzdem zwei Datensätze entstanden (Wirkungs-Sonde), obwohl der Agent einen Schlüssel gesendet hat: Das Feld allein schützt nicht." : " Im Lauf sind zwei Datensätze entstanden (Wirkungs-Sonde). Der Agent hat in diesem Lauf aber keinen Schlüssel gesendet (kein erkanntes Key-Feld in den Aufrufen): Das Feld konnte so nicht wirken, und der Lauf sagt nichts darüber, ob der Upstream es beachtet." : (report?.duplicateExecutions ?? 0) > 0 ? " Im Lauf hat der Upstream den Vorgang mehrfach ausgeführt (gezählt als Ausführungen); ob dabei zwei Datensätze entstanden, ist ohne --effect-probe offen." : ""}`,
     });
   }
   return rows;
@@ -540,7 +543,7 @@ function integrityWarningDe(check: IntegrityCheck): string | null {
 
 // Mit Mehrlauf-Messung darf der erste Standardsatz («Ob der Agent ehrlich berichtet, ist nicht gemessen») nicht mehr stehen.
 const BENCH_LIMIT_FIRST_DE =
-  "Im aufgezeichneten Einzellauf sieht der Harness nur die Tool-Aufrufe des Agenten. Die Antworten der Mehrlauf-Messung wurden mit festen Regeln gegen die Tool-Aufrufe abgeglichen; das ist ein Befund der Regeln, kein Beweis, dass ein Agent ehrlich oder unehrlich berichtet.";
+  "Im aufgezeichneten Einzellauf sieht der Harness nur die Tool-Aufrufe des Agenten. Die Antworten der Mehrlauf-Messung wurden mit festen Regeln gegen die Tool-Aufrufe abgeglichen; das ist ein Befund der Regeln, kein Beweis, dass ein Agent die Wahrheit sagt oder lügt: «Widerspruch zur Messung» heisst nur, dass eine Antwort der Messung widerspricht.";
 
 function integritySection(file: ReportFile, options: DossierOptions, check: IntegrityCheck, seal: DossierSeal, benchOn: boolean): Section {
   const badge = integrityBadge(check);
@@ -578,16 +581,16 @@ function integritySection(file: ReportFile, options: DossierOptions, check: Inte
     t: "note",
     title: "Was die Prüfsumme leistet und was nicht",
     items: [
-      ["Sie zeigt, ob Report-Datei und Dossier seit dem Erzeugen unverändert sind. Nachprüfen: npx cuonztech-agent-harness verify dossier.md (bei einem HTML-Dossier dossier.html), oder verify harness-report.json; der Befehl rechnet neu und meldet OK oder MISMATCH mit dem Grund."],
+      ["Sie zeigt, ob Report-Datei und Dossier seit dem Erzeugen unverändert sind. Nachprüfen: npx cuonztech-agent-harness verify dossier.md (bei einem HTML-Dossier dossier.html), oder verify harness-report.json; der Befehl rechnet neu und meldet OK, TEILWEISE (Exit-Code 2) oder MISMATCH mit dem Grund."],
       ["Es ist eine Prüfsumme ohne Signatur eines Dritten und kein Zertifikat. Wer die Datei und die Prüfsumme zusammen ändert, kann fälschen. Sie schützt nur, wenn der Wert getrennt von der Datei aufbewahrt wird (zum Beispiel in der Übergabe-Mail oder im Ticket) und beim Prüfen mit dem aufbewahrten Wert verglichen wird."],
-      ["Gesiegelt ist der Kopf dieses Dossiers: die Titelzeile mit Datum und Harness-Version, alle Kopfzeilen (Prüfgegenstand, Auftraggeber, Session-ID, Szenario, Umfang, Datum der Aufzeichnung, Harness-Version, Modell / Agent, Zählweise, Lizenzstatus, Einordnung), das Gesamturteil mit seinem Erklärsatz, der Score und die Hinweise direkt unter dem Urteil. verify gleicht sie mit dem Siegel ab; ein geänderter, gelöschter oder doppelter Eintrag ist ein MISMATCH."],
-      ["Im Siegel stehen ausserdem die Operationen (Tool, Versuche, Ausführungen, Ergebnis) und die Prüfsumme der Report-Datei. verify gleicht sie nicht mit den Abschnitten ab."],
+      ["Gesiegelt ist der Kopf dieses Dossiers: der Titel des Dokuments (bei HTML auch der Seitentitel), die Titelzeile mit Datum und Harness-Version, alle Kopfzeilen (Prüfgegenstand, Auftraggeber, Session-ID, Szenario, Umfang, Datum der Aufzeichnung, Harness-Version, Modell / Agent, Zählweise, Lizenzstatus, Einordnung), das Gesamturteil mit seinem Erklärsatz, der Score und die Hinweise direkt unter dem Urteil. verify gleicht sie mit dem Siegel ab; ein geänderter, gelöschter oder doppelter Eintrag ist ein MISMATCH. Gesiegelt sind ausserdem die Kennungen und Überschriften aller Abschnitte: Jede steht genau einmal im Text, ein zusätzlicher oder doppelter Abschnitt (ein zweites Kapitel 6, ein erfundenes «6b. Bestätigung») ist ein MISMATCH."],
+      ["Im Siegel stehen ausserdem die Operationen (Tool, Versuche, Ausführungen, Ergebnis) und die Prüfsumme der Report-Datei. Mit verify --report (Neuaufbau, siehe unten) wird der Text der Abschnitte dagegen abgeglichen."],
       ...(benchOn
         ? [
-            [`Gesiegelt ist ausserdem das ganze Kapitel «Mehrlauf-Messung» (Abschnitt ${BENCH_CHAPTER_NO}): Methode, alle Zahlen, Vergleich, Grenzen und Reproduktionsbefehl. verify baut es aus dem Siegel nach und prüft, dass es unverändert und genau einmal im Text steht; jede geänderte Zahl ist ein MISMATCH. Mit verify <dossier> --bench bench-report.json wird zusätzlich geprüft, dass die Zahlen zum (selbst gesiegelten) Bench-Bericht passen.`],
+            [`Gesiegelt ist ausserdem das ganze Kapitel «Mehrlauf-Messung» (Abschnitt ${BENCH_CHAPTER_NO}): Methode, alle Zahlen, Vergleich, Grenzen und Reproduktionsbefehl. verify baut es aus dem Siegel nach und prüft, dass es unverändert und genau einmal im Text steht; jede geänderte Zahl und jeder in das Kapitel eingefügte Text ist ein MISMATCH. Mit verify <dossier> --bench bench-report.json wird zusätzlich geprüft, dass die Zahlen zum (selbst gesiegelten) Bench-Bericht passen.`],
           ]
         : []),
-      [`Nicht gesiegelt ist der Fliesstext der Abschnitte ${benchOn ? `1 bis 5 und ${BENCH_CHAPTER_NO + 1}` : "1 bis 6"} (Management-Matrix, Schema-Gutachten, Zeitleiste und Argumente, Abgleich mit der Antwort des Agenten, Prompt-Baustein, dieser Abschnitt). Wer ihn ändert, bleibt bei verify unbemerkt, auch mit --report: Die Option prüft nur, dass die Report-Datei unverändert ist und zu diesem Dossier gehört, nicht den Text gegen die Report-Datei. Wer dem Text nicht traut, prüft ihn mit verify dossier.md --report harness-report.json --rerender (Dateinamen anpassen): Der Befehl erzeugt das Dossier aus der Report-Datei neu und vergleicht es Abschnitt für Abschnitt (nur bei Dossiers ab Harness 0.12.0). Das zeigt, dass der Fliesstext aus dieser Report-Datei folgt; es zeigt nicht, dass die Report-Datei echt ist, und kein Dritter bestätigt es: Wer Report-Datei und Dossier zusammen ändert, kann fälschen.`],
+      [`Nicht gesiegelt ist der Fliesstext der Abschnitte ${benchOn ? `1 bis 5 und ${BENCH_CHAPTER_NO + 1}` : "1 bis 6"} (Management-Matrix, Schema-Gutachten, Zeitleiste und Argumente, Abgleich mit der Antwort des Agenten, Prompt-Baustein, dieser Abschnitt). verify meldet deshalb nur dann OK, wenn es ihn geprüft hat: Mit verify dossier.md --report harness-report.json${benchOn ? " --bench bench-report.json" : ""} (Dateinamen anpassen) erzeugt der Befehl das Dossier aus der Report-Datei${benchOn ? " und dem Bench-Bericht" : ""} neu und vergleicht es Abschnitt für Abschnitt (nur bei Dossiers ab Harness 0.12.0); bei Übereinstimmung steht OK mit «Fliesstext: geprüft». Ohne --report (oder mit --no-rerender, oder bei einem Dossier, das sich nicht neu aufbauen lässt) lautet das Ergebnis höchstens TEILWEISE (Exit-Code 2, «Fliesstext: NICHT geprüft»): Siegel, Kern, Kopf, Abschnittsüberschriften und Kapitel stimmen, aber ein geänderter Satz in den Abschnitten bliebe unbemerkt. Der Neuaufbau zeigt, dass der Fliesstext aus dieser Report-Datei folgt; er zeigt nicht, dass die Report-Datei echt ist, und kein Dritter bestätigt es: Wer Report-Datei und Dossier zusammen ändert, kann fälschen.`],
       [benchOn ? "Zur Kopfzeile «Modell / Agent»: Der Harness erfasst das Modell und den Agenten des aufgezeichneten Einzellaufs nicht; dafür steht fest «nicht erfasst». Das Modell der Mehrlauf-Messung stammt aus dem Bench-Bericht. Die Zeile ist gesiegelt; ein anderer Eintrag fällt bei verify auf. Dieses Dossier belegt nicht, mit welchem Modell der Einzellauf entstand." : "Zur Kopfzeile «Modell / Agent»: Der Harness erfasst das Modell und den Agenten nicht. Die Zeile steht fest auf «nicht erfasst» und ist gesiegelt; ein anderer Eintrag fällt bei verify auf. Dieses Dossier belegt nicht, mit welchem Modell oder Agenten der Lauf entstand."],
     ],
   });
@@ -632,6 +635,9 @@ interface Dossier {
   // Direkt unter dem Urteil: was es nicht trägt (kein Schreibvorgang beobachtet, Einordnung nur geraten, Prüfsumme).
   notes: string[];
   warning: string | null;
+  // Titel des Dokuments und der Einleitungssatz im Kopf (gesiegelt: `<title>` und Kopfzeile gehören zum geprüften Kopf).
+  docTitle: string;
+  lead: string;
   meta: Array<[string, string]>;
   sections: Section[];
   core: DossierCore;
@@ -707,6 +713,23 @@ function upstreamText(file: ReportFile): string {
   return clean(`${u.program}${u.script ? ` ${u.script}` : ""}${tools}`);
 }
 
+// Die Abschnitte des Dossiers. Ihre Kennungen und Überschriften stehen im Siegel (`core.sections`): Sie hängen nicht vom Siegel selbst ab
+// (nur der Text von Abschnitt «Prüfsumme» nennt dessen Wert), deshalb genügt für den Kern ein Platzhalter.
+function sectionsOf(file: ReportFile, options: DossierOptions, check: IntegrityCheck, limited: boolean, bench: DossierBenchCore | undefined, seal?: DossierSeal): Section[] {
+  const sealOrPlaceholder: DossierSeal = seal ?? { core: undefined as unknown as DossierCore, sha256: "0".repeat(64) };
+  return limited
+    ? [limitedSection(file, sealOrPlaceholder, check, options.bench !== undefined || options.benchRequested === true)]
+    : [
+        summarySection(file),
+        schemaSection(file),
+        forensicsSection(file),
+        claimSection(file, options),
+        hardeningSection(file),
+        ...(bench ? [benchSection(bench)] : []),
+        integritySection(file, options, check, sealOrPlaceholder, bench !== undefined),
+      ];
+}
+
 function build(file: ReportFile, options: DossierOptions = {}): Dossier {
   const { headline, explanation } = verdictText(file);
   const score = file.score?.overall;
@@ -748,7 +771,10 @@ function build(file: ReportFile, options: DossierOptions = {}): Dossier {
     ["Einordnung", "Selbsttest: keine Produktionsfreigabe, kein Zertifikat"],
     ["Lizenzstatus", licenseStatus],
   ];
-  const header: DossierHeader = { titleDate: date, titleVersion: version, rows: meta, explanation, warning, notes };
+  const lead = limited
+    ? "Gekürzte Fassung ohne Lizenz: Kopf, Score und Urteil je Szenario. Der Lauf und sein Urteil sind echt."
+    : "Dieses Dossier fasst zusammen, wie der Agent beim Schreiben in das Zielsystem vorgegangen ist, was das Schema der Tools für die Absicherung gegen Doppelausführung hergibt und was zu tun ist.";
+  const header: DossierHeader = { titleDate: date, titleVersion: version, rows: meta, explanation, warning, notes, docTitle: TITLE, lead };
   const core: DossierCore = {
     format: "cuonztech-agent-harness-dossier",
     formatVersion: 1,
@@ -766,6 +792,7 @@ function build(file: ReportFile, options: DossierOptions = {}): Dossier {
     tone: verdictTone(file),
     scoreText,
     header,
+    sections: sectionsOf(file, options, check, limited, bench).map((s) => ({ id: s.id, title: s.title })),
     countingBasis: basis.basis,
     operations: (file.report?.operations ?? []).map((op) => ({ tool: clean(op.tool), attempts: op.attempts, executions: op.executions, outcome: op.outcome })),
     reportFile: {
@@ -782,17 +809,7 @@ function build(file: ReportFile, options: DossierOptions = {}): Dossier {
     ...(bench ? { bench } : {}),
   };
   const seal = sealDossierCore(core);
-  const sections = limited
-    ? [limitedSection(file, seal, check, options.bench !== undefined || options.benchRequested === true)]
-    : [
-        summarySection(file),
-        schemaSection(file),
-        forensicsSection(file),
-        claimSection(file, options),
-        hardeningSection(file),
-        ...(bench ? [benchSection(bench)] : []),
-        integritySection(file, options, check, seal, bench !== undefined),
-      ];
+  const sections = sectionsOf(file, options, check, limited, bench, seal);
   return {
     limited,
     headline,
@@ -804,6 +821,8 @@ function build(file: ReportFile, options: DossierOptions = {}): Dossier {
     version,
     notes,
     warning,
+    docTitle: TITLE,
+    lead,
     meta,
     sections,
     core,
@@ -822,6 +841,7 @@ export interface HeaderCheck {
 export function dossierHeaderChecks(core: DossierCore): { md: HeaderCheck[]; html: HeaderCheck[] } {
   const h = core.header;
   const md: HeaderCheck[] = [
+    ...(typeof h.docTitle === "string" ? [{ needle: `# ${h.docTitle}\n` }] : []),
     { needle: mdTitleLine(h.titleDate, h.titleVersion) },
     ...h.rows.map(([label, value]) => ({ needle: mdMetaLine(label, value), prefix: `\n- ${label}: ` })),
     { needle: mdVerdictLine(core.verdictLabel), prefix: "\n**Gesamturteil: " },
@@ -830,7 +850,11 @@ export function dossierHeaderChecks(core: DossierCore): { md: HeaderCheck[]; htm
     ...(h.warning ? [{ needle: `**${escMd(h.warning)}**` }] : []),
     ...h.notes.map((n) => ({ needle: `- ${escMd(n)}` })),
   ];
+  const system = h.rows[0]?.[1] ?? "";
   const html: HeaderCheck[] = [
+    // Der Titel des Dokuments (`<title>`, Kopfzeile) und der Kopf mit Systemname und Einleitungssatz gehören zum geprüften Kopf.
+    ...(typeof h.docTitle === "string" ? [{ needle: `<title>${escHtml(h.docTitle)}</title>` }, { needle: `<div class="topline"><strong>${escHtml(h.docTitle)}</strong>` }] : []),
+    ...(typeof h.lead === "string" ? [{ needle: `<h1>${escHtml(clean(system))}</h1><p>${escHtml(h.lead)}</p></div>` }] : []),
     { needle: htmlTitleSpan(h.titleDate, h.titleVersion) },
     ...h.rows.map(([label, value]) => ({ needle: htmlMetaCell(label, value), prefix: `<dt>${escHtml(label)}</dt>` })),
     { needle: htmlVerdictBadge(core.tone, core.verdictLabel), prefix: '<span class="caption">Gesamturteil</span>' },
@@ -919,6 +943,26 @@ export function dossierBenchChecks(bench: DossierBenchCore): { md: BenchChapterC
     parts: pieces.map((p) => ({ label: labelOfPart(p.md), needle: p[kind], expected: occurrences(whole, p[kind]) })),
   });
   return { md: make("md", mdWhole), html: make("html", htmlWhole) };
+}
+
+// ---------- Abschnitte: Kennungen und Überschriften aus dem Siegel ----------
+
+// Jeder Abschnitt, den der Kern kennt, steht mit seiner Überschrift genau einmal im sichtbaren Text, und es gibt keine weitere Abschnitts-
+// überschrift (ein zweites Kapitel 6, ein erfundenes «6b. Bestätigung»). Fehlt `core.sections` (Dossier aus einer Vorabfassung), gibt es nichts zu prüfen.
+export interface SectionChecks {
+  /** Jede dieser Zeichenfolgen muss genau einmal vorkommen. */
+  entries: Array<{ label: string; needle: string }>;
+  /** Anzahl der Abschnittsanker und Abschnittsüberschriften im Text (erwartet: je die Zahl der Abschnitte des Kerns). */
+  expectedCount: number;
+}
+
+export function dossierSectionChecks(core: DossierCore): { md: SectionChecks; html: SectionChecks } | null {
+  const list = core.sections;
+  if (!Array.isArray(list) || !list.every((x) => x && typeof x.id === "string" && typeof x.title === "string")) return null;
+  return {
+    md: { entries: list.map((x) => ({ label: x.title, needle: `<a id="${x.id}"></a>\n\n## ${escMd(x.title)}\n` })), expectedCount: list.length },
+    html: { entries: list.map((x) => ({ label: x.title, needle: `<section class="section" id="${x.id}"><h2>${escHtml(x.title)}</h2>` })), expectedCount: list.length },
+  };
 }
 
 export const BENCH_CHAPTER_ANCHOR = { md: `<a id="${BENCH_CHAPTER_ID}"></a>`, html: `id="${BENCH_CHAPTER_ID}"` };
@@ -1044,7 +1088,7 @@ export function renderDossierHtml(file: ReportFile, options?: DossierOptions): s
     `<title>${escHtml(TITLE)}</title>`,
     `<style>${CSS}</style></head><body><main class="wrap"><header>`,
     `<div class="topline"><strong>${escHtml(TITLE)}</strong>${htmlTitleSpan(d.date, d.version)}</div>`,
-    `<div class="hero"><div><h1>${escHtml(clean(d.meta[0]![1]))}</h1><p>${d.limited ? "Gekürzte Fassung ohne Lizenz: Kopf, Score und Urteil je Szenario. Der Lauf und sein Urteil sind echt." : "Dieses Dossier fasst zusammen, wie der Agent beim Schreiben in das Zielsystem vorgegangen ist, was das Schema der Tools für die Absicherung gegen Doppelausführung hergibt und was zu tun ist."}</p></div>`,
+    `<div class="hero"><div><h1>${escHtml(clean(d.meta[0]![1]))}</h1><p>${escHtml(d.lead)}</p></div>`,
     `<aside class="verdict"><span class="caption">Gesamturteil</span><strong>${htmlVerdictBadge(d.tone, d.verdictLabel)}</strong><p>${escHtml(d.explanation)}</p><p>${htmlScoreLine(d.scoreText)}</p></aside></div>`,
     d.warning || d.notes.length > 0
       ? `<div class="verdict-notes">${d.warning ? `<p class="alert">${escHtml(d.warning)}</p>` : ""}${d.notes.length > 0 ? `<ul>${d.notes.map((n) => `<li>${escHtml(n)}</li>`).join("")}</ul>` : ""}</div>`

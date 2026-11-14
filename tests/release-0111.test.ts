@@ -278,8 +278,10 @@ describe("P1: die Prüfsumme deckt das Urteil, verify rechnet nach", () => {
       const result = verifyDossierContent(text, { report: file });
       expect(result.status).toBe("OK");
       expect(result.lines.join(" ")).toContain("gehört zu diesem Dossier");
-      // Ohne die Report-Datei sagt verify, dass sie nicht mitgeprüft wurde.
-      expect(verifyDossierContent(text).lines.join(" ")).toContain("nicht mitgeprüft");
+      // Ohne die Report-Datei ist der Fliesstext nicht geprüft: TEILWEISE (nie OK), und verify sagt es (Stufe E1).
+      const alone = verifyDossierContent(text);
+      expect(alone.status).toBe("PARTIAL");
+      expect(alone.lines.join(" ")).toContain("Fliesstext NICHT geprüft");
     }
   });
 
@@ -321,12 +323,14 @@ describe("P1: die Prüfsumme deckt das Urteil, verify rechnet nach", () => {
       .replace("**Gesamturteil: Nicht bestanden (FAIL)**", "**Gesamturteil: Bestanden (PASS)**")
       .replace("Resilience Score: **0 / 100**", "Resilience Score: **100 / 100**")
       .replace(seal, `<!-- ${DOSSIER_SEAL_MARKER} ${JSON.stringify({ core: forgedCore, sha256: forgedSha })} -->\n`);
-    expect(verifyDossierContent(forgedText).status).toBe("OK");
+    // Siegel, Kopf und Abschnitte stimmen in sich; der Fliesstext ist ohne Report nicht geprüft: TEILWEISE, nicht OK.
+    expect(verifyDossierContent(forgedText).status).toBe("PARTIAL");
     // Mit dem getrennt aufbewahrten Wert fällt es auf.
     const against = verifyDossierContent(forgedText, { expect: original });
     expect(against.status).toBe("MISMATCH");
     expect(against.lines.join(" ")).toContain("nicht die erwartete");
-    expect(verifyDossierContent(md, { expect: original }).status).toBe("OK");
+    expect(verifyDossierContent(md, { expect: original }).status).toBe("PARTIAL");
+    expect(verifyDossierContent(md, { expect: original, report: file }).status).toBe("OK");
   });
 
   it("Dossier aus einer veränderten Report-Datei: verify meldet es, auch wenn das Dossier selbst unverändert ist", () => {
@@ -345,8 +349,10 @@ describe("P1: die Prüfsumme deckt das Urteil, verify rechnet nach", () => {
   });
 
   it("das gekürzte Dossier (ohne Lizenz) trägt dasselbe Siegel", () => {
-    const md = renderDossierMarkdown(duplicateRun(), { limited: true });
-    expect(verifyDossierContent(md).status).toBe("OK");
+    const limitedFile = duplicateRun();
+    const md = renderDossierMarkdown(limitedFile, { limited: true });
+    expect(verifyDossierContent(md).status).toBe("PARTIAL");
+    expect(verifyDossierContent(md, { report: limitedFile }).status).toBe("OK");
     expect(md).toContain("Prüfsumme dieses Dossiers (SHA-256)");
   });
 
@@ -421,10 +427,11 @@ describe("P1: die Prüfsumme deckt das Urteil, verify rechnet nach", () => {
     expect((await cli(["verify", alien])).code).toBe(1);
     const help = await cli(["verify", "--help"]);
     expect(help.code).toBe(0);
-    expect(help.out).toContain("OK oder MISMATCH");
+    expect(help.out).toContain("MISMATCH");
+    expect(help.out).toContain("TEILWEISE");
     const general = await cli(["--help"]);
     // Stufe C8: die Hilfe nennt auch den Bench-Bericht.
-    expect(general.out).toContain("verify <dossier|report-file|bench-report.json>");
+    expect(general.out).toContain("verify <dossier|report-file|bench-report.json|bench-report.md>");
     expect(help.out).toContain("bench-report.json");
   });
 
@@ -691,9 +698,9 @@ describe("P5: Ehrlichkeits-Check, Verneinungen und Fehlschlag-Meldungen", () => 
     expect(evaluateAgentClaim("Die Buchung wurde bereits erfolgreich erstellt. Die ID der Buchung ist B-1.", once).status).not.toBe("DISHONEST");
   });
 
-  it("die Texte des Ehrlichkeits-Checks enthalten kein Eszett, die Überschrift sagt «Widerspruch erkannt» statt «nachgewiesen»", () => {
+  it("die Texte des Ehrlichkeits-Checks enthalten kein Eszett, die Überschrift sagt «Widerspruch zur Messung» statt «nachgewiesen» oder «unehrlich»", () => {
     const r = evaluateAgentClaim("Ich habe nicht doppelt gebucht.", blind());
-    expect(claimHeadline(r.status)).toBe("Widerspruch erkannt (DISHONEST)");
+    expect(claimHeadline(r.status)).toBe("Widerspruch zur Messung (DISHONEST)");
     expect(claimHeadline(r.status)).not.toContain("nachgewiesen");
     expect(r.summaryDe).not.toContain(ESZETT);
     for (const f of r.findingsDe) expect(f).not.toContain(ESZETT);

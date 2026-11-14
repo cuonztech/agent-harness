@@ -15,18 +15,21 @@ import type { AuditReport } from "../core/report-generator.js";
 import { benchPromptPatch } from "../hardening/patch-generator.js";
 import { redactSecrets } from "../cli-args.js";
 import { VERSION } from "../version.js";
-import type { ReportFile } from "../plain-report.js";
 import { DEFAULT_SYSTEM_PROMPT_DE, type BenchCondition, type BenchOptions } from "./args.js";
 import { parseAgentOutput, runAgentProcess } from "./agent-command.js";
-import { countingLabelDe, countingOfRuns, probeReasonDe } from "./counting.js";
-import { InvalidRunError, createBackend, runAgentLoop, type AgentLoopResult, type ChatBackend, type ToolClient, type ToolDef } from "./agent-loop.js";
+import { countingLabelDe, countingOfRuns } from "./counting.js";
+import { RETRY_BEHAVIOR_DE, secondsDe, type RetryBehavior, type ScenarioSetting } from "./scenarios.js";
+import { deriveRunFacts, writeExecutedOf, type ProxyReportFile } from "./run-facts.js";
+import { InvalidRunError, createBackend, fetchModelDigest, runAgentLoop, type AgentLoopResult, type ChatBackend, type ToolClient, type ToolDef } from "./agent-loop.js";
 import {
   BENCH_FORMAT,
   BENCH_FORMAT_VERSION,
   BENCH_NOTES_DE,
+  BENCH_MARKDOWN_NAME,
   BENCH_REPORT_NAME,
   aggregateRuns,
   compareConditions,
+  markdownSha256,
   renderBenchMarkdown,
   sealBenchDocument,
   type BenchDocument,
@@ -89,6 +92,8 @@ function proxyArgsFor(options: BenchOptions, scenario: string, reportFile: strin
   if (options.upstream.cwd !== null) args.push(`--upstream-cwd=${options.upstream.cwd}`);
   for (const [k, v] of Object.entries(options.upstream.env)) args.push(`--upstream-env-var=${k}=${sub(v)}`);
   args.push(`--scenario=${scenario}`, "--allow-writes", "--audit-tools=off", `--report-file=${reportFile}`);
+  // F2: die Wartezeit, die der Proxy bei der Ablehnung ansagt (dieselbe Option wie beim Proxy).
+  if (scenario === "F2") args.push(`--retry-after=${options.retryAfterSec}`);
   if (options.probe && withProbe) {
     args.push(`--effect-probe=${options.probe.tool}`);
     if (options.probe.argsRaw !== null) args.push(`--effect-probe-args=${sub(options.probe.argsRaw)}`);
@@ -151,10 +156,6 @@ function toolClientOf(client: Client): ToolClient {
 
 // ---------------------------------------------------------------- Report des Proxys lesen
 
-interface ProxyReportFile extends ReportFile {
-  startupError?: string;
-}
-
 async function readProxyReport(file: string): Promise<ProxyReportFile | null> {
   try {
     const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
@@ -201,13 +202,6 @@ function claimOf(text: string | null, report: AuditReport | undefined): ClaimRow
   return { status: result.status, issueCode: result.issueCode ?? null };
 }
 
-function lookedUpOf(file: ProxyReportFile): boolean {
-  const entries = file.call_forensics?.entries ?? [];
-  const firstWrite = entries.find((e) => e.toolClass === "write");
-  if (!firstWrite) return false;
-  return entries.some((e) => e.toolClass === "read" && e.callNumber > firstWrite.callNumber);
-}
-
 const sha256OfBuffer = (buffer: Buffer): string => createHash("sha256").update(buffer).digest("hex");
 
 interface RunSpec {
@@ -242,6 +236,8 @@ async function executeRun(ctx: RunContext, spec: RunSpec): Promise<BenchRunRow> 
   const jsonlPath = join(ctx.runsDir, `${spec.id}.jsonl`);
   const runTimeoutMs = Math.round(options.runTimeoutSec * 1000);
   const stepTimeoutMs = Math.round(options.stepTimeoutSec * 1000);
+  // Die Nachfrage gehört zu F1. In F2 und F4 stellt bench keine: F4 misst, was der Agent von sich aus tut, F2 seine eigene Reaktion auf die Ablehnung.
+  const followupOf = spec.scenario === "F1" ? options.followup : null;
   const controller = new AbortController();
   const onGlobalAbort = (): void => controller.abort();
   input.signal?.addEventListener("abort", onGlobalAbort, { once: true });
@@ -266,14 +262,15 @@ async function executeRun(ctx: RunContext, spec: RunSpec): Promise<BenchRunRow> 
         tools: ctx.tools,
         systemPrompt: spec.systemPrompt,
         task: ctx.task,
-        followup: options.followup,
+        followup: followupOf,
         maxSteps: options.agent.maxSteps,
         stepTimeoutMs,
         signal: controller.signal,
         onEvent: emit,
+        ...(spec.scenario === "F2" ? { waitTool: { maxWaitMs: Math.round(options.maxRetryWaitSec * 1000) } } : {}),
         onTurnEnd: async (turn, calls) => {
           toolCallsSeen = calls;
-          if (turn === 1 && options.followup !== null) snapshot = await waitForReport(reportPath, calls, ctx.probeConfigured, 5_000, false);
+          if (turn === 1 && followupOf !== null) snapshot = await waitForReport(reportPath, calls, ctx.probeConfigured, 5_000, false);
         },
       });
       answer1 = loop.answer1;
@@ -287,7 +284,7 @@ async function executeRun(ctx: RunContext, spec: RunSpec): Promise<BenchRunRow> 
           proxyCommand: process.execPath,
           proxyArgs: [input.proxyEntry, ...proxyArgs],
           task: ctx.task,
-          followup: options.followup,
+          followup: followupOf,
           systemPromptExtra: spec.patchText,
           timeoutMs: runTimeoutMs,
         },
@@ -333,34 +330,42 @@ async function executeRun(ctx: RunContext, spec: RunSpec): Promise<BenchRunRow> 
   let duplicate: boolean | null = null;
   let toolCalls: number | null = null;
   let lookedUp: boolean | null = null;
+  let resent: boolean | null = null;
   let retryAfterViolations: number | null = null;
+  let retryBehavior: RetryBehavior | null = null;
+  let retryWaitedMs: number | null = null;
   if (valid && rep && finalFile) {
-    executions = rep.operations.reduce((n, o) => n + o.executions, 0);
-    const probe = rep.effectProbe;
-    probeConclusion = probe ? probe.conclusion : null;
-    records = probe && probe.delta !== null ? probe.delta : null;
-    truthBasis = probe && (probe.conclusion === "confirmed" || probe.conclusion === "deduplicated") ? "records" : "executions";
-    // Sonde angegeben, aber in diesem Lauf nicht verwertbar: fester deutscher Grund (kein Text des Upstreams).
-    if (ctx.probeConfigured && truthBasis === "executions") probeReason = probeReasonDe(probe ? probe.conclusion : null, probe ? probe.note : "");
-    duplicate = rep.duplicateExecutions > 0;
-    toolCalls = rep.totalCalls;
-    lookedUp = lookedUpOf(finalFile);
-    retryAfterViolations = rep.retryAfterViolations;
+    // Dieselbe Ableitung wie in `verify bench-report.json` (src/bench/run-facts.ts).
+    const facts = deriveRunFacts(finalFile, rep, ctx.probeConfigured);
+    executions = facts.executions;
+    records = facts.records;
+    probeConclusion = facts.probeConclusion;
+    truthBasis = facts.truthBasis;
+    probeReason = facts.probeReason;
+    duplicate = facts.duplicate;
+    toolCalls = facts.toolCalls;
+    lookedUp = facts.lookedUp;
+    resent = facts.resent;
+    retryAfterViolations = facts.retryAfterViolations;
+    retryBehavior = facts.retryBehavior;
+    retryWaitedMs = facts.retryWaitedMs;
   }
+  // Ein ungültiger Lauf, in dem ein Schreibvorgang schon ausgeführt war (Absturz oder Hänger nach dem Timeout): fällt aus dem Nenner, kann verzerren.
+  const invalidAfterWrite: boolean | null = valid ? null : writeExecutedOf(rep);
 
   // Ehrlichkeit: die erste Antwort gegen den Zwischenstand nach dem ersten Zug, die Schlussantwort gegen den Endstand.
-  const finalText = options.agent.kind === "command" ? (answer2 ?? answer1) : options.followup === null ? answer1 : answer2;
+  const finalText = options.agent.kind === "command" ? (answer2 ?? answer1) : followupOf === null ? answer1 : answer2;
   const claimFinal: ClaimRow = valid ? claimOf(finalText, rep) : { status: "NOT_PROVIDED", issueCode: null };
   let claimFirst: ClaimRow;
   if (!valid) claimFirst = { status: "NOT_PROVIDED", issueCode: null };
   else if (options.agent.kind === "command") claimFirst = { status: "NOT_PROVIDED", issueCode: null };
-  else if (options.followup === null) claimFirst = claimFinal;
+  else if (followupOf === null) claimFirst = claimFinal;
   else claimFirst = claimOf(answer1, (snapshot as ProxyReportFile | null)?.report ?? rep);
 
   const maxStepsReached = loop !== null && (loop.maxStepsReached.turn1 || loop.maxStepsReached.turn2);
   const durationMs = Date.now() - started;
   if (session && (session as ProxySession).stderrTail().trim() !== "" && invalid !== null) emit({ type: "proxy_stderr", tail: (session as ProxySession).stderrTail() });
-  emit({ type: "end", valid, invalidReason: invalid, durationMs, duplicate, records, executions });
+  emit({ type: "end", valid, invalidReason: invalid, durationMs, duplicate, records, executions, ...(spec.scenario === "F2" ? { retryBehavior, retryWaitedMs } : {}) });
 
   const jsonl = events.map((e) => scrub(JSON.stringify(e))).join("\n") + "\n";
   await writeFile(jsonlPath, jsonl, "utf8");
@@ -390,6 +395,9 @@ async function executeRun(ctx: RunContext, spec: RunSpec): Promise<BenchRunRow> 
     retryAfterViolations,
     toolCalls,
     lookedUp,
+    resent,
+    ...(spec.scenario === "F2" ? { retryBehavior, retryWaitedMs } : {}),
+    invalidAfterWrite,
     claimFirst,
     claimFinal,
     maxStepsReached,
@@ -434,7 +442,7 @@ async function checkProbe(
   if (probe.argsRaw !== null) {
     const parsed = parseProbeArgs(sub(probe.argsRaw));
     if (parsed === null) {
-      return `${head}--effect-probe-args ist kein JSON-Objekt (erhalten: «${scrub(probe.argsRaw).slice(0, 120)}»). Beispiel: --effect-probe-args '{"customer":"Muster AG"}'. Oder ${PROBE_OR_WITHOUT_DE}`;
+      return `${head}--effect-probe-args ist kein JSON-Objekt (erhalten: «${scrub(probe.argsRaw).slice(0, 120)}»). Beispiel: --effect-probe-args '{"customer":"Muster AG"}', ${PROBE_OR_WITHOUT_DE}`;
     }
     args = parsed;
   }
@@ -560,6 +568,15 @@ async function preflight(input: BenchRunInput, backend: ChatBackend | null, scru
 
 // ---------------------------------------------------------------- Messung
 
+/** Der Befund eines gültigen Laufs für das Protokoll, nach dem Mass seines Szenarios. */
+function resultOfRun(row: BenchRunRow): string {
+  if (row.scenario === "F2" && row.retryBehavior !== undefined && row.retryBehavior !== null) {
+    return `${RETRY_BEHAVIOR_DE[row.retryBehavior]}${typeof row.retryWaitedMs === "number" ? ` (${secondsDe(Math.round(row.retryWaitedMs / 100) / 10)} bis zum erneuten Senden)` : ""}`;
+  }
+  if (row.scenario === "F4") return row.resent === true ? "von sich aus doppelt gesendet" : "von sich aus nicht doppelt gesendet";
+  return row.duplicate ? "erneut geschrieben (Duplikat)" : "nicht erneut geschrieben";
+}
+
 async function archivePrevious(outDir: string): Promise<string | null> {
   const names = [BENCH_REPORT_NAME, "bench-report.md", "runs"];
   const present: string[] = [];
@@ -593,6 +610,8 @@ export async function runBench(input: BenchRunInput): Promise<BenchOutcome> {
   log("Vorprüfung: Proxy und Upstream starten, Werkzeuge lesen" + (backend ? ", Modell ansprechen" : "") + " …");
   const pre = await preflight(input, backend, scrub);
   if ("error" in pre) return { status: "fehler", error: pre.error };
+  // Der Digest des Modells (wenn die Schnittstelle ihn liefert), damit sich «dasselbe Modell» nachprüfen lässt; sonst null.
+  const modelDigest = options.agent.kind === "builtin" ? await fetchModelDigest({ api: options.agent.api, baseUrl: options.agent.url, model: options.agent.model, apiKey: input.apiKey }) : null;
   const writeTools = pre.classification.filter((c) => c.class === "write").map((c) => c.name);
   const readTools = pre.classification.filter((c) => c.class === "read").map((c) => c.name);
   log(`Schreib-Tools: ${writeTools.join(", ")}; Lese-Tools: ${readTools.join(", ") || "keine"}.`);
@@ -630,9 +649,7 @@ export async function runBench(input: BenchRunInput): Promise<BenchOutcome> {
         const id = `${scenario}-${condition}-${String(nr).padStart(width, "0")}`;
         const row = await executeRun(ctx, { scenario, condition, nr, id, systemPrompt: promptOf(scenario, condition), patchText: condition === "patch" ? patchTexts.get(scenario)! : "" });
         rows.push(row);
-        log(
-          `${id}: ${row.valid ? `gültig, ${row.duplicate ? "Doppelausführung" : "keine Doppelausführung"} (${row.verdict})${row.probeReason ? `; Sonde nicht verwertbar, gezählt als Ausführungen: ${row.probeReason}` : ""}` : `UNGÜLTIG: ${row.invalidReason}`} [${(row.durationMs / 1000).toFixed(1)} s]`,
-        );
+        log(`${id}: ${row.valid ? `gültig, ${resultOfRun(row)} (${row.verdict})${row.probeReason ? `; Sonde nicht verwertbar, gezählt als Ausführungen: ${row.probeReason}` : ""}` : `UNGÜLTIG: ${row.invalidReason}`} [${(row.durationMs / 1000).toFixed(1)} s]`);
         const cell = rows.filter((r) => r.scenario === scenario && r.condition === condition);
         const invalidCount = cell.filter((r) => !r.valid).length;
         if (invalidCount * 2 > options.runs) {
@@ -654,7 +671,13 @@ export async function runBench(input: BenchRunInput): Promise<BenchOutcome> {
 
   const finished = Date.now();
   const aborted = abortReason !== null;
-  const aggregates = aborted ? [] : aggregateRuns(options.scenarios, options.conditions, options.runs, rows);
+  // Einstellungen je Szenario (gesiegelt): Nachfrage nur in F1, in F2 Wartezeit und Obergrenze.
+  const scenarioSettings: ScenarioSetting[] = options.scenarios.map((scenario) =>
+    scenario === "F2"
+      ? { scenario, followup: null, retryAfterSec: options.retryAfterSec, maxRetryWaitSec: options.maxRetryWaitSec, waitTool: options.agent.kind === "builtin" }
+      : { scenario, followup: scenario === "F1" ? options.followup : null },
+  );
+  const aggregates = aborted ? [] : aggregateRuns(options.scenarios, options.conditions, options.runs, rows, scenarioSettings);
   const agent = options.agent;
   // Zählweise aus dem Ergebnis der Läufe, nicht aus der Konfiguration.
   const counting = countingOfRuns(rows, options.probe !== null);
@@ -678,6 +701,7 @@ export async function runBench(input: BenchRunInput): Promise<BenchOutcome> {
         ? {
             kind: "builtin",
             model: agent.model,
+            modelDigest,
             api: agent.api,
             urlHost: new URL(agent.url).host,
             temperature: agent.temperature,
@@ -689,6 +713,7 @@ export async function runBench(input: BenchRunInput): Promise<BenchOutcome> {
         : { kind: "command", program: basename(agent.command), argCount: agent.args.length },
     task,
     followup: options.followup,
+    scenarioSettings,
     patchLang: options.patchLang,
     prompts: options.scenarios.flatMap((scenario) => options.conditions.map((condition) => ({ scenario, condition, sha256: sha256Hex(promptOf(scenario, condition)) }))),
     patchTexts: options.scenarios.map((scenario) => ({ scenario, sha256: sha256Hex(patchTexts.get(scenario)!), text: patchTexts.get(scenario)! })),
@@ -705,10 +730,12 @@ export async function runBench(input: BenchRunInput): Promise<BenchOutcome> {
     comparison: aborted ? [] : compareConditions(aggregates),
     notes: BENCH_NOTES_DE,
   };
-  const sealed = sealBenchDocument(doc);
+  // Der Lesetext wird vor dem Siegel gerendert (er trägt die Prüfsumme der Datei nicht) und über seinen Hash mitgesiegelt.
+  const markdown = renderBenchMarkdown(doc);
+  const sealed = sealBenchDocument({ ...doc, markdown: { file: BENCH_MARKDOWN_NAME, sha256: markdownSha256(markdown) } });
   const jsonPath = join(input.outDir, BENCH_REPORT_NAME);
-  const mdPath = join(input.outDir, "bench-report.md");
+  const mdPath = join(input.outDir, BENCH_MARKDOWN_NAME);
   await writeFile(jsonPath, JSON.stringify(sealed, null, 2), "utf8");
-  await writeFile(mdPath, renderBenchMarkdown(sealed), "utf8");
+  await writeFile(mdPath, markdown, "utf8");
   return { status: aborted ? "abgebrochen" : "abgeschlossen", document: sealed, jsonPath, mdPath };
 }

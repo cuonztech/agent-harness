@@ -8,8 +8,10 @@ import type { LicenseVerdict } from "./types.js";
 import type { SchemaAuditReport } from "../types.js";
 
 export const PURCHASE_URL = "https://cuonztech.ch/agent-harness.html#audit";
-// Alte Adresse aus früheren Texten des Verifizierers; die Website leitet weiter.
+// Alte Adresse aus früheren Texten des Verifizierers (ältere Berichte) und die aktuelle Adresse im Grund des Verifizierers: Der Hinweis
+// nennt die Adresse am Ende selbst (PURCHASE_URL), darum wird sie aus dem Grund entfernt.
 const LEGACY_URL = "https://cuonztech.ch/agent-audit";
+const REASON_URL = "https://cuonztech.ch/agent-harness.html";
 
 export type ProFeature = "dossier" | "ui" | "campaign" | "bench" | "schema-audit" | "hardening";
 
@@ -46,10 +48,10 @@ export const PRO_FEATURES: Record<ProFeature, { name: string; command: string; m
     free: "Die Zusammenfassung und die Risikostufe je Tool (auch in doctor)",
   },
   hardening: {
-    name: "Der Textbaustein- und Prompt-Patch-Generator (Härtungsvorschläge)",
+    name: "Der Textbaustein- und Prompt-Patch-Generator (die auf den Lauf zugeschnittenen Härtungsvorschläge)",
     command: "proxy --report-file, report, cuonztech__get_score",
     mode: "gekürzt",
-    free: "Der Score, das Urteil und die Beobachtungen",
+    free: "Der Score, das Urteil und die Beobachtungen; der allgemeine Wortlaut der Textbausteine steht in der README und in der Ausgabe von benchmark",
   },
 };
 
@@ -61,8 +63,25 @@ export interface ProGate {
   verdict: LicenseVerdict;
 }
 
+// 0.12.0 (E3e): Ein Lizenzcode in `--license` steht in der Prozessliste (ps, Task-Manager, Win32_Process.CommandLine) und im Verlauf der
+// Shell. Ein Satz auf stderr, einmal je Prozess; nie der Code selbst. Die Umgebungsvariable AGENT_AUDIT_LICENSE steht in keiner Prozessliste.
+export const LICENSE_ON_COMMAND_LINE_HINT_DE =
+  "Hinweis: Ein Lizenzcode in --license steht in der Prozessliste und im Verlauf der Shell; setze ihn besser als Umgebungsvariable AGENT_AUDIT_LICENSE.";
+let licenseHintShown = false;
+
+export function warnLicenseOnCommandLine(explicitKey?: string): void {
+  if (licenseHintShown || typeof explicitKey !== "string" || explicitKey.trim() === "") return;
+  licenseHintShown = true;
+  try {
+    process.stderr.write(`${LICENSE_ON_COMMAND_LINE_HINT_DE}\n`);
+  } catch {
+    // stderr geschlossen: kein Grund, den Lauf abzubrechen
+  }
+}
+
 /** Löst die Lizenz auf (--license, sonst Umgebungsvariablen). Ohne gültige Lizenz ist `pro` false. */
 export function resolveProGate(licenseKey?: string): ProGate {
+  warnLicenseOnCommandLine(licenseKey);
   const verdict = resolveLicense(licenseKey);
   return { pro: verdict.valid === true, verdict };
 }
@@ -75,6 +94,7 @@ export function reasonSentence(verdict: LicenseVerdict): string {
   if (none) return "Es ist keine Lizenz hinterlegt.";
   const core = raw
     .replace(LEGACY_URL, "")
+    .replace(REASON_URL, "")
     .replace(/\s*(Lizenzen erhältlich unter|Verlängerung unter)\s*$/i, "")
     .trim()
     .replace(/\.$/, "");
@@ -91,7 +111,7 @@ export function lockedNotice(feature: ProFeature, verdict: LicenseVerdict): stri
     `Keine gültige Lizenz: ${f.name} gehört zum Pro-Umfang. ${reasonSentence(verdict)}\n` +
     `Frei bleiben: ${FREE_SCOPE_DE}.\n` +
     `Der Befehl wurde nicht ausgeführt. Lizenz: ${PURCHASE_URL}\n` +
-    `Aktivierung: --license <KEY> oder Umgebungsvariable AGENT_AUDIT_LICENSE (auch CUONZTECH_LICENSE_KEY). ${LICENSE_TERMS_DE}\n`
+    `Aktivierung: Umgebungsvariable AGENT_AUDIT_LICENSE (auch CUONZTECH_LICENSE_KEY; empfohlen, sie steht in keiner Prozessliste) oder --license <KEY>. ${LICENSE_TERMS_DE}\n`
   );
 }
 

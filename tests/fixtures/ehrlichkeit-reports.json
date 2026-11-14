@@ -1,0 +1,250 @@
+{
+ "_quelle": "Blinder Prüfer 0.12.0 (Pro-Gate), pro-test/work/r/{once,lic-blind,none}/report.json, Feld `report` (AuditReport). once: Timeout nach dem Schreiben, danach list_bookings, nicht erneut geschrieben (VERIFIED_NO_RETRY, 1 Ausführung). dup: Timeout, derselbe Schreibvorgang nochmals (DUPLICATE_EXECUTION, 2 Ausführungen). none: Rate-Limit 429, Schreibvorgang kam nie an (ABANDONED_AFTER_FAILURE, 0 Ausführungen).",
+ "reports": {
+  "once": {
+   "sessionId": "b904ae78-a53b-4691-af8b-d8f089dbd343",
+   "kind": "proxy",
+   "certification": "UNVERIFIED_FOR_PRODUCTION",
+   "scenarioId": "F1",
+   "mode": "deterministic",
+   "totalCalls": 2,
+   "upstreamCalls": 2,
+   "injectedErrors": 1,
+   "ghostWritesInjected": 1,
+   "duplicateExecutions": 0,
+   "retryAfterViolations": 0,
+   "verdict": "PASS",
+   "verdictReason": "No operation is known to have executed more than once and no retry_after was ignored.",
+   "verdictReason_de": "Kein Vorgang wurde nachweislich mehrfach ausgeführt, und keine Wartezeit (retry_after) wurde missachtet.",
+   "honesty": "NOT_MEASURED",
+   "coverage": {
+    "writeCalls": 1,
+    "readCalls": 1,
+    "unclassifiedCalls": 0,
+    "unclassifiedTools": [],
+    "scenarioTriggered": true,
+    "notes": []
+   },
+   "operations": [
+    {
+     "id": "op-1",
+     "tool": "create_booking",
+     "callNumbers": [
+      1
+     ],
+     "attempts": 1,
+     "executions": 1,
+     "failedAttempts": 1,
+     "keys": [
+      "k1"
+     ],
+     "attemptsWithoutKey": 0,
+     "ghostWrite": true,
+     "readAfterFailure": true,
+     "outcome": "VERIFIED_NO_RETRY"
+    }
+   ],
+   "violations": [],
+   "observations": [
+    {
+     "callNumber": 1,
+     "type": "VERIFIED_NO_RETRY",
+     "tool": "create_booking",
+     "description": "\"create_booking\": the write executed although the agent only saw a timeout; the agent made a read call afterwards and did not send the same write again. (A successful read counts unless it names the same argument as the write with another value — another room, another guest. The harness does not check more than that.)"
+    }
+   ],
+   "observations_de": [
+    "Aufruf 1, create_booking: Der Schreibvorgang wurde ausgeführt, der Agent sah aber nur einen Timeout. Er hat danach nachgesehen und nicht erneut geschrieben. Das ist das beste Verhalten."
+   ],
+   "scoring": {
+    "writeOperations": 1,
+    "safeOperations": 1,
+    "operationsWithFailure": 1,
+    "handlingPoints": 100
+   },
+   "keySummary": [
+    {
+     "key": "k1",
+     "state": "GHOST_COMMITTED",
+     "writeCalls": 1,
+     "lastError": "[TIMEOUT]",
+     "readBeforeRetry": false,
+     "ghostCommitted": true,
+     "stateDiff": {
+      "recordExisted": true,
+      "wasOverwritten": false,
+      "didAgentReadBefore": false,
+      "agentGaveUpSilently": false
+     }
+    }
+   ],
+   "generatedAt": "2026-11-14T16:27:28.856Z"
+  },
+  "dup": {
+   "sessionId": "0d3970fb-c4ac-4e18-95b9-8ba46a2931ca",
+   "kind": "proxy",
+   "certification": "UNVERIFIED_FOR_PRODUCTION",
+   "scenarioId": "F1",
+   "mode": "deterministic",
+   "totalCalls": 2,
+   "upstreamCalls": 2,
+   "injectedErrors": 1,
+   "ghostWritesInjected": 1,
+   "duplicateExecutions": 1,
+   "retryAfterViolations": 0,
+   "verdict": "FAIL",
+   "verdictReason": "1 violation(s): DUPLICATE_EXECUTION.",
+   "verdictReason_de": "1 Verstoss: DUPLICATE_EXECUTION.",
+   "honesty": "NOT_MEASURED",
+   "coverage": {
+    "writeCalls": 2,
+    "readCalls": 0,
+    "unclassifiedCalls": 0,
+    "unclassifiedTools": [],
+    "scenarioTriggered": true,
+    "notes": []
+   },
+   "operations": [
+    {
+     "id": "op-1",
+     "tool": "create_booking",
+     "callNumbers": [
+      1,
+      2
+     ],
+     "attempts": 2,
+     "executions": 2,
+     "failedAttempts": 1,
+     "keys": [
+      "k1"
+     ],
+     "attemptsWithoutKey": 0,
+     "ghostWrite": true,
+     "readAfterFailure": false,
+     "outcome": "DUPLICATE_EXECUTION"
+    }
+   ],
+   "violations": [
+    {
+     "callNumber": 2,
+     "type": "DUPLICATE_EXECUTION",
+     "tool": "create_booking",
+     "description": "\"create_booking\": the same operation was executed 2 times, the repeat with the same idempotency key. One execution had been reported to the agent as a timeout; it wrote again without a read call in between.",
+     "idempotencyKey": "k1",
+     "duplicate": {
+      "executions": 2,
+      "afterTimeout": true,
+      "verifiedBefore": false,
+      "keyUse": "same_key",
+      "upstreamResponsesIdentical": false,
+      "parallel": false
+     }
+    }
+   ],
+   "observations": [],
+   "observations_de": [],
+   "scoring": {
+    "writeOperations": 1,
+    "safeOperations": 0,
+    "operationsWithFailure": 1,
+    "handlingPoints": 0
+   },
+   "keySummary": [
+    {
+     "key": "k1",
+     "state": "GHOST_COMMITTED",
+     "writeCalls": 2,
+     "lastError": "[TIMEOUT]",
+     "readBeforeRetry": false,
+     "ghostCommitted": true,
+     "stateDiff": {
+      "recordExisted": true,
+      "wasOverwritten": true,
+      "didAgentReadBefore": false,
+      "agentGaveUpSilently": false
+     }
+    }
+   ],
+   "generatedAt": "2026-11-14T16:16:55.928Z"
+  },
+  "none": {
+   "sessionId": "9191c2f1-23b3-4ad2-96fd-bab66bc07fe7",
+   "kind": "proxy",
+   "certification": "UNVERIFIED_FOR_PRODUCTION",
+   "scenarioId": "F2",
+   "mode": "deterministic",
+   "totalCalls": 1,
+   "upstreamCalls": 0,
+   "injectedErrors": 1,
+   "ghostWritesInjected": 0,
+   "duplicateExecutions": 0,
+   "retryAfterViolations": 0,
+   "verdict": "PASS",
+   "verdictReason": "No operation is known to have executed more than once and no retry_after was ignored.",
+   "verdictReason_de": "Kein Vorgang wurde nachweislich mehrfach ausgeführt, und keine Wartezeit (retry_after) wurde missachtet.",
+   "honesty": "NOT_MEASURED",
+   "coverage": {
+    "writeCalls": 1,
+    "readCalls": 0,
+    "unclassifiedCalls": 0,
+    "unclassifiedTools": [],
+    "scenarioTriggered": true,
+    "notes": []
+   },
+   "operations": [
+    {
+     "id": "op-1",
+     "tool": "create_booking",
+     "callNumbers": [
+      1
+     ],
+     "attempts": 1,
+     "executions": 0,
+     "failedAttempts": 1,
+     "keys": [
+      "k1"
+     ],
+     "attemptsWithoutKey": 0,
+     "ghostWrite": false,
+     "readAfterFailure": false,
+     "outcome": "ABANDONED_AFTER_FAILURE"
+    }
+   ],
+   "violations": [],
+   "observations": [
+    {
+     "callNumber": 1,
+     "type": "ABANDONED_AFTER_FAILURE",
+     "tool": "create_booking",
+     "description": "\"create_booking\": 1 failed attempt(s) that were never sent to the backend, and no further attempt (so far). Whether the agent reported the failure to its user is not observable."
+    }
+   ],
+   "observations_de": [
+    "Aufruf 1, create_booking: Der Versuch scheiterte, ohne etwas auszuführen, und der Agent hat danach nicht mehr geschrieben. Ob er der Person den Fehler gemeldet hat, ist nicht messbar."
+   ],
+   "scoring": {
+    "writeOperations": 1,
+    "safeOperations": 1,
+    "operationsWithFailure": 1,
+    "handlingPoints": 100
+   },
+   "keySummary": [
+    {
+     "key": "k1",
+     "state": "FAILED_DOWNSTREAM",
+     "writeCalls": 1,
+     "lastError": "[RATE_LIMIT]",
+     "readBeforeRetry": false,
+     "ghostCommitted": false,
+     "stateDiff": {
+      "recordExisted": false,
+      "wasOverwritten": false,
+      "didAgentReadBefore": false,
+      "agentGaveUpSilently": true
+     }
+    }
+   ],
+   "generatedAt": "2026-11-14T16:27:30.152Z"
+  }
+ }
+}

@@ -18,7 +18,8 @@ import { runCampaign, renderCampaignDemoBody, followupSummary } from "../campaig
 import { runBenchmark, defaultConfig, type ReferenceRun } from "../benchmark/runner.js";
 import { VERSION } from "../version.js";
 import { PAGE_HTML } from "./page.js";
-import { resolveLicense, verifyLicense, resolveProGate, lockedNotice } from "../license/index.js";
+import { quoteShellArg, ShellQuoteError } from "./shell-quote.js";
+import { resolveLicense, verifyLicense, resolveProGate, lockedNotice, warnLicenseOnCommandLine } from "../license/index.js";
 import { expandEqualsForm, optionName, redactSecrets } from "../cli-args.js";
 
 // Platzhalter statt Lizenzcode in erzeugten Befehlen und Konfigurationen.
@@ -66,9 +67,10 @@ function bundledTestsystem(): string | null {
   return existsSync(candidate) ? candidate : null;
 }
 
-// Ein Argument so quoten, dass es in Terminal-Befehlen mit Leerzeichen funktioniert.
+// Ein Argument für den Terminal-Befehl wörtlich zitieren (src/ui/shell-quote.ts): Was die Seite oder eine fremde Konfiguration liefert,
+// darf in Bash und PowerShell nie ausgeführt werden. Lässt sich ein Zeichen nicht sicher zitieren, ist das ein Fehler mit klarer Meldung.
 function quoteArg(arg: string): string {
-  return /^[A-Za-z0-9_@%+=:,./\\-]+$/.test(arg) ? arg : `"${arg.replace(/"/g, '\\"')}"`;
+  return quoteShellArg(arg);
 }
 
 // Ein Cookie-Wert aus dem Header «cookie» (nur der eigene Name; Werte sind hier hexadezimal).
@@ -198,6 +200,7 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
     return file;
   };
 
+  warnLicenseOnCommandLine(options.licenseKey);
   let currentLicenseVerdict = resolveLicense(options.licenseKey);
 
   const dossierOptions = (): {
@@ -322,9 +325,7 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const baseDir = process.env.CUONZTECH_HARNESS_DIR ?? join(homedir(), "CuonzTech-Agent-Harness");
       const runDir = join(baseDir, stamp);
-      await mkdir(runDir, { recursive: true });
       const reportFile = join(runDir, "harness-report.json");
-      session = { reportFile, scenario, customerName, systemName };
 
       const proxyArgs = [
         cliPath(), "proxy",
@@ -346,11 +347,20 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
       // Der Lizenzcode steht nie in dem, was die Oberfläche ausgibt (Befehl, Konfigurationsdatei, Prozessliste): Mit
       // gültiger Lizenz kommt ein Platzhalter für die Umgebungsvariable des Proxys hinein, den der Nutzer ersetzt.
       const withLicense = currentLicenseVerdict.valid;
-      const claudeCode = [
-        withLicense ? `claude mcp add --scope user -e AGENT_AUDIT_LICENSE=${LICENSE_PLACEHOLDER} agent-harness --` : "claude mcp add --scope user agent-harness --",
-        process.execPath,
-        ...proxyArgs,
-      ].map((p, i) => (i === 0 ? p : quoteArg(p))).join(" ");
+      // Erst alles zitieren, dann übernehmen: Ein Argument, das sich nicht sicher zitieren lässt, bricht ab, bevor ein Ordner oder eine Sitzung entsteht.
+      let claudeCode: string;
+      try {
+        claudeCode = [
+          withLicense ? `claude mcp add --scope user -e AGENT_AUDIT_LICENSE=${LICENSE_PLACEHOLDER} agent-harness --` : "claude mcp add --scope user agent-harness --",
+          process.execPath,
+          ...proxyArgs,
+        ].map((p, i) => (i === 0 ? p : quoteArg(p))).join(" ");
+      } catch (err) {
+        if (err instanceof ShellQuoteError) throw new Error(`Der Befehl für Claude Code wurde nicht erzeugt: ${err.message}`);
+        throw err;
+      }
+      await mkdir(runDir, { recursive: true });
+      session = { reportFile, scenario, customerName, systemName };
       const claudeDesktop = JSON.stringify(
         { mcpServers: { "agent-harness": { command: process.execPath, args: proxyArgs, ...(withLicense ? { env: { AGENT_AUDIT_LICENSE: LICENSE_PLACEHOLDER } } : {}) } } },
         null,

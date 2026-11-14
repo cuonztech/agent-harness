@@ -171,7 +171,7 @@ describe("W1: das Siegel deckt den ganzen sichtbaren Kopf, nicht den Fliesstext"
     expect(verifyDossierContent(md.replace(explanation, "Alles bestens.")).status).toBe("MISMATCH");
   });
 
-  it("der Fliesstext der Abschnitte ist nicht gesiegelt: eine Änderung bleibt bei verify unbemerkt, auch mit --report (die Grenze steht so im Dossier und im README)", () => {
+  it("der Fliesstext der Abschnitte ist nicht gesiegelt: eine Änderung fällt nur mit --report (Neuaufbau) auf; ohne Report meldet verify TEILWEISE, nie OK (Stufe E1; die Grenze steht so im Dossier und im README)", () => {
     const file = duplicateRun();
     const { md, html } = meta(file);
     for (const text of [md, html]) {
@@ -179,13 +179,20 @@ describe("W1: das Siegel deckt den ganzen sichtbaren Kopf, nicht den Fliesstext"
       const sealAt = text.indexOf("<!-- cuonztech-agent-harness-dossier-seal:");
       const forged = text.slice(0, from) + text.slice(from, sealAt).replace(/FAIL/g, "PASS") + text.slice(sealAt);
       expect(forged).not.toBe(text);
-      // Kopf und Siegel sind unverändert, nur Abschnitte ab 1. Management Summary: verify sieht nichts.
-      expect(verifyDossierContent(forged, { report: file }).status).toBe("OK");
+      // Kopf und Siegel sind unverändert, nur Abschnitte ab 1. Management Summary: ohne Report sieht verify nichts, sagt das aber (TEILWEISE statt OK).
+      const alone = verifyDossierContent(forged);
+      expect(alone.status).toBe("PARTIAL");
+      expect(alone.scope).toContain("Fliesstext: NICHT geprüft");
+      expect(verifyDossierContent(forged, { report: file, noRerender: true }).status).toBe("PARTIAL");
+      // Mit Report wird der Fliesstext neu aufgebaut: die Änderung fällt auf.
+      expect(verifyDossierContent(forged, { report: file }).status).toBe("MISMATCH");
+      expect(verifyDossierContent(text, { report: file }).status).toBe("OK");
     }
     expect(md).toContain("Nicht gesiegelt ist der Fliesstext der Abschnitte 1 bis 6");
-    expect(md).toContain("Wer ihn ändert, bleibt bei verify unbemerkt, auch mit --report");
-    expect(verifyDossierContent(md, { report: file }).lines.join(" ")).toContain("Der Fliesstext des Dossiers wurde dabei nicht gegen die Report-Datei abgeglichen");
-    expect(verifyDossierContent(md).lines.join(" ")).toContain("Der Fliesstext der Abschnitte 1 bis 6 ist nicht gesiegelt und wurde nicht geprüft");
+    expect(md).toContain("verify meldet deshalb nur dann OK, wenn es ihn geprüft hat");
+    expect(md).not.toContain("Wer ihn ändert, bleibt bei verify unbemerkt");
+    expect(verifyDossierContent(md).lines.join(" ")).toContain("Fliesstext NICHT geprüft");
+    expect(verifyDossierContent(md, { report: file, noRerender: true }).lines.join(" ")).toContain("mit --no-rerender abgeschaltet");
   });
 
   it("Abschnitt 6 sagt nicht mehr, der Kopf und die Kernaussagen seien gesiegelt, sondern nennt die Zeilen, die Operationen, die Grenze und «Modell / Agent»", () => {
@@ -194,7 +201,7 @@ describe("W1: das Siegel deckt den ganzen sichtbaren Kopf, nicht den Fliesstext"
       expect(text).not.toContain("Gesiegelt sind die Kernaussagen und der Kopf");
       expect(text).toContain("Gesiegelt ist der Kopf dieses Dossiers");
       expect(text).toContain("Im Siegel stehen ausserdem die Operationen");
-      expect(text).toContain("verify gleicht sie nicht mit den Abschnitten ab");
+      expect(text).toContain("Mit verify --report (Neuaufbau, siehe unten) wird der Text der Abschnitte dagegen abgeglichen");
       expect(text).toContain("Der Harness erfasst das Modell und den Agenten nicht");
       expect(text).toContain("Dieses Dossier belegt nicht, mit welchem Modell oder Agenten der Lauf entstand");
     }
@@ -208,8 +215,9 @@ describe("W1: das Siegel deckt den ganzen sichtbaren Kopf, nicht den Fliesstext"
     expect(section).toContain("Session-ID");
     expect(section).toContain("Modell / Agent");
     expect(section).toContain("Fliesstext");
-    expect(section).toContain("auch mit `--report`");
-    expect(section).toContain("nicht gegen die Report-Datei abgeglichen");
+    expect(section).toContain("TEILWEISE");
+    expect(section).toContain("`--no-rerender`");
+    expect(section).toContain("Fliesstext: NICHT geprüft");
     expect(section).toContain("Hinweise direkt unter dem Urteil");
   });
 
@@ -230,9 +238,10 @@ describe("W1: das Siegel deckt den ganzen sichtbaren Kopf, nicht den Fliesstext"
         }
       }
     }
-    // Die Prüfvorlagen sind für HTML und Markdown gleich lang aufgebaut.
+    // Die Prüfvorlagen sind für HTML und Markdown gleich lang aufgebaut; HTML prüft zusätzlich <title>, Kopfzeile und Einleitung (Stufe E1),
+    // Markdown die Titelzeile: also 3 gegen 1 zusätzliche Einträge.
     const core = (extractDossierSeal(renderDossierMarkdown(verifiedRun())) as { seal: { core: Parameters<typeof dossierHeaderChecks>[0] } }).seal.core;
-    expect(dossierHeaderChecks(core).md.length).toBe(dossierHeaderChecks(core).html.length);
+    expect(dossierHeaderChecks(core).html.length).toBe(dossierHeaderChecks(core).md.length + 2);
   });
 });
 
@@ -280,8 +289,12 @@ describe("W2: ohne Sonde keine Behauptung, die nur die Sonde belegen kann", () =
       { name: "get_booking", inputSchema: { properties: { guest: { type: "string" } } } },
     ]);
     file.report!.effectProbe = { tool: "list_bookings", before: 0, after: 2, delta: 2, attempts: 2, operations: 1, conclusion: "confirmed", note: "ok" } as never;
+    // Der Satz steht nur, wenn der Agent im Lauf einen Schlüssel gesendet hat (Stufe E3, Befund B9) UND zwei Datensätze belegt sind.
+    for (const op of file.report!.operations) op.keys = ["abc123"];
     const md = renderDossierMarkdown(file);
-    expect(md).toContain("Im Lauf sind trotzdem zwei Datensätze entstanden (Wirkungs-Sonde): Das Feld allein schützt nicht.");
+    expect(md).toContain("Im Lauf sind trotzdem zwei Datensätze entstanden (Wirkungs-Sonde), obwohl der Agent einen Schlüssel gesendet hat: Das Feld allein schützt nicht.");
+    for (const op of file.report!.operations) op.keys = [];
+    expect(renderDossierMarkdown(file)).not.toContain("Das Feld allein schützt nicht");
     expect(md).toContain("Doppelausführung nachgewiesen: Die Wirkungs-Sonde hat Datensätze gezählt");
     // Ohne Sonde und ohne Dedup-Hinweis (andere Antwort): trotzdem nicht behauptet.
     const noProbe = duplicateRun('{"id":"B-2","status":"confirmed"}');

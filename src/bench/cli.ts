@@ -5,6 +5,8 @@ import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { lockedNotice, resolveProGate } from "../license/index.js";
 import { VERSION } from "../version.js";
+import { redactSecrets } from "../cli-args.js";
+import { describeFsError, fileInPathAbove } from "../fs-errors.js";
 import { BENCH_HELP, BENCH_USAGE, DEFAULT_SYSTEM_PROMPT_DE, parseBenchArgs, type BenchOptions } from "./args.js";
 import { runBench, type BenchRunInput } from "./run.js";
 import { summaryLines } from "./report.js";
@@ -13,32 +15,75 @@ const WARNING_DE =
   "ACHTUNG: bench führt die Schreibvorgänge des Agenten wirklich am Upstream aus und löst absichtlich Fehler, Wiederholungen und Verzögerungen aus. " +
   "Nur Testsystem mit synthetischen Daten, keine Produktivumgebung (LICENSE Ziffer 4a). Mit --allow-writes bestätigst du das.";
 
-const quote = (s: string): string => (/^[\w.:/@=,-]+$/.test(s) ? s : JSON.stringify(s));
+// Einfache Anführungszeichen: gelten in bash und PowerShell 7 und schützen Klammern, Leerzeichen und spitze Klammern der Platzhalter.
+const quote = (s: string): string => (/^[\w.:/@=,+-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
 
-/** Der Befehl, der die Messung wiederholt: ohne Schlüssel, ohne Lizenz, ohne Pfade und weitere Argumente des Upstreams. */
+const leafOf = (path: string): string => path.split(/[\\/]/).filter((p) => p !== "").pop() ?? path;
+const isPathLike = (a: string): boolean => /^[A-Za-z]:[\\/]/.test(a) || a.startsWith("\\\\") || a.startsWith("/") || /^\.{1,2}[\\/]/.test(a) || (/[\\/]/.test(a) && !/^-/.test(a));
+const SECRET_FLAG = /(key|token|secret|passw|auth|bearer)/i;
+
+/** Ein Argument für den Befehl: lokale Pfade werden Platzhalter (mit dem Dateinamen), Werte hinter Schlüssel-Optionen gehen nicht in den Befehl. */
+function placeholderArg(arg: string, previous: string | undefined, pathName: string): string {
+  const eq = arg.startsWith("-") ? arg.indexOf("=") : -1;
+  if (eq !== -1) {
+    const name = arg.slice(0, eq);
+    const value = arg.slice(eq + 1);
+    if (SECRET_FLAG.test(name)) return `${name}=<Wert>`;
+    return isPathLike(value) ? `${name}=<${pathName}>/${leafOf(value)}` : redactSecrets(arg);
+  }
+  if (previous !== undefined && previous.startsWith("-") && !previous.includes("=") && SECRET_FLAG.test(previous)) return "<Wert>";
+  return isPathLike(arg) ? `<${pathName}>/${leafOf(arg)}` : redactSecrets(arg);
+}
+
+/** Der Wert einer Umgebungsvariable des Upstreams: nur Werte aus den Platzhaltern des Harness ({RUN_DIR}, {RUN_ID}, mit Dateiendung) bleiben, jeder andere Wert steht als «<Wert>». */
+function placeholderEnv(entry: [string, string]): string {
+  const [name, value] = entry;
+  return `${name}=${/^(?:(?:\{RUN_DIR\}[\\/])?\{RUN_ID\}|\{RUN_DIR\}[\\/]?)[\w.-]*$/.test(value) ? value : "<Wert>"}`;
+}
+
+export const REPRODUCTION_NOTE_DE =
+  "(Lokale Pfade stehen als Platzhalter in spitzen Klammern, zum Beispiel <Pfad-zum-Testsystem>; vor dem Ausführen durch deine Pfade ersetzen. Werte von Umgebungsvariablen des Upstreams stehen als <Wert>, bei --api-key-env nur der Name der Variable. Nicht im Befehl: Lizenzcode (--license oder Umgebungsvariable AGENT_AUDIT_LICENSE) und API-Schlüssel.)";
+
+/**
+ * Der Befehl, der die Messung wiederholt, aus den tatsächlich verwendeten Optionen: ohne Lizenzcode und API-Schlüsselwert, Umgebungsvariablen
+ * nur als Name, lokale Pfade als lesbare Platzhalter (der Text darunter sagt es).
+ */
 export function reproductionCommand(options: BenchOptions, task: string | null, followup: string | null): string {
-  const parts: string[] = ["cuonztech-agent-harness", "bench", "--upstream-command", basename(options.upstream.command)];
-  const script = options.upstream.args.find((a) => !a.startsWith("-"));
-  if (script !== undefined) parts.push("--upstream-arg", basename(script));
+  const up = options.upstream;
+  const parts: string[] = ["cuonztech-agent-harness", "bench", "--upstream-command", leafOf(up.command)];
+  up.args.forEach((a, i) => parts.push("--upstream-arg", placeholderArg(a, up.args[i - 1], "Pfad-zum-Testsystem")));
+  if (up.cwd !== null) parts.push("--upstream-cwd", "<Arbeitsordner-des-Testsystems>");
+  for (const entry of Object.entries(up.env)) parts.push("--upstream-env-var", placeholderEnv(entry));
   if (options.probe) {
     parts.push("--effect-probe", options.probe.tool);
+    if (options.probe.argsRaw !== null) parts.push("--effect-probe-args", redactSecrets(options.probe.argsRaw));
     if (options.probe.countPath !== null) parts.push("--effect-count", options.probe.countPath);
     if (options.probe.tools.length > 0) parts.push("--effect-tools", options.probe.tools.join(","));
   }
+  if (options.writeTools) parts.push("--write-tools", options.writeTools.join(","));
+  if (options.readTools) parts.push("--read-tools", options.readTools.join(","));
+  if (options.keyFields) parts.push("--key-fields", options.keyFields.join(","));
   parts.push("--allow-writes");
   const agent = options.agent;
   if (agent.kind === "builtin") {
     parts.push("--model", agent.model, "--api", agent.api, "--url", new URL(agent.url).origin);
+    if (agent.apiKeyEnv !== null) parts.push("--api-key-env", agent.apiKeyEnv);
+    if (agent.systemPromptFile !== null) parts.push("--system-prompt-file", "<Pfad-zur-System-Prompt-Datei>");
     if (agent.temperature !== null) parts.push("--temperature", String(agent.temperature));
     if (agent.think !== null) parts.push("--think", agent.think);
     parts.push("--max-steps", String(agent.maxSteps));
   } else {
-    parts.push("--agent-command", basename(agent.command));
+    parts.push("--agent-command", leafOf(agent.command));
+    agent.args.forEach((a, i) => parts.push("--agent-arg", placeholderArg(a, agent.args[i - 1], "Pfad-zum-Agenten")));
   }
-  if (task !== null) parts.push("--task", task);
-  parts.push("--followup", followup === null ? "none" : followup);
+  if (task !== null) parts.push("--task", redactSecrets(task));
+  // Die Nachfrage gehört zu F1: Ohne F1 gibt es sie nicht (und die Option gilt dann nicht).
+  if (options.scenarios.includes("F1")) parts.push("--followup", followup === null ? "none" : redactSecrets(followup));
   parts.push("--scenario", options.scenarios.join(","), "--conditions", options.conditions.join(","), "--patch-lang", options.patchLang, "--runs", String(options.runs));
-  return `${parts.map(quote).join(" ")}\n(Weggelassen: Pfade und weitere Argumente des Upstreams, Umgebungsvariablen, Lizenz und API-Schlüssel.)`;
+  if (options.scenarios.includes("F2")) parts.push("--retry-after", String(options.retryAfterSec), "--max-retry-wait", String(options.maxRetryWaitSec));
+  parts.push("--run-timeout", String(options.runTimeoutSec), "--step-timeout", String(options.stepTimeoutSec), "--out", "<Ausgabeordner>");
+  return `${parts.map(quote).join(" ")}
+${REPRODUCTION_NOTE_DE}`;
 }
 
 function stamp(): string {
@@ -100,6 +145,12 @@ export async function runBenchMode(argv: string[], proxyEntry?: string): Promise
 
   // Ausgabeordner: nie ein bestehender, nicht leerer Ordner ohne --force.
   const outDir = resolve(options.out ?? `bench-${stamp()}`);
+  // Liegt der Pfad unter einer Datei, entstünde der Ordner nie: vor der Messung melden (sonst «Fatal: ENOTDIR» nach dem Start).
+  const blocking = fileInPathAbove(outDir);
+  if (blocking !== null) {
+    process.stderr.write(`Fehler: --out ${outDir} liegt unter einer Datei (${blocking}); ein Teil des Pfads ist kein Ordner. Wähle einen Ordner, der existiert oder angelegt werden kann.\nEs wurde nichts geschrieben.\n`);
+    return 1;
+  }
   if (existsSync(outDir)) {
     const info = await stat(outDir);
     if (!info.isDirectory()) {
@@ -138,9 +189,19 @@ export async function runBenchMode(argv: string[], proxyEntry?: string): Promise
     signal: controller.signal,
     reproduction: reproductionCommand(options, options.task, options.followup),
   };
-  const outcome = await runBench(input);
-  process.off("SIGINT", onSignal);
-  process.off("SIGTERM", onSignal);
+  let outcome: Awaited<ReturnType<typeof runBench>>;
+  try {
+    outcome = await runBench(input);
+  } catch (err) {
+    // Ein Pfad, der sich nicht anlegen oder beschreiben lässt, ist kein Programmfehler: ein Satz mit Ursache.
+    const friendly = describeFsError(err, "de");
+    if (friendly === null) throw err;
+    process.stderr.write(`Fehler: ${friendly}\n`);
+    return 1;
+  } finally {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+  }
 
   if (outcome.status === "fehler") {
     process.stderr.write(`Fehler: ${outcome.error}\nEs wurde nichts geschrieben.\n`);

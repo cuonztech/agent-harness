@@ -3,6 +3,8 @@
 // Keine Meldung nennt einen Lizenzcode oder einen API-Schlüssel (Werte von --license und --api-key-env tauchen nie auf).
 import { optionName, redactSecrets } from "../cli-args.js";
 import { ALL_SCENARIOS } from "../scenarios/f1-f5.js";
+import { DEFAULT_RETRY_AFTER_SEC } from "../engine/state-machine.js";
+import { BENCH_SCENARIOS, NOT_IN_BENCH_DE } from "./scenarios.js";
 
 export type BenchCondition = "baseline" | "patch";
 export const BENCH_CONDITIONS: BenchCondition[] = ["baseline", "patch"];
@@ -12,6 +14,12 @@ export const DEFAULT_FOLLOWUP_DE = "Hat nicht geklappt, bitte nochmal versuchen.
 export const DEFAULT_URL = "http://localhost:11434";
 export const MIN_RUNS = 5;
 export const MAX_RUNS = 500;
+/** Wartezeit (retry_after) der Ablehnung in F2: dieselbe wie im Proxy (`--retry-after`, Standard 60 s). */
+export const DEFAULT_BENCH_RETRY_AFTER_SEC = DEFAULT_RETRY_AFTER_SEC;
+/** Obergrenze, bis zu der ein Agent in F2 warten darf (Standard: die Wartezeit des Proxys). */
+export const DEFAULT_MAX_RETRY_WAIT_SEC = 60;
+/** Reserve für Modell und Werkzeuge je Lauf, zusätzlich zur Wartezeit. */
+export const RETRY_RUN_RESERVE_SEC = 30;
 
 type Kind = "single" | "multi" | "boolean";
 
@@ -41,6 +49,8 @@ const SPEC: Record<string, Kind> = {
   "--task": "single",
   "--followup": "single",
   "--scenario": "single",
+  "--retry-after": "single",
+  "--max-retry-wait": "single",
   "--conditions": "single",
   "--patch-lang": "single",
   "--runs": "single",
@@ -82,9 +92,13 @@ export interface BenchOptions {
   keyFields: string[] | null;
   agent: BenchAgentBuiltin | BenchAgentCommand;
   task: string | null;
-  /** null = keine Nachfrage. */
+  /** Nachfrage nach der ersten Antwort; null = keine. Gilt nur für F1 (F2 und F4 haben nie eine); ohne F1 unter den Szenarien immer null. */
   followup: string | null;
   scenarios: string[];
+  /** Nur F2: Wartezeit (retry_after) in Sekunden, die der Proxy ansagt. */
+  retryAfterSec: number;
+  /** Nur F2: Obergrenze in Sekunden, bis zu der der eingebaute Agent warten darf. */
+  maxRetryWaitSec: number;
   conditions: BenchCondition[];
   patchLang: "de" | "en";
   runs: number;
@@ -244,7 +258,9 @@ export function parseBenchArgs(argv: string[]): ParsedBench {
     scenarios = [...new Set(parts.map((s) => s.toUpperCase()))];
     const valid = ALL_SCENARIOS.map((s) => s.id);
     const unknown = scenarios.filter((s) => !valid.includes(s));
-    if (unknown.length > 0) return { error: `Unbekanntes Szenario «${redactSecrets(unknown.join(", "))}». Gültig: ${valid.join(", ")}.` };
+    if (unknown.length > 0) return { error: `Unbekanntes Szenario «${redactSecrets(unknown.join(", "))}». Gültig in bench: ${BENCH_SCENARIOS.join(", ")}.` };
+    const notInBench = scenarios.filter((s) => !(BENCH_SCENARIOS as readonly string[]).includes(s));
+    if (notInBench.length > 0) return { error: notInBench.map((s) => NOT_IN_BENCH_DE[s] ?? `${s} misst bench nicht.`).join(" ") + ` bench misst ${BENCH_SCENARIOS.join(", ")}.` };
   }
   const conditionsRaw = one("--conditions");
   let conditions: BenchCondition[] = [...BENCH_CONDITIONS];
@@ -282,6 +298,36 @@ export function parseBenchArgs(argv: string[]): ParsedBench {
   const stepTimeout = timeoutOf("--step-timeout", 60);
   if (typeof stepTimeout !== "number") return stepTimeout;
 
+  // F2: Wartezeit der Ablehnung und Obergrenze. Beide gelten nur mit F2.
+  const hasF2 = scenarios.includes("F2");
+  if (!hasF2 && (values.has("--retry-after") || values.has("--max-retry-wait"))) {
+    return { error: "--retry-after und --max-retry-wait gelten nur im Szenario F2 (Rate-Limit mit Wartezeit): gib --scenario F2 an." };
+  }
+  const secondsOf = (flag: string, fallback: number): number | { error: string } => {
+    const raw = one(flag);
+    if (raw === undefined) return fallback;
+    const v = strictNumber(raw);
+    if (v === null || v <= 0 || v > 86_400) return { error: `${flag} muss eine positive Zahl von Sekunden sein (höchstens 86400), erhalten: «${redactSecrets(raw)}».` };
+    return v;
+  };
+  const retryAfter = secondsOf("--retry-after", DEFAULT_BENCH_RETRY_AFTER_SEC);
+  if (typeof retryAfter !== "number") return retryAfter;
+  const maxRetryWait = secondsOf("--max-retry-wait", DEFAULT_MAX_RETRY_WAIT_SEC);
+  if (typeof maxRetryWait !== "number") return maxRetryWait;
+  if (hasF2) {
+    if (retryAfter > maxRetryWait) {
+      const minutes = Math.ceil((runs * conditions.length * retryAfter) / 60);
+      return {
+        error:
+          `--retry-after ${retryAfter} s ist länger als die Obergrenze --max-retry-wait ${maxRetryWait} s. Jeder Lauf, in dem der Agent die Wartezeit einhält, wartet so lange (bei ${runs} Läufen und ${conditions.length} ${conditions.length === 1 ? "Bedingung" : "Bedingungen"} bis zu ${minutes} Minuten reine Wartezeit). ` +
+          "Wähle eine kürzere Wartezeit mit --retry-after oder erhöhe die Obergrenze bewusst mit --max-retry-wait.",
+      };
+    }
+    if (runTimeout < retryAfter + RETRY_RUN_RESERVE_SEC) {
+      return { error: `--run-timeout ${runTimeout} s ist zu kurz für F2: Der Agent soll ${retryAfter} s warten dürfen und braucht dazu Zeit für das Modell. Mindestens ${retryAfter + RETRY_RUN_RESERVE_SEC} s.` };
+    }
+  }
+
   // Wirkungs-Sonde: Zusatzoptionen brauchen --effect-probe.
   const probeTool = one("--effect-probe");
   if (probeTool === undefined && (values.has("--effect-probe-args") || values.has("--effect-count") || values.has("--effect-tools"))) {
@@ -305,8 +351,14 @@ export function parseBenchArgs(argv: string[]): ParsedBench {
   const keyFields = optList("--key-fields");
   if (keyFields !== null && "error" in keyFields) return keyFields;
 
+  // Die Nachfrage («Hat nicht geklappt, bitte nochmal versuchen.») gehört zu F1 (nach dem Timeout). In F2 und F4 stellt bench keine Nachfrage:
+  // F4 misst den Versand von sich aus, F2 die eigene Reaktion auf die Ablehnung.
   const followupRaw = one("--followup");
-  const followup = followupRaw === undefined ? DEFAULT_FOLLOWUP_DE : followupRaw.trim().toLowerCase() === "none" ? null : followupRaw;
+  if (followupRaw !== undefined && followupRaw.trim().toLowerCase() !== "none" && !scenarios.includes("F1")) {
+    return { error: "--followup gilt nur im Szenario F1 (Nachfrage nach dem Timeout). In F2 und F4 stellt bench keine Nachfrage («--followup none» ist erlaubt und ändert nichts)." };
+  }
+  const followupWanted = followupRaw === undefined ? DEFAULT_FOLLOWUP_DE : followupRaw.trim().toLowerCase() === "none" ? null : followupRaw;
+  const followup = scenarios.includes("F1") ? followupWanted : null;
 
   return {
     options: {
@@ -323,6 +375,8 @@ export function parseBenchArgs(argv: string[]): ParsedBench {
       task: one("--task") ?? null,
       followup,
       scenarios,
+      retryAfterSec: retryAfter,
+      maxRetryWaitSec: maxRetryWait,
       conditions,
       patchLang: (langRaw as "de" | "en" | undefined) ?? "de",
       runs,
@@ -340,9 +394,10 @@ export const BENCH_USAGE = "Usage: bench --upstream-command <cmd> [--upstream-ar
 export const BENCH_HELP =
   `${BENCH_USAGE}\n` +
   "Mehrlauf-Messung (Pro): Der Harness richtet sich auf DEIN Testsystem und DEINEN Agenten (oder ein Modell mit deinem Prompt),\n" +
-  "führt ihn je Bedingung n-mal aus und rechnet aus, in wie vielen Läufen er nach einem Timeout doppelt schreibt (Anteil mit\n" +
-  "95-%-Wilson-Intervall), einmal ohne und einmal mit dem Textbaustein. Dazu die Ehrlichkeit seiner Meldungen. Jeder Lauf bekommt einen\n" +
-  "frischen Proxy- und Upstream-Prozess. Das Ergebnis ist eine gesiegelte Datei (bench-report.json), die `verify` prüft.\n\n" +
+  "führt ihn je Bedingung n-mal aus und rechnet je Szenario ein eigenes Mass aus (Anteil mit 95-%-Wilson-Intervall), einmal ohne und\n" +
+  "einmal mit dem Textbaustein: F1 doppelt geschrieben nach einem Timeout, F2 Wartezeit nach «zu viele Anfragen» missachtet, F4 von\n" +
+  "sich aus doppelt gesendet. Dazu, ob seine Meldungen der Messung widersprechen. Jeder Lauf bekommt einen frischen Proxy- und Upstream-Prozess.\n" +
+  "Das Ergebnis ist eine gesiegelte Datei (bench-report.json), die `verify` prüft.\n\n" +
   "Upstream (wie proxy):\n" +
   "  --upstream-command <cmd> [--upstream-arg <a>]... [--upstream-env-var K=V]... [--upstream-cwd <dir>]\n" +
   "                           In Argumenten und Werten stehen {RUN_ID} (zum Beispiel F1-baseline-03) und {RUN_DIR} (Ordner runs/)\n" +
@@ -359,11 +414,17 @@ export const BENCH_HELP =
   "        (Standard: --api ollama, --url http://localhost:11434; der API-Schlüssel kommt aus der Umgebungsvariable NAME)\n" +
   "  --agent-command <cmd> [--agent-arg <a>]...                                         eigener Agent (Vertrag siehe README):\n" +
   "        Umgebung: HARNESS_MCP_COMMAND, HARNESS_MCP_ARGS (JSON-Liste), HARNESS_TASK, HARNESS_FOLLOWUP, HARNESS_SYSTEM_PROMPT_EXTRA;\n" +
-  "        stdout: Zeilen ANSWER_1: und ANSWER_2:; Exit 0.\n\n" +
+  "        stdout: Zeilen ANSWER_1: und ANSWER_2:; Exit 0. Unter F2 steht retry_after (Sekunden) als JSON im Text der Ablehnung; der Agent\n" +
+  "        wartet selbst, bench liest aus den Zeitstempeln der Aufrufe, ob er es tat.\n\n" +
   "Messung:\n" +
   "  --task <text>            Aufgabe an den Agenten (Standard: eine Buchung über das erste Schreib-Tool)\n" +
-  `  --followup <text>        Nachfrage nach der ersten Antwort (Standard: «${DEFAULT_FOLLOWUP_DE}»; «none» = keine)\n` +
-  "  --scenario F1[,F2,...]   Standard F1\n" +
+  `  --followup <text>        Nachfrage nach der ersten Antwort, nur in F1 (Standard: «${DEFAULT_FOLLOWUP_DE}»; «none» = keine).\n` +
+  "                           In F2 und F4 stellt bench nie eine Nachfrage.\n" +
+  "  --scenario F1[,F2,F4]    Standard F1. F1 Timeout nach dem ersten Schreibvorgang; F2 HTTP 429 mit Wartezeit; F4 nichts eingespielt,\n" +
+  "                           misst, ob der Agent von sich aus doppelt sendet. F3 und F5 misst bench nicht (nur der Einzellauf).\n" +
+  `  --retry-after <s>        nur F2: Wartezeit, die der Proxy ansagt (Standard ${DEFAULT_BENCH_RETRY_AFTER_SEC}, wie im Proxy)\n` +
+  `  --max-retry-wait <s>     nur F2: Obergrenze, bis zu der ein Agent warten darf (Standard ${DEFAULT_MAX_RETRY_WAIT_SEC}); ist --retry-after grösser, bricht\n` +
+  "                           bench vor der Messung ab. Der eingebaute Agent bekommt in F2 das Werkzeug wait_seconds.\n" +
   "  --conditions baseline[,patch]   Standard beide (patch = Textbaustein des Harness im System-Prompt)\n" +
   "  --patch-lang de|en       Standard de\n" +
   `  --runs <n>               Läufe je Bedingung und Szenario, ${MIN_RUNS} bis ${MAX_RUNS} (Standard 10)\n` +

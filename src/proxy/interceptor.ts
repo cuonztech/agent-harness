@@ -59,6 +59,18 @@ export interface ProxyConfig {
   effectProbe?: EffectProbeConfig;
 }
 
+// Variables that carry the harness's own licence; never handed to the upstream process by inheritance.
+const WITHHELD_FROM_UPSTREAM = ["AGENT_AUDIT_LICENSE", "AGENT_AUDIT_LICENSE_PUBLIC_KEY", "AGENT_AUDIT_ALLOW_TEST_KEY", "CUONZTECH_LICENSE_KEY", "CPCG_LICENSE_KEY"];
+
+export function upstreamBaseEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (v === undefined || WITHHELD_FROM_UPSTREAM.includes(k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 export interface UpstreamConfig {
   command: string;
   args?: string[];
@@ -284,8 +296,10 @@ export class ProxyInterceptor {
       // Inherit the full parent environment (same as any normal child
       // process spawn) instead of the SDK's restrictive default allowlist,
       // then layer --upstream-env on top for additions/overrides.
+      // The licence variables stay with the harness: the upstream is the system
+      // under test (possibly third-party code) and has no business seeing them.
       env: {
-        ...(process.env as Record<string, string>),
+        ...upstreamBaseEnv(process.env),
         ...this.config.upstream.env,
       },
       stderr: "pipe",

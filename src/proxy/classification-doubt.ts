@@ -120,6 +120,19 @@ export function descriptionOpensWithWriteVerb(description: string): boolean {
   return !tokens.slice(1, 1 + NEGATION_AFTER + 1).some((t) => NEGATIONS.has(t));
 }
 
+// 0.12.0 (E3c): «Creates a payment. Read-only, does not modify anything.» Die Aussage steht nicht im ersten Satz, sondern in einem späteren,
+// der mit ihr beginnt. Nur Sätze, die selbst mit der Aussage über das Tool beginnen, zählen («The id field is read-only» beginnt anders und
+// betrifft einen Parameter). Eine Verneinung über bestehende Daten («Does not change existing bookings») ist keine solche Aussage, und «Has no side
+// effects» allein bleibt wie bisher unbeachtet (nur der erste Satz zählt dort; siehe tests/classification-doubt.test.ts).
+const READ_ONLY_SENTENCE =
+  /^(this (tool|call|function|operation|endpoint|method|action) (is |only |just |does )?(read[- ]?only|only reads|just reads|reads only|not (modify|change|write|alter) anything)|read[- ]?only\b|only reads\b|(does not|doesn't|do not|don't) (modify|change|write|alter) (anything|any data|any state|any records?)|(modifies|changes|writes|alters) nothing|nur lesend|nur lesezugriff|schreibgesch(ü|ue)tzt|(ändert|aendert|verändert|veraendert|schreibt) nichts)/;
+
+export function descriptionSaysReadOnlyLater(description: string): boolean {
+  const text = description.slice(0, MAX_DESCRIPTION).replace(/\s+/g, " ").trim();
+  const sentences = text.split(/(?<=[.!?])\s+/).slice(1);
+  return sentences.some((s) => READ_ONLY_SENTENCE.test(s.trim().toLowerCase()));
+}
+
 export function descriptionSaysReadOnly(description: string): boolean {
   const sentence = firstSentence(description);
   return READ_ONLY_PHRASES.some((p) => sentence.includes(p));
@@ -195,6 +208,13 @@ export function classificationDoubtText(tool: Tool, cls: ToolClass, source: stri
       return {
         en: "taken for a write by its name, but its description says it only reads — calls to it may be treated as writes (set --read-tools or the readOnlyHint annotation)",
         de: "nach dem Namen als Schreib-Tool eingeordnet, die Beschreibung sagt aber, dass es nur liest: Aufrufe können als Schreibvorgang gewertet werden (mit --read-tools oder der Annotation readOnlyHint festlegen)",
+      };
+    }
+    // 0.12.0 (E3c): the read-only statement stands in a later sentence ("Creates a payment. Read-only, does not modify anything.").
+    if (descriptionSaysReadOnlyLater(description)) {
+      return {
+        en: "taken for a write by its name, but a later sentence of its description says it only reads — calls to it may be treated as writes (set --read-tools or the readOnlyHint annotation)",
+        de: "nach dem Namen als Schreib-Tool eingeordnet, ein späterer Satz der Beschreibung sagt aber, dass es nur liest: Aufrufe können als Schreibvorgang gewertet werden (mit --read-tools oder der Annotation readOnlyHint festlegen)",
       };
     }
     // 0.11.1: "update_status_view": "Shows the current status view." The description opens with a read verb and names

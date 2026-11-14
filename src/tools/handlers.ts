@@ -413,7 +413,7 @@ export function handleGetScore(args: { session_id: string; format?: "json" | "ma
   const patches = withPatches ? generatePatches([report], score) : [];
   const format = args.format ?? "markdown";
   const lockedNote =
-    "Keine gültige Lizenz: Die Härtungsvorschläge (Textbausteine) gehören zum Pro-Umfang. " +
+    "Keine gültige Lizenz: Die auf diesen Lauf zugeschnittenen Härtungsvorschläge (Textbausteine) gehören zum Pro-Umfang; der allgemeine Wortlaut ist frei (README, benchmark). " +
     "Score und Urteil sind vollständig. Lizenz: https://cuonztech.ch/agent-harness.html#audit";
 
   const output =

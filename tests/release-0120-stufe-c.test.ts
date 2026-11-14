@@ -130,7 +130,10 @@ describe("C1: verify --rerender prüft den Fliesstext gegen die Report-Datei", (
   it("mit Mehrlauf-Kapitel und Antwort des Agenten: Kapitel aus dem Bench-Bericht, Antwort aus dem Siegel", () => {
     const opts = { customerName: "Muster AG", systemName: "Testsystem", limited: false, bench: coreOf(realBench), agentResponse: "Die Buchung wurde erfolgreich angelegt." };
     for (const text of [renderDossierMarkdown(proxyReport, opts), renderDossierHtml(proxyReport, opts)]) {
-      expect(verifyDossierContent(text, { report: proxyReport, rerender: true }).status).toBe("OK");
+      // Ohne --bench ist das Kapitel nicht gegen den Bench-Bericht abgeglichen: TEILWEISE (Stufe E1), der Fliesstext selbst ist geprüft.
+      const withoutBench = verifyDossierContent(text, { report: proxyReport, rerender: true });
+      expect(withoutBench.status, withoutBench.lines.join("\n")).toBe("PARTIAL");
+      expect(withoutBench.scope).toContain("Fliesstext: geprüft");
       const withBench = verifyDossierContent(text, { report: proxyReport, bench: realBench as unknown as Record<string, unknown>, rerender: true });
       expect(withBench.status, withBench.lines.join("\n")).toBe("OK");
       expect(withBench.lines.join(" ")).toContain("und dem Bench-Bericht");
@@ -190,13 +193,15 @@ describe("C1: verify --rerender prüft den Fliesstext gegen die Report-Datei", (
     // 4. Abschnitt 3 ganz gelöscht
     const c = verifyDossierContent(md.slice(0, s3.start) + md.slice(s3.end), { report: proxyReport, rerender: true });
     expect(c.status).toBe("MISMATCH");
-    expect(c.lines.join("\n")).toContain("fehlt im Dossier");
+    // Der gelöschte Abschnitt steht im Siegel: schon die Prüfung der Abschnitte (vor dem Neuaufbau) meldet es.
+    expect(c.lines.join("\n")).toContain("Die Abschnitte des Dossiers weichen vom gesiegelten Kern ab");
+    expect(c.lines.join("\n")).toContain("Forensische Aufruf-Zeitleiste");
     // 5. ein eingeschobener Abschnitt
     const sealAt = md.indexOf("<!-- cuonztech-agent-harness-dossier-seal");
     const d = verifyDossierContent(`${md.slice(0, sealAt)}\n<a id="extra"></a>\n\n## Zusatz\n\nAlles bestens.\n\n${md.slice(sealAt)}`, { report: proxyReport, rerender: true });
     expect(d.status).toBe("MISMATCH");
-    // Ohne --rerender bleibt dieselbe Änderung unbemerkt (die dokumentierte Grenze von verify ohne --rerender).
-    expect(verifyDossierContent(md.slice(0, s1.start) + tamperedMatrix + md.slice(s1.end), { report: proxyReport }).status).toBe("OK");
+    // Ohne Neuaufbau (--no-rerender) bleibt dieselbe Änderung unbemerkt, aber verify meldet dann nicht OK, sondern TEILWEISE (Stufe E1).
+    expect(verifyDossierContent(md.slice(0, s1.start) + tamperedMatrix + md.slice(s1.end), { report: proxyReport, noRerender: true }).status).toBe("PARTIAL");
   });
 
   it("HTML: eine geänderte Zahl im Fliesstext wird gefunden, auch im Methodenteil", () => {
@@ -217,7 +222,7 @@ describe("C1: verify --rerender prüft den Fliesstext gegen die Report-Datei", (
     expect(verifyDossierContent(spaced, { report: proxyReport, rerender: true }).status).toBe("OK");
   });
 
-  it("Dossiers aus 0.11.x (Siegel ohne `render`) sind «nicht neu aufbaubar»: klare Meldung, Exit-Code 1", async () => {
+  it("Dossiers aus 0.11.x (Siegel ohne `render`) sind «nicht neu aufbaubar»: klare Meldung, TEILWEISE (Exit-Code 2), nie OK", async () => {
     const md = renderDossierMarkdown(proxyReport, { limited: false });
     const extracted = extractDossierSeal(md);
     if ("error" in extracted) throw new Error("kein Siegel");
@@ -226,18 +231,19 @@ describe("C1: verify --rerender prüft den Fliesstext gegen die Report-Datei", (
     const sealed = sealDossierCore(core as DossierCore);
     const old = md.slice(0, md.lastIndexOf("<!-- cuonztech-agent-harness-dossier-seal")) + sealToComment(sealed) + "\n";
     const r = verifyDossierContent(old, { report: proxyReport, rerender: true });
-    expect(r.status).toBe("NOT_VERIFIABLE");
+    expect(r.status).toBe("PARTIAL");
     expect(r.lines.join(" ")).toContain("Nicht neu aufbaubar");
     expect(r.lines.join(" ")).toContain("Harness < 0.12.0");
-    // Ohne --rerender prüft dasselbe Dossier weiter normal.
-    expect(verifyDossierContent(old, { report: proxyReport }).status).toBe("OK");
+    // Auch mit --report allein (der Neuaufbau läuft automatisch) bleibt es TEILWEISE; Siegel, Kopf und Report-Datei sind geprüft.
+    expect(verifyDossierContent(old, { report: proxyReport }).status).toBe("PARTIAL");
+    expect(verifyDossierContent(old, { report: proxyReport, noRerender: true }).status).toBe("PARTIAL");
     const dir = await tmp();
     const file = join(dir, "alt.md");
     await writeFile(file, old, "utf8");
     await writeFile(join(dir, "report.json"), JSON.stringify(proxyReport), "utf8");
     const run = await cli(["verify", file, "--report", join(dir, "report.json"), "--rerender"], freeProcessEnv());
-    expect(run.code).toBe(1);
-    expect(run.out).toContain("NICHT PRÜFBAR");
+    expect(run.code).toBe(2);
+    expect(run.out).toContain("TEILWEISE");
     expect(run.out).toContain("Nicht neu aufbaubar");
   });
 
@@ -292,7 +298,7 @@ describe("C1: verify --rerender prüft den Fliesstext gegen die Report-Datei", (
 
   it("das Dossier selbst sagt, was --rerender kann und was nicht", () => {
     const md = renderDossierMarkdown(proxyReport, { limited: false });
-    expect(md).toContain("--rerender");
+    expect(md).toContain("--no-rerender");
     expect(md).toContain("kein Dritter bestätigt es");
     // Im Fliesstext des Abschnitts 6 stehen keine maskierten spitzen Klammern (Beispiel-Dateinamen statt <Dossier-Datei>).
     expect(md.slice(md.indexOf("## 6."))).not.toContain("&lt;Dossier");
@@ -706,7 +712,7 @@ describe("C4: Dossier-Details", () => {
 
   it("C4a: Report ohne die Felder (Harness < 0.12.0): «nicht erfasst», keine Erfindung", () => {
     const md = renderDossierMarkdown(proxyReport, { limited: false });
-    expect(md).toContain("- Upstream (Programm und Skript): **nicht erfasst (Report aus Harness < 0.12.0)**".replace("<", "&lt;"));
+    expect(md).toContain("- Upstream (Programm und Skript): **nicht erfasst (Report aus Harness < 0.12.0)**".replace("<", "\\<"));
     expect(md).toContain("Tool-Liste (SHA-256): **nicht erfasst");
   });
 
@@ -846,18 +852,20 @@ describe("C5: JSON-Report ohne Lizenz: «nicht berechnet» statt «keine Befunde
 // =====================================================================================================================
 
 describe("C6: claimCheckVersion", () => {
-  it("die Konstante steht auf 2; neue Bench-Berichte tragen sie; ältere tragen kein Feld", async () => {
-    expect(CLAIM_CHECK_VERSION).toBe(2);
+  it("die Konstante steht auf 3 (E3: Doppelverneinung, Vorbehalte, Geständnisse); neue Bench-Berichte tragen sie; ältere tragen kein Feld", async () => {
+    expect(CLAIM_CHECK_VERSION).toBe(3);
     expect((realBench as Json).claimCheckVersion).toBeUndefined();
     const src = await readFile("src/bench/run.ts", "utf8");
     expect(src).toContain("claimCheckVersion: CLAIM_CHECK_VERSION");
-    expect(claimCheckOlder(null, 2)).toBe(true);
-    expect(claimCheckOlder(1, 2)).toBe(true);
-    expect(claimCheckOlder(2, 2)).toBe(false);
-    expect(claimCheckOlder(3, 2)).toBe(false);
+    expect(claimCheckOlder(null, 3)).toBe(true);
+    expect(claimCheckOlder(1, 3)).toBe(true);
+    // Version 2 (Stufe B) gilt seit E3 als ältere Fassung: Sätze mit Vorbehalt oder Verneinung werden anders eingestuft.
+    expect(claimCheckOlder(2, 3)).toBe(true);
+    expect(claimCheckOlder(3, 3)).toBe(false);
+    expect(claimCheckOlder(4, 3)).toBe(false);
   });
 
-  it("das Kapitel nennt den Hinweis bei fehlendem Feld und bei Version 1, bei Version 2 nicht; er steht im Siegel und in verify", () => {
+  it("das Kapitel nennt den Hinweis bei fehlendem Feld und bei Version 1, bei der aktuellen Version nicht; er steht im Siegel und in verify", () => {
     const old = renderDossierMarkdown(proxyReport, { limited: false, bench: coreOf(realBench) });
     expect(old).toContain(CLAIM_CHECK_OLDER_DE);
     expect(CLAIM_CHECK_OLDER_DE).toBe("Die Ehrlichkeitsbewertung dieser Messung stammt aus einer älteren Version des Prüfers; sie kann sich bei erneuter Auswertung ändern.");
@@ -866,13 +874,17 @@ describe("C6: claimCheckVersion", () => {
     });
     expect(renderDossierMarkdown(proxyReport, { limited: false, bench: coreOf(v1) })).toContain(CLAIM_CHECK_OLDER_DE);
     const v2 = forgeBench((d) => {
+      d.claimCheckVersion = CLAIM_CHECK_VERSION;
+    });
+    const older2 = forgeBench((d) => {
       d.claimCheckVersion = 2;
     });
+    expect(renderDossierMarkdown(proxyReport, { limited: false, bench: coreOf(older2) })).toContain(CLAIM_CHECK_OLDER_DE);
     const fresh = renderDossierMarkdown(proxyReport, { limited: false, bench: coreOf(v2) });
     expect(fresh).not.toContain(CLAIM_CHECK_OLDER_DE);
     expect(renderDossierHtml(proxyReport, { limited: false, bench: coreOf(v2) })).not.toContain("älteren Version des Prüfers");
     // verify baut das Kapitel aus dem Siegel nach: Der Hinweis lässt sich nicht aus dem Text löschen.
-    expect(verifyDossierContent(old, { report: proxyReport }).status).toBe("OK");
+    expect(verifyDossierContent(old, { report: proxyReport, bench: realBench as unknown as Record<string, unknown> }).status).toBe("OK");
     expect(verifyDossierContent(old.replace(CLAIM_CHECK_OLDER_DE, "Alles in Ordnung."), { report: proxyReport }).status).toBe("MISMATCH");
     // Und der Bench-Bericht mit Version 2 passt nicht zu einem Kapitel, das aus einem Bericht ohne Version stammt.
     const diff = verifyDossierContent(old, { report: proxyReport, bench: v2 as unknown as Record<string, unknown> });
@@ -883,20 +895,21 @@ describe("C6: claimCheckVersion", () => {
   it("verify bench-report.json und bench-report.md nennen die Version", async () => {
     const dir = await tmp();
     const v2 = forgeBench((d) => {
-      d.claimCheckVersion = 2;
+      d.claimCheckVersion = CLAIM_CHECK_VERSION;
     });
+    // Ohne den Ordner runs/ und ohne Hash des Lesetextes sind Rohdaten und Lesetext nicht geprüft: TEILWEISE (Stufe E2), nicht OK.
     const oldResult = await verifyBenchReportContent(realBench as unknown as Record<string, unknown>);
-    expect(oldResult.status).toBe("OK");
+    expect(oldResult.status).toBe("PARTIAL");
     expect(oldResult.lines.join(" ")).toContain(CLAIM_CHECK_OLDER_DE);
     const newResult = await verifyBenchReportContent(v2 as unknown as Record<string, unknown>);
-    expect(newResult.status).toBe("OK");
+    expect(newResult.status).toBe("PARTIAL");
     expect(newResult.lines.join(" ")).not.toContain(CLAIM_CHECK_OLDER_DE);
-    expect(renderBenchMarkdown(v2)).toContain("Version der Ehrlichkeitsbewertung: 2");
+    expect(renderBenchMarkdown(v2)).toContain(`Version der Ehrlichkeitsbewertung: ${CLAIM_CHECK_VERSION}`);
     expect(renderBenchMarkdown(realBench)).toContain("nicht angegeben (ältere Version des Prüfers)");
     const file = join(dir, "bench-report.json");
     await writeFile(file, JSON.stringify(realBench), "utf8");
     const run = await cli(["verify", file], freeProcessEnv());
-    expect(run.code).toBe(0);
+    expect(run.code).toBe(2);
     expect(run.out).toContain("älteren Version des Prüfers");
   });
 });
@@ -914,7 +927,7 @@ describe("C7: abgebrochene Messung ergibt ein Kapitel ohne Auswertung", () => {
     d.runs = d.runs.slice(0, 6).map((r: Json, i: number) =>
       i < 3 ? { ...r, valid: false, invalidReason: "Zeitüberschreitung: Der Agent war nach 180 s nicht fertig.", verdict: null, duplicate: null } : r,
     );
-    d.claimCheckVersion = 2;
+    d.claimCheckVersion = CLAIM_CHECK_VERSION;
   });
 
   it("der abgebrochene Bericht ist gültig und prüfbar, das Kapitel nennt Grund, ungültige Läufe und «keine Auswertung»", () => {
@@ -940,7 +953,7 @@ describe("C7: abgebrochene Messung ergibt ein Kapitel ohne Auswertung", () => {
   it("gesiegelt wie das übrige Kapitel: eine Änderung im Text ist ein MISMATCH, verify --bench gleicht ab, --rerender besteht", () => {
     const core = coreOf(aborted);
     const md = renderDossierMarkdown(proxyReport, { limited: false, bench: core });
-    expect(verifyDossierContent(md, { report: proxyReport }).status).toBe("OK");
+    expect(verifyDossierContent(md, { report: proxyReport }).status).toBe("PARTIAL");
     expect(verifyDossierContent(md, { report: proxyReport, bench: aborted as unknown as Record<string, unknown> }).status).toBe("OK");
     const rerender = verifyDossierContent(md, { report: proxyReport, bench: aborted as unknown as Record<string, unknown>, rerender: true });
     expect(rerender.status, rerender.lines.join("\n")).toBe("OK");

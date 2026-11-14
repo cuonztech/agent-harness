@@ -10,7 +10,7 @@ import { join, resolve } from "node:path";
 import { parseBenchArgs, DEFAULT_SYSTEM_PROMPT_DE } from "../src/bench/args.js";
 import { runBench, type BenchOutcome, type BenchRunInput } from "../src/bench/run.js";
 import { runBenchMode } from "../src/bench/cli.js";
-import { BENCH_FORMAT, type BenchDocument } from "../src/bench/report.js";
+import { BENCH_FORMAT, markdownSha256, type BenchDocument } from "../src/bench/report.js";
 import { sha256Hex } from "../src/core/artifact-integrity.js";
 import { benchPromptPatch } from "../src/hardening/patch-generator.js";
 import { verifyBenchReportContent } from "../src/verify.js";
@@ -236,7 +236,10 @@ describe("bench gegen den Korpus-Upstream: Ollama-native Schnittstelle, blinder 
     expect(md).toContain("95-%-Intervall");
     expect(md).toContain("Zählweise");
     expect(md).toContain(outcome.document.prompts[0]!.sha256);
-    expect(md).toContain(outcome.document.integrity!.payloadSha256);
+    // Der Lesetext trägt die Prüfsumme des Berichts nicht (er ist über seinen Hash im Siegel mitgesiegelt); er verweist auf das Feld.
+    expect(md).toContain("integrity.payloadSha256");
+    expect(md).not.toContain(outcome.document.integrity!.payloadSha256);
+    expect(outcome.document.markdown).toEqual({ file: "bench-report.md", sha256: markdownSha256(md) });
     expect(md).not.toContain(String.fromCharCode(0xdf));
   });
 
@@ -251,8 +254,9 @@ describe("bench gegen den Korpus-Upstream: Ollama-native Schnittstelle, blinder 
     };
 
     it("unverändert: OK, auch mit den Lauf-Dateien neben dem Bericht", async () => {
+      // Ohne den Ordner daneben sind die Rohdaten nicht geprüft: TEILWEISE, nicht OK (Stufe E2).
       const plain = await verifyBenchReportContent(JSON.parse(await readFile(outcome.jsonPath, "utf8")) as Record<string, unknown>, {});
-      expect(plain.status).toBe("OK");
+      expect(plain.status).toBe("PARTIAL");
       const withRuns = await verifyBenchReportContent(JSON.parse(await readFile(outcome.jsonPath, "utf8")) as Record<string, unknown>, { dir: join(dir, "out") });
       expect(withRuns.status).toBe("OK");
       expect(withRuns.lines.join(" ")).toContain("Lauf-Dateien");
@@ -283,7 +287,7 @@ describe("bench gegen den Korpus-Upstream: Ollama-native Schnittstelle, blinder 
     it("Prüfsumme gelöscht oder neu berechnet ohne Wissen um die getrennt aufbewahrte: --expect fängt es", async () => {
       expect((await verifyBenchReportContent(mutate((d) => { delete d.integrity; }), {})).status).toBe("NOT_VERIFIABLE");
       const good = outcome.document.integrity!.payloadSha256;
-      expect((await verifyBenchReportContent(JSON.parse(await readFile(outcome.jsonPath, "utf8")) as Record<string, unknown>, { expect: good })).status).toBe("OK");
+      expect((await verifyBenchReportContent(JSON.parse(await readFile(outcome.jsonPath, "utf8")) as Record<string, unknown>, { expect: good, dir: join(dir, "out") })).status).toBe("OK");
       const wrong = await verifyBenchReportContent(JSON.parse(await readFile(outcome.jsonPath, "utf8")) as Record<string, unknown>, { expect: "a".repeat(64) });
       expect(wrong.status).toBe("MISMATCH");
     });
@@ -457,7 +461,7 @@ describe("ungültige Läufe (Abnahme 3)", () => {
     const md = await readFile(outcome.mdPath, "utf8");
     expect(md).toContain("ABGEBROCHEN");
     // Auch ein abgebrochener Bericht trägt ein gültiges Siegel.
-    expect((await verifyBenchReportContent(JSON.parse(await readFile(outcome.jsonPath, "utf8")) as Record<string, unknown>, {})).status).toBe("OK");
+    expect((await verifyBenchReportContent(JSON.parse(await readFile(outcome.jsonPath, "utf8")) as Record<string, unknown>, { dir: join(dir, "out") })).status).toBe("OK");
   }, 240_000);
 
   it("Zeitüberschreitung je Schritt: ungültig, nie sauber", async () => {
@@ -862,7 +866,7 @@ describe("Exit-Codes von bench", () => {
     const fake = await model(looksUp);
     const ok = await inProcess(argvFor(fake.url, dir, ["--runs", "5", "--conditions", "baseline", "--out", join(dir, "ok")]));
     expect(ok.code).toBe(0);
-    expect(ok.out).toContain("Doppelausführung 0 von 5");
+    expect(ok.out).toContain("erneut geschrieben (Duplikat) 0 von 5");
     expect(ok.out).toContain("Prüfsumme (SHA-256)");
     expect(ok.err).toContain("ACHTUNG");
     expect(ok.err).toContain("Testsystem mit synthetischen Daten");

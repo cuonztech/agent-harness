@@ -257,7 +257,11 @@ describe("--effect-probe auf der Kommandozeile", () => {
     const child = spawn(process.execPath, ["dist/index.js", "proxy", "--allow-writes", ...UP, "--effect-probe", "list_bookings", "--effect-probe-args", "{status:open,limit:5,all:true}", "--effect-count", "count"], { env: proProcessEnv() });
     let err = "";
     child.stderr.on("data", (d) => (err += d.toString()));
-    await new Promise((res) => setTimeout(res, 1500));
+    // Auf die Ausgabe warten statt eine feste Zeit (der Start braucht auf einem belasteten Rechner länger als 1,5 s).
+    const deadline = Date.now() + 25_000;
+    while (!(err.includes("assumption") && err.includes("counted 0 record(s)")) && Date.now() < deadline && child.exitCode === null) {
+      await new Promise((res) => setTimeout(res, 100));
+    }
     child.kill();
     expect(err).toContain("Effect probe:");
     expect(err).not.toContain("must be a JSON object");
@@ -287,7 +291,11 @@ describe("--effect-probe auf der Kommandozeile", () => {
     const child = spawn(process.execPath, ["dist/index.js", "proxy", "--allow-writes", ...UP, "--effect-probe", "list_bookings", "--effect-count", "count"], { env: proProcessEnv() });
     let err = "";
     child.stderr.on("data", (d) => (err += d.toString()));
-    await new Promise((res) => setTimeout(res, 1500));
+    // Auf die Ausgabe warten statt eine feste Zeit (der Start braucht auf einem belasteten Rechner länger als 1,5 s).
+    const deadline = Date.now() + 25_000;
+    while (!(err.includes("assumption") && err.includes("counted 0 record(s)")) && Date.now() < deadline && child.exitCode === null) {
+      await new Promise((res) => setTimeout(res, 100));
+    }
     child.kill();
     expect(err).toContain("Effect probe:");
     expect(err).toContain("counted 0 record(s)");

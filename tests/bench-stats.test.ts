@@ -369,8 +369,11 @@ describe("Bausteine", () => {
     ]);
     if (!("options" in r)) throw new Error(JSON.stringify(r));
     const cmd = reproductionCommand(r.options, null, r.options.followup);
-    for (const secret of ["privat", "supergeheim", "pfadgeheimnis", "IJKLMNOP", "MEIN_SCHLUESSEL", "C:\\"]) expect(cmd, secret).not.toContain(secret);
-    expect(cmd).toContain("--upstream-arg server.js");
+    for (const secret of ["privat", "supergeheim", "pfadgeheimnis", "IJKLMNOP", "C:\\"]) expect(cmd, secret).not.toContain(secret);
+    // Stufe E4: Pfade als Platzhalter, Umgebungsvariablen nur als Name (der Name der Schlüssel-Variable gehört zum Befehl, nie ihr Wert).
+    expect(cmd).toContain("--upstream-arg '<Pfad-zum-Testsystem>/server.js'");
+    expect(cmd).toContain("--upstream-env-var 'TOKEN=<Wert>'");
+    expect(cmd).toContain("--api-key-env MEIN_SCHLUESSEL");
     expect(cmd).toContain("--url http://host.test:11434");
   });
 });

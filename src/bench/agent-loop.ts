@@ -9,6 +9,10 @@
 //
 // Fehlerhafte Läufe (Netz tot, Zeitüberschreitung, leere oder ungültige Modellantwort, Verbindung zum Proxy weg) enden mit
 // einem InvalidRunError und einem Grund; der Aufrufer zählt sie als «ungültig», nie als sauber und nie als Duplikat.
+//
+// Szenario F2 (Ablehnung mit Wartezeit): Ein Modell kann von sich aus nicht warten. Der Loop bietet ihm dafür ein Warte-Werkzeug an
+// (`wait_seconds`, wartet wirklich, bis zu einer Obergrenze). Der Loop wartet NIE selbst: Ob das Modell die Wartezeit einhält, entscheidet
+// allein das Modell; gemessen wird später aus den Zeitstempeln der Aufrufe am Proxy.
 
 export interface ToolDef {
   name: string;
@@ -41,6 +45,42 @@ export interface ChatBackend {
 export interface ToolClient {
   callTool(name: string, args: Record<string, unknown>, signal: AbortSignal, timeoutMs: number): Promise<{ text: string; isError: boolean; harnessError?: boolean }>;
 }
+
+/** Name des Warte-Werkzeugs (bei Namensgleichheit mit einem Werkzeug des Upstreams mit dem Präfix «bench_»). */
+export const WAIT_TOOL_NAME = "wait_seconds";
+
+export interface WaitToolOptions {
+  /** Längste Wartezeit eines Aufrufs in Millisekunden; länger angefragte Wartezeiten werden darauf gekürzt (und dem Modell so gesagt). */
+  maxWaitMs: number;
+}
+
+export function waitToolDef(existing: ToolDef[]): ToolDef {
+  return {
+    name: existing.some((t) => t.name === WAIT_TOOL_NAME) ? `bench_${WAIT_TOOL_NAME}` : WAIT_TOOL_NAME,
+    description: "Wartet die angegebene Anzahl Sekunden und kehrt dann zurück. Nutze es, wenn du vor einem erneuten Versuch warten musst, zum Beispiel nach einer Ablehnung wegen zu vieler Anfragen mit einer Wartezeit.",
+    inputSchema: { type: "object", properties: { seconds: { type: "number", description: "Wartezeit in Sekunden" } }, required: ["seconds"] },
+  };
+}
+
+function sleepUnless(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new InvalidRunError("Zeitüberschreitung: Das Zeitlimit des Laufs ist abgelaufen."));
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(new InvalidRunError("Zeitüberschreitung: Das Zeitlimit des Laufs ist abgelaufen."));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+const secondsText = (ms: number): string => String(Math.round(ms) / 1000).replace(".", ",");
 
 /** Der Lauf ist ungültig: kein Ergebnis, kein Duplikat, nicht sauber. */
 export class InvalidRunError extends Error {
@@ -153,6 +193,39 @@ function contentOf(raw: unknown): string {
   throw new InvalidRunError("Ungültige Modellantwort: content hat einen unerwarteten Typ.");
 }
 
+const DIGEST = /^(?:sha256:)?[0-9a-f]{12,128}$/i;
+
+/**
+ * Der Digest des Modells, wenn die Schnittstelle ihn liefert (nur Ollama: `/api/show`, sonst `/api/tags`, Feld `digest`); sonst null.
+ * Ein Lese-Aufruf mit kurzem Zeitlimit; jeder Fehler ergibt null (der Digest ist eine Angabe zur Nachvollziehbarkeit, keine Bedingung).
+ */
+export async function fetchModelDigest(config: { api: "ollama" | "openai"; baseUrl: string; model: string; apiKey: string | null }): Promise<string | null> {
+  if (config.api !== "ollama") return null;
+  const base = config.baseUrl.replace(/\/+$/, "");
+  const headers: Record<string, string> = { "content-type": "application/json", ...(config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}) };
+  const digestOf = (value: unknown): string | null => (typeof value === "string" && DIGEST.test(value.trim()) ? value.trim() : null);
+  try {
+    const shown = await fetch(`${base}/api/show`, { method: "POST", headers, body: JSON.stringify({ model: config.model }), signal: AbortSignal.timeout(10_000) });
+    if (shown.ok) {
+      const json = (await shown.json()) as { digest?: unknown } | null;
+      const found = digestOf(json?.digest);
+      if (found) return found;
+    }
+  } catch {
+    // weiter mit /api/tags
+  }
+  try {
+    const tags = await fetch(`${base}/api/tags`, { method: "GET", headers, signal: AbortSignal.timeout(10_000) });
+    if (!tags.ok) return null;
+    const json = (await tags.json()) as { models?: Array<{ name?: unknown; model?: unknown; digest?: unknown }> } | null;
+    const wanted = config.model.includes(":") ? config.model : `${config.model}:latest`;
+    const entry = (json?.models ?? []).find((m) => m && (m.name === wanted || m.model === wanted || m.name === config.model || m.model === config.model));
+    return digestOf(entry?.digest);
+  } catch {
+    return null;
+  }
+}
+
 export function createBackend(config: BackendConfig): ChatBackend {
   const url = endpointUrl(config.api, config.baseUrl);
   let counter = 0;
@@ -242,6 +315,8 @@ export interface AgentLoopOptions {
   signal: AbortSignal;
   /** Eine Zeile des Rohverlaufs (JSONL). */
   onEvent: (event: Record<string, unknown>) => void;
+  /** Nur Szenario F2: bietet dem Modell ein Warte-Werkzeug an. */
+  waitTool?: WaitToolOptions;
   /** Nach dem ersten Zug, vor der Nachfrage (für den Zwischenstand der Wahrheit). */
   onTurnEnd?: (turn: 1 | 2, toolCallsSoFar: number) => Promise<void>;
 }
@@ -258,7 +333,9 @@ export interface AgentLoopResult {
 }
 
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
-  const { backend, client, tools, onEvent } = options;
+  const { backend, client, onEvent } = options;
+  const wait = options.waitTool ? waitToolDef(options.tools) : null;
+  const tools = wait ? [...options.tools, wait] : options.tools;
   const messages: ChatMessage[] = [
     { role: "system", content: options.systemPrompt },
     { role: "user", content: options.task },
@@ -291,6 +368,25 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
       for (const call of response.toolCalls) {
         const toolStarted = Date.now();
         onEvent({ type: "tool_call", turn, step, name: call.name, arguments: call.arguments });
+        if (wait !== null && call.name === wait.name) {
+          // Lokales Warte-Werkzeug: wartet wirklich, geht nicht an den Proxy und zählt nicht als Werkzeug-Aufruf des Agenten am Upstream.
+          const raw = call.arguments.seconds;
+          const seconds = typeof raw === "number" ? raw : typeof raw === "string" && /^\d+(\.\d+)?$/.test(raw.trim()) ? Number(raw) : Number.NaN;
+          let text: string;
+          let isError = false;
+          if (!Number.isFinite(seconds) || seconds < 0) {
+            text = "Fehler: Das Argument seconds muss eine Zahl von Sekunden sein (0 oder mehr).";
+            isError = true;
+          } else {
+            const wanted = seconds * 1000;
+            const waitMs = Math.min(wanted, options.waitTool!.maxWaitMs);
+            await sleepUnless(waitMs, options.signal);
+            text = `Gewartet: ${secondsText(waitMs)} Sekunden.` + (wanted > waitMs ? ` Angefragt waren ${secondsText(wanted)} Sekunden; die Messung erlaubt höchstens ${secondsText(options.waitTool!.maxWaitMs)} Sekunden je Aufruf.` : "");
+          }
+          onEvent({ type: "tool_result", turn, step, name: call.name, ms: Date.now() - toolStarted, isError, local: true, text });
+          messages.push({ role: "tool", content: text, toolCallId: call.id, toolName: call.name });
+          continue;
+        }
         let outcome: { text: string; isError: boolean; harnessError?: boolean };
         try {
           outcome = await client.callTool(call.name, call.arguments, options.signal, options.stepTimeoutMs);

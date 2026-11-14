@@ -38,14 +38,14 @@ function recommendedKeyFieldName(tool: ToolInput): string {
 
 // Mustervorschlag für das fehlende Feld: Er nennt das Tool und die Parameter, die den Vorgang bestimmen (Pflichtfelder zuerst),
 // damit er zu diesem Tool passt und nicht für jedes Tool derselbe Text ist. Der Server muss das Feld auch auswerten.
-function idempotencyPatch(tool: ToolInput): Record<string, unknown> {
+function idempotencyPatch(tool: ToolInput, unsureWrite = false): Record<string, unknown> {
   const required = Array.isArray(tool.inputSchema?.required) ? (tool.inputSchema!.required as unknown[]).filter((f): f is string => typeof f === "string") : [];
   const names = [...required, ...propertyNames(tool).filter((n) => !required.includes(n))].filter((n) => !isKeyField(n, DEFAULT_KEY_FIELDS));
   const params = names.slice(0, 4).map(shown);
   const together = params.length === 0 ? "" : ` (zusammen mit ${params.join(", ")}${names.length > 4 ? " und weiteren Angaben" : ""})`;
   return {
     type: "string",
-    description: `Eindeutiger Schlüssel für diesen Aufruf von ${shown(tool.name)}${together}: Bei einer Wiederholung nach einem Timeout denselben Wert mit denselben Angaben noch einmal senden, damit der Server den Vorgang nur einmal ausführt.`,
+    description: `${unsureWrite ? "Nur nötig, wenn dieses Tool tatsächlich etwas schreibt (seine Einordnung ist unklar). " : ""}Eindeutiger Schlüssel für diesen Aufruf von ${shown(tool.name)}${together}: Bei einer Wiederholung nach einem Timeout denselben Wert mit denselben Angaben noch einmal senden, damit der Server den Vorgang nur einmal ausführt.`,
   };
 }
 
@@ -280,6 +280,11 @@ export function auditToolSchemas(tools: ToolInput[], options: SchemaAuditOptions
     const destructiveName = DESTRUCTIVE_NAME_VERBS.has(tokens(tool.name)[0] ?? "");
     const destructiveAndIdempotent = tool.annotations?.destructiveHint === true && tool.annotations?.idempotentHint === true && !destructiveName;
     const readOnlyDestructive = classification === "read" && destructiveName && tool.annotations?.readOnlyHint === true && !DRY_RUN_WORDS.test(tool.description ?? "");
+    // 0.12.0 (E3c): readOnlyHint=true zusammen mit destructiveHint=true widerspricht sich in jedem Fall, nicht nur bei einem löschenden Namen.
+    const readOnlyAndDestructive = tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint === true;
+    // 0.12.0 (E3c): Das Schlüsselfeld steht im Schema, ist aber kein Pflichtfeld: Ein Agent kann es weglassen.
+    const requiredFields = Array.isArray(tool.inputSchema?.required) ? (tool.inputSchema!.required as unknown[]).filter((f): f is string => typeof f === "string") : [];
+    const optionalKey = isWrite && hasKey && keyMatch?.nested === false && !requiredFields.includes(keyField ?? "");
 
     let matching: string[] = [];
     if (isWrite) {
@@ -306,6 +311,8 @@ export function auditToolSchemas(tools: ToolInput[], options: SchemaAuditOptions
     }
     // Der Name löscht, die Annotation sagt «nur lesend»: Wird dennoch gelöscht, bleibt es unsichtbar.
     if (readOnlyDestructive) risk = "HIGH";
+    // readOnlyHint und destructiveHint zugleich: Das Tool gilt als lesend, soll aber zerstören; ein Retry bliebe unsichtbar.
+    if (readOnlyAndDestructive) risk = "HIGH";
 
     const findings: string[] = [];
     if (note) findings.push(note);
@@ -313,6 +320,11 @@ export function auditToolSchemas(tools: ToolInput[], options: SchemaAuditOptions
     if (readOnlyDestructive) {
       findings.push(
         `Der Name ${shown(tool.name)} sagt «${shown(tokens(tool.name)[0] ?? "")}», die Annotation readOnlyHint=true sagt «nur lesend»: Löscht das Tool doch, ist ein Retry nach einem Timeout nicht harmlos und bleibt im Lauf unsichtbar. Risiko HOCH, bis der Widerspruch geklärt ist.`,
+      );
+    }
+    if (readOnlyAndDestructive) {
+      findings.push(
+        "Widerspruch in den Annotationen: readOnlyHint=true zusammen mit destructiveHint=true. Das Tool gilt dem Gutachten und dem Proxy als lesend; zerstört es doch etwas, ist ein Retry nach einem Timeout nicht harmlos und bleibt im Lauf unsichtbar. Risiko HOCH, bis der Widerspruch geklärt ist (readOnlyHint=false oder destructiveHint entfernen).",
       );
     }
     if (annotationVsDescription !== undefined && !note) findings.push("Die Einordnung ist unklar (Annotation und Beschreibung widersprechen sich).");
@@ -340,6 +352,15 @@ export function auditToolSchemas(tools: ToolInput[], options: SchemaAuditOptions
         findings.push(
           `Hinweis: Das Schlüsselfeld liegt verschachtelt ('${shown(keyField)}'). Der Harness wertet im Lauf nur Felder der obersten Ebene aus; dieser Schlüssel wird dort nicht erkannt, eine Wiederholung unter neuem Wert sähe wie ein anderer Vorgang aus.`,
         );
+      } else if (optionalKey && ignoredClaim === null) {
+        findings.push(
+          `Befund: Optionaler Schlüssel. Das Feld '${shown(keyField ?? "")}' ist im Schema optional (steht nicht unter required): Ein Agent kann es weglassen, dann schützt es nicht vor Doppelausführung.${tool.annotations?.idempotentHint === true ? " idempotentHint=true belegt nicht, dass der Server den Schlüssel auswertet." : ""} Als Pflichtfeld festlegen oder dem Agenten im System-Prompt vorschreiben.`,
+        );
+        if (!isKeyField(keyField ?? "", keyFields)) {
+          findings.push(
+            `Hinweis: Das Schlüsselfeld heisst '${shown(keyField ?? "")}' und steht nicht in der Standardliste — beim Proxy-Start --key-fields ${shown(keyField ?? "")} angeben, damit der Harness den Schlüssel im Lauf auswertet.`,
+          );
+        }
       } else if (!isKeyField(keyField, keyFields)) {
         // Der Proxy kennt im Lauf nur seine Standardliste; andere Feldnamen erst mit --key-fields.
         findings.push(
@@ -369,7 +390,8 @@ export function auditToolSchemas(tools: ToolInput[], options: SchemaAuditOptions
       riskLevel: risk,
       findingsDe: findings,
       ...(note ? { classificationNoteDe: note } : {}),
-      recommendedSchemaPatch: isWrite && !hasKey ? idempotencyPatch(tool) : null,
+      // Nur für Schreib-Tools: Ein Lese-Tool braucht keinen Idempotenz-Schlüssel und bekommt keinen Vorschlag; bei unklarer Einordnung steht das im Text.
+      recommendedSchemaPatch: isWrite && !hasKey ? idempotencyPatch(tool, classification === "ambiguous") : null,
       ...(isWrite && !hasKey ? { recommendedFieldName: recommendedKeyFieldName(tool) } : {}),
       findingsAvailable: true,
     };

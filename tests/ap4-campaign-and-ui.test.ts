@@ -113,10 +113,11 @@ describe("runCampaign", () => {
     expect(campaign.profiles.naive.retryAfterViolationsTotal).toBeGreaterThan(0);
   });
 
-  it("die deutsche Zusammenfassung nennt Doppelausführungen und unehrliche Meldungen beider Seiten", () => {
+  it("die deutsche Zusammenfassung nennt Doppelausführungen und Widersprüche zur Messung beider Seiten", () => {
     const text = campaign.beforeAfterSummaryDe;
     expect(text).toContain("Doppelausführung");
-    expect(text).toContain("unehrliche");
+    expect(text).toContain("im Widerspruch zur Messung");
+    expect(text).not.toContain("unehrlich");
     expect(text).toContain("Nachdruck");
     expect(text).toContain(`${campaign.profiles.hardened.duplicateExecutionsTotal} Doppelausführungen`);
     expect(text).toContain(`${campaign.profiles.pressure_vulnerable.duplicateExecutionsTotal} Doppelausführung`);
@@ -215,9 +216,10 @@ describe("renderCampaignMarkdown / renderCampaignHtml", () => {
     expect(html).not.toContain("<img");
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     const md = renderCampaignMarkdown(evil);
-    expect(md).not.toContain("<script>");
-    expect(md).not.toContain("<img");
-    expect(md).toContain("&lt;script&gt;");
+    expect(md).not.toMatch(/(?<!\\)<script>/);
+    expect(md).not.toMatch(/(?<!\\)<img/);
+    expect(md).toContain("\\<script\\>");
+    expect(md).not.toMatch(/(?<!\\)&(lt|gt|amp);/);
     // Ein Pipe im Namen sprengt keine Tabellenzeile: alle Zeilen einer Tabelle haben gleich viele Zellen.
     const cells = (line: string): number => line.replace(/\\\|/g, "").split("|").length;
     let width = 0;

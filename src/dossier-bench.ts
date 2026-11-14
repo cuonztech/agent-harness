@@ -5,8 +5,18 @@
 // stehen getrennt, und nirgends steht, ein Textbaustein bringe den Agenten zum Nachsehen.
 import type { Block, Rich, Section } from "./dossier-report.js";
 import type { IntegrityCheck, IntegrityStatus } from "./core/artifact-integrity.js";
-import type { BenchAggregate, BenchDocument, ComparisonMeasure } from "./bench/report.js";
+import {
+  INVALID_DENOMINATOR_DE,
+  diffJson,
+  digestDe,
+  invalidAfterWriteTotal,
+  invalidAfterWriteWarningDe,
+  type BenchAggregate,
+  type BenchDocument,
+  type ComparisonMeasure,
+} from "./bench/report.js";
 import { pointsDe, proportionDe, round, type Proportion } from "./bench/stats.js";
+import { RETRY_BEHAVIOR_DE, isScenarioSettings, scenarioText, secondsDe, settingDe, type ScenarioSetting } from "./bench/scenarios.js";
 import { redactSecrets } from "./cli-args.js";
 import { CLAIM_CHECK_VERSION } from "./core/claim-check.js";
 import {
@@ -43,9 +53,13 @@ export interface DossierBenchCore {
     temperature: number | null;
     think: string | null;
     program: string | null;
+    /** Digest des Modells, wenn die Schnittstelle ihn lieferte; null: nicht verfügbar; fehlt: Bericht aus einer Fassung vor dieser Angabe («nicht erfasst»). */
+    modelDigest?: string | null;
   };
   task: string;
   followup: string | null;
+  /** Einstellungen je Szenario (Nachfrage, Wartezeit); fehlt bei Berichten vor den Szenario-Massen (dann gilt der damalige Wortlaut). */
+  scenarioSettings?: ScenarioSetting[];
   prompts: Array<{ scenario: string; condition: string; sha256: string }>;
   upstream: { program: string; script: string | null };
   toolCount: number;
@@ -65,7 +79,7 @@ export interface DossierBenchCore {
   /** Version der Regeln der Ehrlichkeitsbewertung, mit der der Bench-Bericht ausgewertet wurde; null: der Bericht trägt keine Angabe (ältere Version des Prüfers). */
   claimCheckVersion: number | null;
   /** Nur bei einer abgebrochenen Messung: Abbruchgrund und die Läufe (es gibt keine Auswertung). */
-  aborted?: { reason: string; runs: Array<{ id: string; scenario: string; condition: string; valid: boolean; invalidReason: string | null }> };
+  aborted?: { reason: string; runs: Array<{ id: string; scenario: string; condition: string; valid: boolean; invalidReason: string | null; invalidAfterWrite?: boolean | null }> };
 }
 
 // ---------------------------------------------------------------- Prüfung der Datei
@@ -96,7 +110,7 @@ export function validateBenchDocument(doc: unknown): string | null {
         need(isStr(doc.abortReason), "abortReason"),
         need(
           Array.isArray(doc.runs) &&
-            doc.runs.every((r) => isObj(r) && isStr(r.id) && isStr(r.scenario) && isStr(r.condition) && typeof r.valid === "boolean" && (r.invalidReason === null || isStr(r.invalidReason))),
+            doc.runs.every((r) => isObj(r) && isStr(r.id) && isStr(r.scenario) && isStr(r.condition) && typeof r.valid === "boolean" && (r.invalidReason === null || isStr(r.invalidReason)) && (r.invalidAfterWrite === undefined || r.invalidAfterWrite === null || typeof r.invalidAfterWrite === "boolean")),
           "runs",
         ),
       ]
@@ -116,6 +130,13 @@ export function validateBenchDocument(doc: unknown): string | null {
                 Object.values(a.invalidReasons).every(isInt) &&
                 (a.countingBasis === null || isStr(a.countingBasis)) &&
                 validProportion(a.duplicate) &&
+                (a.resent === undefined || validProportion(a.resent)) &&
+                (a.resentNotRewritten === undefined || isInt(a.resentNotRewritten)) &&
+                (a.ignoredWait === undefined || validProportion(a.ignoredWait)) &&
+                (a.unprompted === undefined || validProportion(a.unprompted)) &&
+                (a.retryCounts === undefined || (isObj(a.retryCounts) && (["waited", "too_early", "gave_up", "no_retry"] as const).every((k) => isInt((a.retryCounts as Record<string, unknown>)[k])))) &&
+                (a.meanRetryWaitSec === undefined || isNumOrNull(a.meanRetryWaitSec)) &&
+                (a.invalidAfterWrite === undefined || isInt(a.invalidAfterWrite)) &&
                 validProportion(a.lookedUp) &&
                 validProportion(a.dishonestFinal) &&
                 validProportion(a.dishonestFirst) &&
@@ -141,7 +162,7 @@ export function validateBenchDocument(doc: unknown): string | null {
                 c.measures.every(
                   (m) =>
                     isObj(m) &&
-                    (m.measure === "duplicate" || m.measure === "lookedUp" || m.measure === "dishonestFinal") &&
+                    (m.measure === "duplicate" || m.measure === "resent" || m.measure === "lookedUp" || m.measure === "dishonestFinal" || m.measure === "ignoredWait" || m.measure === "unprompted") &&
                     validProportion(m.baseline) &&
                     validProportion(m.patch) &&
                     (m.difference === null || (isObj(m.difference) && isNum(m.difference.value) && isNum(m.difference.lower) && isNum(m.difference.upper))) &&
@@ -161,6 +182,7 @@ export function validateBenchDocument(doc: unknown): string | null {
     need(isObj(doc.agent) && isStr(doc.agent.kind), "agent"),
     need(isStr(doc.task), "task"),
     need(doc.followup === null || isStr(doc.followup), "followup"),
+    need(doc.scenarioSettings === undefined || isScenarioSettings(doc.scenarioSettings), "scenarioSettings"),
     need(Array.isArray(doc.prompts) && doc.prompts.every((p) => isObj(p) && isStr(p.scenario) && isStr(p.condition) && isStr(p.sha256)), "prompts"),
     need(isObj(doc.upstream) && isStr(doc.upstream.program), "upstream"),
     need(Array.isArray(doc.tools) && isStr(doc.toolsSha256), "tools / toolsSha256"),
@@ -202,9 +224,11 @@ export function benchCoreOf(doc: BenchDocument, check: IntegrityCheck): DossierB
       temperature: numOrNull(agent.temperature),
       think: textOrNull(agent.think),
       program: textOrNull(agent.program),
+      ...(agent.kind === "builtin" && "modelDigest" in agent ? { modelDigest: textOrNull(agent.modelDigest) } : {}),
     },
     task: doc.task,
     followup: doc.followup,
+    ...(doc.scenarioSettings !== undefined ? { scenarioSettings: JSON.parse(JSON.stringify(doc.scenarioSettings)) as ScenarioSetting[] } : {}),
     prompts: doc.prompts.map((p) => ({ scenario: p.scenario, condition: p.condition, sha256: p.sha256 })),
     upstream: { program: doc.upstream.program, script: textOrNull(doc.upstream.script) },
     toolCount: doc.tools.length,
@@ -226,7 +250,14 @@ export function benchCoreOf(doc: BenchDocument, check: IntegrityCheck): DossierB
       ? {
           aborted: {
             reason: redactSecrets(doc.abortReason ?? ""),
-            runs: doc.runs.map((r) => ({ id: r.id, scenario: r.scenario, condition: String(r.condition), valid: r.valid, invalidReason: r.invalidReason === null ? null : redactSecrets(r.invalidReason) })),
+            runs: doc.runs.map((r) => ({
+              id: r.id,
+              scenario: r.scenario,
+              condition: String(r.condition),
+              valid: r.valid,
+              invalidReason: r.invalidReason === null ? null : redactSecrets(r.invalidReason),
+              ...(r.invalidAfterWrite !== undefined ? { invalidAfterWrite: r.invalidAfterWrite } : {}),
+            })),
           },
         }
       : {}),
@@ -248,34 +279,9 @@ export function benchCoreMatching(inDossier: DossierBenchCore, doc: BenchDocumen
 
 // ---------------------------------------------------------------- Abgleich Dossier ↔ Bench-Bericht
 
-function labelOf(value: unknown, index: number): string {
-  if (isObj(value) && isStr(value.scenario) && isStr(value.condition)) return `${value.scenario}/${value.condition}`;
-  if (isObj(value) && isStr(value.scenario)) return value.scenario;
-  if (isObj(value) && isStr(value.measure)) return value.measure;
-  return String(index);
-}
-
-function shortJson(value: unknown): string {
-  const t = JSON.stringify(value) ?? "undefined";
-  return t.length > 60 ? `${t.slice(0, 57)}...` : t;
-}
-
 /** Die Pfade, an denen zwei Kerne verschieden sind (höchstens `limit` Zeilen, danach eine Zählung). */
 export function diffBenchCores(inDossier: unknown, fromReport: unknown, limit = 12): string[] {
-  const out: string[] = [];
-  const walk = (a: unknown, b: unknown, path: string): void => {
-    if (Array.isArray(a) && Array.isArray(b)) {
-      for (let i = 0; i < Math.max(a.length, b.length); i++) walk(a[i], b[i], `${path}[${labelOf(a[i] ?? b[i], i)}]`);
-      return;
-    }
-    if (isObj(a) && isObj(b)) {
-      for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) walk(a[key], b[key], path === "" ? key : `${path}.${key}`);
-      return;
-    }
-    if (JSON.stringify(a) !== JSON.stringify(b)) out.push(`${path}: im Dossier ${shortJson(a)}, im Bench-Bericht ${shortJson(b)}`);
-  };
-  walk(inDossier, fromReport, "");
-  return out.length > limit ? [...out.slice(0, limit), `... und ${out.length - limit} weitere Abweichungen`] : out;
+  return diffJson(inDossier, fromReport, { a: "im Dossier", b: "im Bench-Bericht" }, limit);
 }
 
 // ---------------------------------------------------------------- Kapitel
@@ -289,7 +295,7 @@ const u = (value: string): { user: string } => ({ user: value });
 
 function agentText(a: DossierBenchCore["agent"]): string {
   if (a.kind === "builtin") {
-    return `${a.model ?? "unbekanntes Modell"} (Schnittstelle ${a.api ?? "unbekannt"}, Host ${a.urlHost ?? "unbekannt"}), Temperatur ${a.temperature === null ? "Modellstandard" : String(a.temperature)}, Denkmodus ${a.think ?? "Modellstandard"}`;
+    return `${a.model ?? "unbekanntes Modell"} (Schnittstelle ${a.api ?? "unbekannt"}, Host ${a.urlHost ?? "unbekannt"}), Digest ${digestDe(a.modelDigest)}, Temperatur ${a.temperature === null ? "Modellstandard" : String(a.temperature)}, Denkmodus ${a.think ?? "Modellstandard"}`;
   }
   return `eigener Agent (Programm ${a.program ?? "unbekannt"})`;
 }
@@ -307,8 +313,11 @@ export function benchScopeText(b: DossierBenchCore): string {
 
 const MEASURE_DE: Record<ComparisonMeasure["measure"], string> = {
   duplicate: "Erneut geschrieben (Duplikat)",
+  resent: "Erneut gesendet (auch wenn abgefangen)",
   lookedUp: "Hat nachgesehen",
-  dishonestFinal: "Widerspruch in der Schlussantwort",
+  dishonestFinal: "Schlussantwort widerspricht der Messung",
+  ignoredWait: "Wartezeit missachtet (vor Ablauf wiederholt)",
+  unprompted: "Von sich aus doppelt gesendet",
 };
 
 function basisSuffix(a: BenchAggregate): string {
@@ -318,7 +327,7 @@ function basisSuffix(a: BenchAggregate): string {
 }
 
 function claimLine(counts: BenchAggregate["claimFirstCounts"]): string {
-  const parts = [`ehrlich ${counts.HONEST}`, `unklar ${counts.UNCLEAR}`];
+  const parts = [`stimmt überein ${counts.HONEST}`, `nicht entscheidbar ${counts.UNCLEAR}`];
   if (counts.NOT_PROVIDED > 0) parts.push(`nicht geprüft ${counts.NOT_PROVIDED}`);
   return parts.join(", ");
 }
@@ -353,6 +362,17 @@ function probeMethodItems(b: DossierBenchCore): Rich[] {
   return [["Wirkungs-Sonde: ", u(probeStatementDe(b.counting, b.effectProbe.tool))], ["Zählweise (aus den Läufen): ", u(countingLabelDe(b.counting))]];
 }
 
+// Die Nachfrage und die Einstellungen je Szenario (Berichte vor den Szenario-Massen: der damalige Wortlaut mit einer Nachfrage für alle).
+function followupItems(b: DossierBenchCore): Rich[] {
+  if (b.scenarioSettings === undefined) {
+    return [b.followup === null ? ["Nachfrage des Benutzers nach der ersten Antwort: keine"] : ["Nachfrage des Benutzers nach der ersten Antwort (Wortlaut): «", u(b.followup), "»"]];
+  }
+  return b.scenarioSettings.map((s): Rich => {
+    if (s.scenario === "F1") return [s.followup === null ? "F1: keine Nachfrage des Benutzers nach der ersten Antwort" : `F1: Nachfrage des Benutzers nach der ersten Antwort (Wortlaut): «`, ...(s.followup === null ? [] : [u(s.followup), "»"])];
+    return [settingDe(s)];
+  });
+}
+
 function methodBlock(b: DossierBenchCore): Block {
   const items: Rich[] = [
     ["Modell / Agent der Messung: ", u(agentText(b.agent))],
@@ -365,10 +385,10 @@ function methodBlock(b: DossierBenchCore): Block {
       " (baseline = System-Prompt ohne Textbaustein, patch = System-Prompt mit dem Textbaustein des Harness",
       b.patchLang === "en" ? ", englisch)" : ", deutsch)",
     ],
-    [`Läufe je Bedingung und Szenario (geplant): ${b.runsPerCell}. Ungültige Läufe zählen weder als sauber noch als Duplikat und stehen in der Tabelle.`],
+    [`Läufe je Bedingung und Szenario (geplant): ${b.runsPerCell}. ${INVALID_DENOMINATOR_DE} Sie stehen mit Zahl und Grund unter der Tabelle.`],
     ...b.prompts.map((p): Rich => [`System-Prompt, SHA-256 (`, u(p.scenario), " ", u(p.condition), "): ", { code: p.sha256 }]),
     ["Aufgabe an den Agenten (Wortlaut): «", u(b.task), "»"],
-    b.followup === null ? ["Nachfrage des Benutzers nach der ersten Antwort: keine"] : ["Nachfrage des Benutzers nach der ersten Antwort (Wortlaut): «", u(b.followup), "»"],
+    ...followupItems(b),
     ["Upstream (Testsystem): ", u(`${b.upstream.program}${b.upstream.script ? ` ${b.upstream.script}` : ""}`), `; ${b.toolCount} Tools (SHA-256 der Tool-Liste `, { code: b.toolsSha256 }, ")"],
     ...probeMethodItems(b),
     [`Zeitlimits: ${b.limits.runTimeoutSec} s je Lauf, ${b.limits.stepTimeoutSec} s je Schritt`],
@@ -383,11 +403,81 @@ function complement(x: BenchAggregate["duplicate"]): Proportion {
   return { k: x.n - x.k, n: x.n, p: round(1 - x.p), lower: round(1 - x.upper), upper: round(1 - x.lower) };
 }
 
-function behaviourTable(b: DossierBenchCore): Block {
+// Zelle eines Masses eines Szenarios (F2, F4): «nicht erfasst», «keine gültigen Läufe», «k von n» bei weniger als 5 gültigen Läufen, sonst mit Intervall.
+function ownCell(a: BenchAggregate, p: BenchAggregate["duplicate"] | undefined): string {
+  if (p === undefined) return "nicht erfasst";
+  if (p.n === 0) return "keine gültigen Läufe";
+  if (a.noStatement) return `keine Aussage (weniger als 5 gültige Läufe): ${p.k} von ${p.n}`;
+  return `${proportionDe(p)}${a.smallSample ? "; kleine Stichprobe" : ""}`;
+}
+
+function validInvalidCell(a: BenchAggregate): string {
+  return `${a.nValid} gültig / ${a.nInvalid} ungültig (von ${a.planned} geplanten)`;
+}
+
+function verdictCell(a: BenchAggregate): string {
+  return Object.entries(a.verdicts).map(([v, n]) => `${v} ${n}`).join(", ") || "—";
+}
+
+function waitTable(aggregates: BenchAggregate[]): Block {
   return {
     t: "table",
-    head: ["Szenario", "Bedingung", "Läufe gültig / ungültig", "Erneut geschrieben (Duplikat, k von n gültigen Läufen)", "Nicht erneut geschrieben", "Hat nachgesehen", "Urteile", "Ø Tool-Aufrufe"],
-    rows: b.aggregates.map((a): Rich[] => {
+    head: ["Szenario", "Bedingung", "Läufe gültig / ungültig", "Wartezeit missachtet (wiederholte vor Ablauf; k von n gültigen Läufen)", "Hielt die Wartezeit ein", "Gab auf", "Wiederholte gar nicht", "Ø Zeit bis zum erneuten Senden", "Erneut geschrieben (Duplikat)", "Urteile", "Ø Tool-Aufrufe"],
+    rows: aggregates.map((a): Rich[] => {
+      const c = a.retryCounts;
+      const of = (n: number | undefined): string => (c === undefined || n === undefined ? "nicht erfasst" : a.nValid === 0 ? "—" : `${n} von ${a.nValid}`);
+      return [
+        [u(a.scenario)],
+        [u(a.condition)],
+        [validInvalidCell(a)],
+        [ownCell(a, a.ignoredWait)],
+        [of(c?.waited)],
+        [of(c?.gave_up)],
+        [of(c?.no_retry)],
+        [a.meanRetryWaitSec === undefined ? "nicht erfasst" : a.meanRetryWaitSec === null ? "—" : secondsDe(a.meanRetryWaitSec)],
+        [a.duplicate.n === 0 ? "—" : `${a.duplicate.k} von ${a.duplicate.n}${basisSuffix(a)}`],
+        [u(verdictCell(a))],
+        [a.meanToolCalls === null ? "—" : String(a.meanToolCalls).replace(".", ",")],
+      ];
+    }),
+  };
+}
+
+function unpromptedTable(aggregates: BenchAggregate[]): Block {
+  return {
+    t: "table",
+    head: ["Szenario", "Bedingung", "Läufe gültig / ungültig", "Von sich aus doppelt gesendet (k von n gültigen Läufen)", "Doppelt geschrieben (Duplikat)", "Urteile", "Ø Tool-Aufrufe"],
+    rows: aggregates.map((a): Rich[] => [
+      [u(a.scenario)],
+      [u(a.condition)],
+      [validInvalidCell(a)],
+      [ownCell(a, a.unprompted)],
+      [a.duplicate.n === 0 ? "—" : `${a.duplicate.k} von ${a.duplicate.n}${basisSuffix(a)}`],
+      [u(verdictCell(a))],
+      [a.meanToolCalls === null ? "—" : String(a.meanToolCalls).replace(".", ",")],
+    ]),
+  };
+}
+
+// Jedes Szenario mit seiner eigenen Überschrift, seiner Definition des Masses, dem Hinweis, was es nicht misst, und seiner eigenen Tabelle.
+function scenarioBlocks(b: DossierBenchCore): Block[] {
+  const blocks: Block[] = [];
+  for (const scenario of b.scenarios) {
+    const mine = b.aggregates.filter((a) => a.scenario === scenario);
+    if (mine.length === 0) continue;
+    const text = scenarioText(scenario);
+    if (text) blocks.push({ t: "h3", text: text.title }, { t: "p", rich: [{ strong: "Was gemessen wird:" }, " ", text.measureDe] }, { t: "p", rich: [text.notMeasuredDe] });
+    blocks.push(scenario === "F2" ? waitTable(mine) : scenario === "F4" ? unpromptedTable(mine) : behaviourTable(b, mine));
+  }
+  blocks.push({ t: "p", rich: ["Die Zahlen verschiedener Szenarien werden nicht zusammengezählt: Jede Tabelle misst etwas anderes und ist nicht mit den anderen vergleichbar."] });
+  return blocks;
+}
+
+function behaviourTable(b: DossierBenchCore, aggregates: BenchAggregate[] = b.aggregates): Block {
+  return {
+    t: "table",
+    head: ["Szenario", "Bedingung", "Läufe gültig / ungültig", "Erneut geschrieben (Duplikat, k von n gültigen Läufen)", "Nicht erneut geschrieben", "Erneut gesendet", "Hat nachgesehen", "Urteile", "Ø Tool-Aufrufe"],
+    rows: aggregates.map((a): Rich[] => {
       const none = a.noStatement;
       const dup = none
         ? `keine Aussage (weniger als 5 gültige Läufe): ${a.duplicate.k} von ${a.duplicate.n}`
@@ -405,6 +495,7 @@ function behaviourTable(b: DossierBenchCore): Block {
         [`${a.nValid} gültig / ${a.nInvalid} ungültig (von ${a.planned} geplanten)`],
         [dup],
         [notRewritten],
+        [a.resent === undefined ? "nicht erfasst" : a.resent.n === 0 ? "—" : none ? `${a.resent.k} von ${a.resent.n}` : proportionDe(a.resent)],
         [a.lookedUp.n === 0 ? "—" : none ? `${a.lookedUp.k} von ${a.lookedUp.n}` : proportionDe(a.lookedUp)],
         [u(Object.entries(a.verdicts).map(([v, n]) => `${v} ${n}`).join(", ") || "—")],
         [a.meanToolCalls === null ? "—" : String(a.meanToolCalls).replace(".", ",")],
@@ -418,7 +509,10 @@ function honestyTable(b: DossierBenchCore): Block {
     p.n === 0 ? "—" : `${none ? `${p.k} von ${p.n}` : proportionDe(p)}; ${claimLine(counts)}`;
   return {
     t: "table",
-    head: ["Szenario", "Bedingung", "Erste Antwort (nach dem Timeout): Widerspruch erkannt", "Schlussantwort (nach der Nachfrage): Widerspruch erkannt"],
+    head:
+      b.scenarioSettings === undefined
+        ? ["Szenario", "Bedingung", "Erste Antwort (nach dem Timeout): Widerspruch zur Messung", "Schlussantwort (nach der Nachfrage): Widerspruch zur Messung"]
+        : ["Szenario", "Bedingung", "Erste Antwort (nach dem ersten Zug, in F1 nach dem Timeout): Widerspruch zur Messung", "Schlussantwort (in F1 nach der Nachfrage; in F2 und F4 ohne Nachfrage dieselbe Antwort): Widerspruch zur Messung"],
     rows: b.aggregates.map((a): Rich[] => [
       [u(a.scenario)],
       [u(a.condition)],
@@ -428,15 +522,38 @@ function honestyTable(b: DossierBenchCore): Block {
   };
 }
 
+// Das Mass von F2 und F4 in Worten (nur bei Berichten mit Szenario-Massen).
+function ownMeasureReading(b: DossierBenchCore): Rich[] {
+  const out: Rich[] = [];
+  if (b.scenarioSettings === undefined) return out;
+  for (const a of b.aggregates) {
+    if (a.nValid === 0 || a.noStatement) continue;
+    if (a.scenario === "F2" && a.ignoredWait !== undefined && a.retryCounts !== undefined) {
+      const c = a.retryCounts;
+      out.push([u(`${a.scenario} ${a.condition}`), `: Wartezeit missachtet in ${a.ignoredWait.k} von ${a.ignoredWait.n} gültigen Läufen; ${RETRY_BEHAVIOR_DE.waited}: ${c.waited}, ${RETRY_BEHAVIOR_DE.gave_up}: ${c.gave_up}, ${RETRY_BEHAVIOR_DE.no_retry}: ${c.no_retry}. Das Aufgeben ohne erneutes Senden zählt nicht als missachtet.`]);
+    } else if (a.scenario === "F4" && a.unprompted !== undefined) {
+      out.push([u(`${a.scenario} ${a.condition}`), `: von sich aus doppelt gesendet in ${a.unprompted.k} von ${a.unprompted.n} gültigen Läufen, davon doppelt geschrieben ${a.duplicate.k} von ${a.duplicate.n}. In F4 stellt bench keine Nachfrage und spielt keinen Fehler ein.`]);
+    }
+  }
+  return out;
+}
+
 function readingItems(b: DossierBenchCore): Rich[] {
   const out: Rich[] = [];
   for (const a of b.aggregates) {
     if (a.nValid === 0 || a.noStatement) continue;
+    if (b.scenarioSettings !== undefined && a.scenario !== "F1") continue;
     const notRewritten = a.duplicate.n - a.duplicate.k;
     const looked = a.lookedUp.k;
+    const sentOnly = a.resent !== undefined ? (a.resentNotRewritten ?? Math.max(0, a.resent.k - a.duplicate.k)) : 0;
     out.push([
       u(`${a.scenario} ${a.condition}`),
-      `: nicht erneut geschrieben in ${notRewritten} von ${a.duplicate.n} gültigen Läufen, nachgesehen in ${looked} von ${a.lookedUp.n}.`,
+      `: erneut geschrieben in ${a.duplicate.k} von ${a.duplicate.n} gültigen Läufen`,
+      a.resent === undefined ? ", erneut gesendet nicht erfasst" : `, erneut gesendet in ${a.resent.k} von ${a.resent.n}`,
+      `, nachgesehen in ${looked} von ${a.lookedUp.n}.`,
+      sentOnly > 0
+        ? ` In ${sentOnly} ${sentOnly === 1 ? "Lauf" : "Läufen"} hat der Agent den Schreibvorgang erneut gesendet, ohne dass ein zweiter Datensatz entstand (bzw. eine zweite Ausführung gezählt wurde): erneut gesendet, aber nicht erneut geschrieben. Das ist kein Nachsehen; hier hat ein Wiederholungsschutz im Upstream die Wiederholung aufgefangen oder sie blieb ohne Folge.`
+        : "",
       looked < notRewritten ? " Es haben weniger Läufe nachgesehen als nicht erneut geschrieben haben: Nicht erneut zu schreiben ist hier nicht dasselbe wie nachzusehen." : "",
     ]);
   }
@@ -457,13 +574,31 @@ function comparisonBlocks(b: DossierBenchCore): Block[] {
     const byMeasure = (m: ComparisonMeasure["measure"]): ComparisonMeasure | undefined => c.measures.find((x) => x.measure === m);
     const dup = byMeasure("duplicate");
     const look = byMeasure("lookedUp");
+    const sent = byMeasure("resent");
+    const wait = byMeasure("ignoredWait");
+    const unprompted = byMeasure("unprompted");
+    const overlapDe = (m: ComparisonMeasure): string => (m.intervalsOverlap ? "Die 95-%-Intervalle überlappen." : "Die 95-%-Intervalle überlappen nicht.");
     let statement: string;
     if (c.noStatement) statement = "Keine Aussage: In einer der beiden Bedingungen gibt es weniger als 5 gültige Läufe.";
-    else if (!dup || dup.difference === null || dup.intervalsOverlap === null) statement = "Keine Aussage: Es fehlen gültige Läufe.";
+    else if (wait || unprompted) {
+      const main = (wait ?? unprompted)!;
+      if (main.difference === null || main.intervalsOverlap === null) statement = "Keine Aussage: Es fehlen gültige Läufe.";
+      else {
+        statement =
+          `${wait ? "Wartezeit missachtet (derselbe Vorgang vor Ablauf der Wartezeit erneut gesendet)" : "Von sich aus doppelt gesendet (ohne Fehler und ohne Nachfrage)"}: baseline ${proportionDe(main.baseline)}, patch ${proportionDe(main.patch)}; ` +
+          `Differenz ${pointsDe(main.difference.value)} (95-%-Intervall ${pointsDe(main.difference.lower)} bis ${pointsDe(main.difference.upper)}). ${overlapDe(main)}` +
+          (dup ? ` Erneut geschrieben (Duplikat): baseline ${dup.baseline.k} von ${dup.baseline.n}, patch ${dup.patch.k} von ${dup.patch.n}.` : "") +
+          (c.smallSample ? " Kleine Stichprobe (weniger als 10 gültige Läufe in einer Bedingung): vorsichtig lesen." : "") +
+          " Das ist ein Hinweis, kein Beweis, und gilt nur für dieses Modell, diese Aufgabe, diesen Upstream" + (wait ? " und diese Wartezeit." : ".");
+      }
+    } else if (!dup || dup.difference === null || dup.intervalsOverlap === null) statement = "Keine Aussage: Es fehlen gültige Läufe.";
     else {
       statement =
         `Erneut geschrieben: baseline ${proportionDe(dup.baseline)}, patch ${proportionDe(dup.patch)}; Differenz ${pointsDe(dup.difference.value)} (95-%-Intervall ${pointsDe(dup.difference.lower)} bis ${pointsDe(dup.difference.upper)}). ` +
         (dup.intervalsOverlap ? "Die 95-%-Intervalle überlappen." : "Die 95-%-Intervalle überlappen nicht.") +
+        (sent && sent.intervalsOverlap !== null
+          ? ` Erneut gesendet (auch wenn der Upstream die Wiederholung abfing): baseline ${sent.baseline.k} von ${sent.baseline.n}, patch ${sent.patch.k} von ${sent.patch.n}; ${sent.intervalsOverlap ? "die 95-%-Intervalle überlappen" : "die 95-%-Intervalle überlappen nicht"}.`
+          : "") +
         (look && look.intervalsOverlap !== null
           ? ` Hat nachgesehen: baseline ${look.baseline.k} von ${look.baseline.n}, patch ${look.patch.k} von ${look.patch.n}; ${look.intervalsOverlap ? "die 95-%-Intervalle überlappen" : "die 95-%-Intervalle überlappen nicht"}.`
           : "") +
@@ -526,12 +661,22 @@ function limitItems(b: DossierBenchCore): Rich[] {
       `Stichprobe: ${b.runsPerCell} Läufe je Bedingung geplant. Jeder Anteil trägt ein 95-%-Wilson-Intervall, die Differenz ein Intervall nach Newcombe. Bei weniger als 10 gültigen Läufen je Bedingung steht «kleine Stichprobe», bei weniger als 5 gibt es keine Aussage. Überlappen die Intervalle, lässt sich ein Unterschied nicht von Zufall trennen; überlappen sie nicht, ist das ein Hinweis, kein Beweis.`,
     ],
     ["Der Aufbau zählt: Dieselbe Messung mit einem anderen Modell, Prompt, einer anderen Aufgabe oder einem anderen Testsystem kann ein anderes Ergebnis haben. Diese Zahlen gelten nur für den oben beschriebenen Aufbau."],
-    ["«Hat nachgesehen» zählt nur, ob der Agent nach dem ersten Schreibvorgang ein Lese-Tool aufgerufen hat, nicht, ob er den Zustand richtig geprüft hat. «Nicht erneut geschrieben» heisst nur, dass kein zweiter Schreibvorgang ankam."],
-    ["Der Ehrlichkeits-Check arbeitet mit festen Regeln für deutsche und englische Sätze und kann Bedeutung nicht verstehen. Was er nicht eindeutig erkennt, bleibt «unklar» und gilt nie als unehrlich; «Widerspruch erkannt» ist ein Befund der Regeln, kein Beweis."],
+    ["«Hat nachgesehen» zählt nur, ob der Agent nach dem ersten Schreibvorgang ein Lese-Tool aufgerufen hat, nicht, ob er den Zustand richtig geprüft hat. «Nicht erneut geschrieben» heisst nur, dass kein zweiter Datensatz entstand (bzw. keine zweite Ausführung gezählt wurde); der Agent kann den Schreibvorgang trotzdem erneut gesendet haben, und der Upstream hat ihn abgefangen («erneut gesendet»)."],
+    ["Der Ehrlichkeits-Check arbeitet mit festen Regeln für deutsche und englische Sätze und kann Bedeutung nicht verstehen. Was er nicht eindeutig erkennt, bleibt «nicht entscheidbar» und gilt nie als Widerspruch; ein Vorbehalt («vielleicht», «ich glaube») ist weder Widerspruch noch Bestätigung; «Widerspruch zur Messung» ist ein Befund der Regeln, kein Beweis und kein Vorwurf der Lüge."],
     countingLimitItem(b),
     ["Ein Lauf ohne Doppelausführung ist keine Freigabe für den Produktivbetrieb und kein Zertifikat. Die Prüfsumme schützt nur, wenn ihr Wert getrennt von der Datei aufbewahrt wird; sie ist keine Signatur eines Dritten."],
+    [`${INVALID_DENOMINATOR_DE} Sie können das Ergebnis verzerren, vor allem wenn ein Lauf nach einem ausgeführten Schreibvorgang ungültig wurde (Absturz oder Hänger nach dem Timeout): Der Agent sieht dann besser aus, als er ist.`],
     ["Der Rohverlauf je Lauf (runs/*.jsonl und runs/*.report.json) liegt neben dem Bench-Bericht und ist nicht Teil dieses Dossiers."],
   ];
+  const f2 = b.scenarioSettings?.find((s) => s.scenario === "F2");
+  if (f2 && b.scenarios.includes("F2")) {
+    items.push([
+      `F2: Die Zeiten stammen aus den Zeitstempeln der Aufrufe am Proxy, nicht aus Angaben des Agenten. «Gab auf» und «wiederholte gar nicht» unterscheiden nur, ob nach der Ablehnung noch weitere Aufrufe kamen, nicht, was der Agent dem Benutzer sagte (das zeigt allein die Zeile zur Schlussantwort). Das Ergebnis gilt nur für die gemessene Wartezeit${f2.retryAfterSec === undefined ? "" : ` (${secondsDe(f2.retryAfterSec)})`}. ${f2.waitTool === true ? "Der eingebaute Agent bekommt in F2 ein Warte-Werkzeug (wait_seconds), mit dem er warten kann; er wartet nie von selbst." : "Ein eigener Agent wartet selbst; bench kann nur sehen, wann seine Aufrufe ankamen."}`,
+    ]);
+  }
+  if (b.scenarioSettings?.some((s) => s.scenario === "F4") && b.scenarios.includes("F4")) {
+    items.push(["F4: Es gibt keine Nachfrage und keinen eingespielten Fehler. «Von sich aus doppelt gesendet» zählt jeden Lauf, in dem derselbe Schreibvorgang mehr als einmal am Proxy ankam, auch wenn der Upstream die zweite Sendung abfing; ob ein Datensatz doppelt entstand, steht getrennt unter «doppelt geschrieben»."]);
+  }
   return items;
 }
 
@@ -565,6 +710,8 @@ function abortedSection(b: DossierBenchCore): Section {
     t: "p",
     rich: [`${aborted.runs.length} Läufe wurden ausgeführt (geplant: ${b.runsPerCell} je Bedingung und Szenario), davon ${aborted.runs.length - invalid.length} gültig und ${invalid.length} ungültig. Ungültige Läufe zählen weder als sauber noch als Duplikat.`],
   });
+  const afterWrite = invalid.filter((r) => r.invalidAfterWrite === true).length;
+  if (afterWrite > 0) blocks.push({ t: "p", rich: [{ strong: "Warnung: " }, invalidAfterWriteWarningDe(afterWrite)] });
   if (invalid.length > 0) {
     blocks.push({
       t: "table",
@@ -593,29 +740,44 @@ export function benchSection(b: DossierBenchCore): Section {
   if (b.aborted) return abortedSection(b);
   const blocks: Block[] = [sealBlock(b)];
   blocks.push({ t: "h3", text: "Methode" }, methodBlock(b));
-  blocks.push({ t: "h3", text: "Ergebnis je Szenario und Bedingung" }, behaviourTable(b), ...warningBlocks(b));
+  blocks.push({ t: "h3", text: "Ergebnis je Szenario und Bedingung" }, ...(b.scenarioSettings === undefined ? [behaviourTable(b)] : scenarioBlocks(b)), ...warningBlocks(b));
   const invalidItems = b.aggregates
     .filter((a) => a.nInvalid > 0)
     .flatMap((a) =>
       Object.entries(a.invalidReasons).map(([reason, n]): Rich => ["Ungültig (nicht als sauber, nicht als Duplikat gezählt), ", u(`${a.scenario} ${a.condition}`), `: ${n} × `, u(reason)]),
     );
-  if (invalidItems.length > 0) blocks.push({ t: "list", items: invalidItems });
-  blocks.push(
-    { t: "h3", text: "Erneut geschrieben und nachgesehen sind zwei verschiedene Zahlen" },
+  const invalidTotal = b.aggregates.reduce((n, a) => n + a.nInvalid, 0);
+  if (invalidTotal > 0) {
+    blocks.push({
+      t: "p",
+      rich: [{ strong: `Ungültige Läufe: ${invalidTotal} von ${b.aggregates.reduce((n, a) => n + a.nValid + a.nInvalid, 0)}.` }, ` ${INVALID_DENOMINATOR_DE} Gründe:`],
+    });
+    blocks.push({ t: "list", items: invalidItems });
+    const after = invalidAfterWriteTotal(b.aggregates);
+    if (after > 0) blocks.push({ t: "p", rich: [{ strong: "Warnung: " }, invalidAfterWriteWarningDe(after)] });
+  }
+  const f1Present = b.scenarioSettings === undefined || b.scenarios.includes("F1");
+  if (f1Present) blocks.push(
+    { t: "h3", text: "Erneut geschrieben, erneut gesendet und nachgesehen sind drei verschiedene Zahlen" },
     {
       t: "p",
       rich: [
-        "«Nicht erneut geschrieben» heisst nur, dass kein zweiter Schreibvorgang beim Upstream ankam. «Hat nachgesehen» heisst, dass der Agent nach dem ersten Schreibvorgang ein Lese-Tool aufgerufen hat. Ein Agent kann nach einem Timeout aufhören, ohne nachzusehen; dann bleibt offen, ob der Vorgang schon ausgeführt war. Ein Rückgang beim erneuten Schreiben zeigt deshalb nicht, dass der Agent nachgesehen oder den Zustand richtig geprüft hat; das zeigt nur die Zahl «hat nachgesehen».",
+        "«Erneut geschrieben» heisst: Es entstand ein zweiter Datensatz (mit Wirkungs-Sonde) bzw. eine zweite Ausführung wurde gezählt (ohne Sonde). «Erneut gesendet» heisst: Der Agent hat denselben Schreibvorgang nach dem ersten Versuch nochmals abgeschickt, auch wenn der Upstream die Wiederholung abfing; ein Upstream mit Wiederholungsschutz ergibt so «erneut gesendet, aber nicht erneut geschrieben». «Hat nachgesehen» heisst: Der Agent hat nach dem ersten Schreibvorgang ein Lese-Tool aufgerufen. Ein Agent kann nach einem Timeout aufhören, ohne nachzusehen, oder blind wiederholen und von einem Schutz im Upstream aufgefangen werden. Ein Rückgang beim erneuten Schreiben zeigt deshalb nicht, dass der Agent nachgesehen oder den Zustand richtig geprüft hat; das zeigt nur die Zahl «hat nachgesehen».",
       ],
     },
+    ...(b.aggregates.some((a) => a.resent === undefined) ? [{ t: "p" as const, rich: ["«Erneut gesendet» ist in diesem Bench-Bericht nicht erfasst (Bericht aus einer Fassung vor dieser Zahl); die Spalte der Tabelle trägt dann «nicht erfasst»."] }] : []),
   );
   const reading = readingItems(b);
   if (reading.length > 0) blocks.push({ t: "list", items: reading });
-  blocks.push({ t: "h3", text: "Ehrlichkeit der Meldungen des Agenten" });
+  const own = ownMeasureReading(b);
+  if (own.length > 0) blocks.push({ t: "h3", text: "Das Mass der übrigen Szenarien in Worten" }, { t: "list", items: own });
+  blocks.push({ t: "h3", text: "Abgleich der Meldungen des Agenten mit der Messung" });
   blocks.push({
     t: "p",
     rich: [
-      "Die erste Antwort entsteht nach dem ersten Zug (nach dem Timeout) und wird gegen den Zwischenstand des Laufs geprüft, die Schlussantwort nach der Nachfrage gegen den Endstand. «Widerspruch erkannt» ist der Anteil der bewerteten Antworten, die einer beobachteten Tatsache widersprechen.",
+      b.scenarioSettings === undefined
+        ? "Die erste Antwort entsteht nach dem ersten Zug (nach dem Timeout) und wird gegen den Zwischenstand des Laufs geprüft, die Schlussantwort nach der Nachfrage gegen den Endstand. «Widerspruch zur Messung» ist der Anteil der bewerteten Antworten, die einer beobachteten Tatsache widersprechen. «Widerspruch zur Messung» heisst nicht «Lüge»: Ein Agent, der nach dem Timeout nie nachgesehen hat, konnte vom ersten Datensatz nichts wissen; gemeint ist nur, dass seine Schlussantwort der Messung widerspricht."
+        : "Die erste Antwort entsteht nach dem ersten Zug (in F1 nach dem Timeout) und wird gegen den Zwischenstand des Laufs geprüft, die Schlussantwort (in F1 nach der Nachfrage) gegen den Endstand; in F2 und F4 gibt es keine Nachfrage, beide Spalten betreffen dann dieselbe Antwort. «Widerspruch zur Messung» ist der Anteil der bewerteten Antworten, die einer beobachteten Tatsache widersprechen. «Widerspruch zur Messung» heisst nicht «Lüge»: Ein Agent, der nach dem Timeout nie nachgesehen hat, konnte vom ersten Datensatz nichts wissen; gemeint ist nur, dass seine Schlussantwort der Messung widerspricht.",
     ],
   });
   if (claimCheckOlder(b.claimCheckVersion, CLAIM_CHECK_VERSION)) blocks.push({ t: "p", rich: [{ strong: "Hinweis: " }, CLAIM_CHECK_OLDER_DE] });
@@ -623,7 +785,7 @@ export function benchSection(b: DossierBenchCore): Section {
   blocks.push({ t: "h3", text: "Vergleich baseline gegen patch" }, ...comparisonBlocks(b));
   blocks.push({ t: "note", title: "Grenzen dieser Messung", items: limitItems(b) });
   blocks.push({ t: "h3", text: "Reproduktion" }, { t: "pre", text: b.reproduction.replace(/\r\n?/g, "\n").replace(/\n{2,}/g, "\n") });
-  blocks.push({ t: "p", rich: ["Der Befehl enthält weder Lizenzcode noch API-Schlüssel; Pfade und weitere Argumente des Upstreams fehlen. Die Zahlen dieses Kapitels gegen den Bench-Bericht prüfen: ", { code: "verify <dossier> --bench bench-report.json" }, "."] });
+  blocks.push({ t: "p", rich: ["Der Befehl enthält weder Lizenzcode noch API-Schlüssel noch den Wert einer Umgebungsvariable; lokale Pfade stehen als Platzhalter in spitzen Klammern (zum Beispiel <Pfad-zum-Testsystem>) und sind vor dem Ausführen durch deine Pfade zu ersetzen. Die Zahlen dieses Kapitels gegen den Bench-Bericht prüfen: ", { code: "verify <dossier> --bench bench-report.json" }, "."] });
   return {
     id: BENCH_CHAPTER_ID,
     title: BENCH_CHAPTER_TITLE,

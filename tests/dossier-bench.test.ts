@@ -82,7 +82,7 @@ describe("B1: Inhalt des Kapitels", () => {
     expect(chapter).toContain("--model qwen3:14b --api ollama --url http://localhost:11434");
   });
 
-  it("Tabelle je Szenario und Bedingung: gültig/ungültig, Duplikat k von n mit Intervall, hat nachgesehen, Urteile, Ehrlichkeit der ersten Antwort und der Schlussantwort", () => {
+  it("Tabelle je Szenario und Bedingung: gültig/ungültig, Duplikat k von n mit Intervall, hat nachgesehen, Urteile, Abgleich der ersten Antwort und der Schlussantwort mit der Messung", () => {
     const chapter = chapterOf(render().md);
     const baseline = chapter.split("\n").find((l) => l.startsWith("| F1 | baseline | 5 gültig / 0 ungültig"))!;
     const patch = chapter.split("\n").find((l) => l.startsWith("| F1 | patch | 5 gültig / 0 ungültig"))!;
@@ -90,10 +90,10 @@ describe("B1: Inhalt des Kapitels", () => {
     expect(baseline).toContain("FAIL 5");
     expect(patch).toContain("0 von 5 (0,0 %; 95-%-Intervall 0,0 % bis 43,5 %); kleine Stichprobe");
     expect(patch).toContain("PASS 5");
-    const honesty = chapter.split("\n").filter((l) => l.startsWith("| F1 |") && l.includes("Widerspruch") === false && l.includes("ehrlich"));
+    const honesty = chapter.split("\n").filter((l) => l.startsWith("| F1 |") && l.includes("Widerspruch") === false && l.includes("stimmt überein"));
     expect(honesty.length).toBe(2);
-    expect(honesty[1]).toContain("4 von 5 (80,0 %; 95-%-Intervall 37,5 % bis 96,4 %); ehrlich 1, unklar 0");
-    expect(honesty[1]).toContain("2 von 5 (40,0 %; 95-%-Intervall 11,8 % bis 76,9 %); ehrlich 2, unklar 1");
+    expect(honesty[1]).toContain("4 von 5 (80,0 %; 95-%-Intervall 37,5 % bis 96,4 %); stimmt überein 1, nicht entscheidbar 0");
+    expect(honesty[1]).toContain("2 von 5 (40,0 %; 95-%-Intervall 11,8 % bis 76,9 %); stimmt überein 2, nicht entscheidbar 1");
   });
 
   it("Vergleich baseline gegen patch: Differenz mit Intervall, «überlappen / überlappen nicht», «kleine Stichprobe», nie «bewiesen»", () => {
@@ -123,11 +123,12 @@ describe("B1: Inhalt des Kapitels", () => {
     const chapter = chapterOf(md);
     const patch = chapter.split("\n").find((l) => l.startsWith("| F1 | patch | 5 gültig"))!;
     const cells = patch.split("|").map((c) => c.trim());
-    // Szenario, Bedingung, Läufe, Duplikat, nicht erneut geschrieben, hat nachgesehen
+    // Szenario, Bedingung, Läufe, Duplikat, nicht erneut geschrieben, erneut gesendet (älterer Bericht: nicht erfasst), hat nachgesehen
     expect(cells[4]).toContain("0 von 5");
     expect(cells[5]).toBe("5 von 5 (100,0 %; 95-%-Intervall 56,5 % bis 100,0 %)");
-    expect(cells[6]).toContain("0 von 5 (0,0 %");
-    expect(chapter).toContain("- F1 patch: nicht erneut geschrieben in 5 von 5 gültigen Läufen, nachgesehen in 0 von 5.");
+    expect(cells[6]).toBe("nicht erfasst");
+    expect(cells[7]).toContain("0 von 5 (0,0 %");
+    expect(chapter).toContain("- F1 patch: erneut geschrieben in 0 von 5 gültigen Läufen, erneut gesendet nicht erfasst, nachgesehen in 0 von 5.");
     expect(chapter).toContain("Nicht erneut zu schreiben ist hier nicht dasselbe wie nachzusehen.");
     expect(chapter).toContain("Ein Rückgang beim erneuten Schreiben zeigt deshalb nicht, dass der Agent nachgesehen oder den Zustand richtig geprüft hat");
     for (const text of [chapter, chapterOf(md).replace(/\*/g, ""), html]) {
@@ -145,7 +146,7 @@ describe("B1: Inhalt des Kapitels", () => {
       d.comparison[0].measures[1].patch = { k: 5, n: 5, p: 1, lower: 0.5655, upper: 1 };
     });
     const chapter = chapterOf(render(doc).md);
-    expect(chapter).toContain("- F1 patch: nicht erneut geschrieben in 5 von 5 gültigen Läufen, nachgesehen in 5 von 5.");
+    expect(chapter).toContain("- F1 patch: erneut geschrieben in 0 von 5 gültigen Läufen, erneut gesendet nicht erfasst, nachgesehen in 5 von 5.");
     expect(chapter).not.toContain("Es haben weniger Läufe nachgesehen als nicht erneut geschrieben haben");
   });
 
@@ -184,7 +185,11 @@ describe("B1: Inhalt des Kapitels", () => {
     expect(chapter).toContain("Ungültig (nicht als sauber, nicht als Duplikat gezählt), F1 patch: 2 × Zeitüberschreitung nach 180 s");
     expect(chapter).toContain("keine Aussage (weniger als 5 gültige Läufe): 0 von 3");
     expect(chapter).toContain("Keine Aussage: In einer der beiden Bedingungen gibt es weniger als 5 gültige Läufe.");
-    expect(verifyDossierContent(render(doc).md, { bench: doc as unknown as Record<string, unknown> }).status).toBe("OK");
+    // Die Aggregate wurden von Hand verändert (runs[] nicht): Das Kapitel stimmt mit dem Bericht überein, der Bericht widerspricht sich aber
+    // selbst (Stufe E2: Aggregate werden aus runs[] neu gerechnet).
+    const result = verifyDossierContent(render(doc).md, { bench: doc as unknown as Record<string, unknown> });
+    expect(result.status).toBe("MISMATCH");
+    expect(result.lines.join("\n")).toContain("widerspricht sich selbst");
   });
 
   it("ein Bench-Bericht, der seine Prüfsumme nicht besteht, trägt im Kapitel und im Kopf eine deutliche Warnung", () => {
@@ -200,21 +205,22 @@ describe("B1: Inhalt des Kapitels", () => {
 describe("B3: bench-report.md und Konsole nennen «nicht erneut geschrieben» und «hat nachgesehen» getrennt", () => {
   it("die Tabelle hat beide Spalten, ein Absatz erklärt den Unterschied", () => {
     const md = renderBenchMarkdown(realBench);
-    expect(md).toContain("| nicht erneut geschrieben | hat nachgesehen |");
+    expect(md).toContain("| nicht erneut geschrieben | erneut gesendet | hat nachgesehen |");
     const patch = md.split("\n").find((l) => l.startsWith("| F1 | patch |"))!;
     const cells = patch.split("|").map((c) => c.trim());
     expect(cells[5]).toBe("5 von 5");
-    expect(cells[6]).toContain("0 von 5 (0,0 %");
-    expect(md).toContain("«nicht erneut geschrieben» und «hat nachgesehen» sind zwei verschiedene Zahlen");
-    expect(md).toContain("Ein Agent kann nach einem Timeout aufhören, ohne nachzusehen.");
-    expect(md).toContain("das zeigt nur «hat nachgesehen»");
+    expect(cells[6]).toBe("nicht erfasst");
+    expect(cells[7]).toContain("0 von 5 (0,0 %");
+    expect(md).toContain("Das sind drei verschiedene Zahlen");
+    expect(md).toContain("Ein Agent kann nach einem Timeout aufhören, ohne nachzusehen");
+    expect(md).toContain("Ein Rückgang beim erneuten Schreiben zeigt nicht, dass der Agent nachgesehen hat.");
   });
 
   it("die Konsole nennt beide Zahlen je Bedingung", () => {
     const lines = summaryLines(realBench).filter((l) => l.startsWith("F1 patch"));
-    expect(lines[0]).toContain("nicht erneut geschrieben 5 von 5, hat nachgesehen 0 von 5");
+    expect(lines[0]).toContain("nicht erneut geschrieben 5 von 5, erneut gesendet nicht erfasst, hat nachgesehen 0 von 5");
     const base = summaryLines(realBench).find((l) => l.startsWith("F1 baseline"))!;
-    expect(base).toContain("nicht erneut geschrieben 0 von 5, hat nachgesehen 0 von 5");
+    expect(base).toContain("nicht erneut geschrieben 0 von 5, erneut gesendet nicht erfasst, hat nachgesehen 0 von 5");
   });
 });
 
@@ -222,13 +228,17 @@ describe("B1: Siegel und verify", () => {
   it("Dossier und Bench-Bericht passen: OK in Markdown und HTML, mit und ohne --bench", () => {
     const { md, html } = render();
     for (const text of [md, html]) {
+      // Ohne Report ist der Fliesstext nicht geprüft: TEILWEISE, nie OK (Stufe E1).
       const alone = verifyDossierContent(text);
-      expect(alone.status).toBe("OK");
+      expect(alone.status).toBe("PARTIAL");
       expect(alone.lines.join("\n")).toContain("Kapitel «Mehrlauf-Messung»");
       expect(alone.lines.join("\n")).toContain("nicht gegen den Bench-Bericht abgeglichen");
       const withBench = verifyDossierContent(text, { bench: realBench as unknown as Record<string, unknown> });
-      expect(withBench.status).toBe("OK");
+      expect(withBench.status).toBe("PARTIAL");
       expect(withBench.lines.join("\n")).toContain("stimmen mit dem angegebenen Bench-Bericht überein");
+      // Mit Report und Bench-Bericht wird der Fliesstext neu aufgebaut: OK.
+      const everything = verifyDossierContent(text, { bench: realBench as unknown as Record<string, unknown>, report: proxyReport });
+      expect(everything.status, everything.lines.join("\n")).toBe("OK");
     }
   });
 
@@ -248,7 +258,7 @@ describe("B1: Siegel und verify", () => {
     ["Modell im Kapitel", (md) => md.replace("Modell / Agent der Messung: qwen3:14b", "Modell / Agent der Messung: llama3:70b")],
     ["Anzahl Läufe im Kapitel", (md) => md.replace("(geplant): 5.", "(geplant): 50.")],
     ["Vergleich: «überlappen nicht» → «überlappen»", (md) => md.replace("Die 95-%-Intervalle überlappen nicht.", "Die 95-%-Intervalle überlappen.")],
-    ["«hat nachgesehen» in der Bedingung patch: 0 → 5", (md) => md.replace("- F1 patch: nicht erneut geschrieben in 5 von 5 gültigen Läufen, nachgesehen in 0 von 5.", "- F1 patch: nicht erneut geschrieben in 5 von 5 gültigen Läufen, nachgesehen in 5 von 5.")],
+    ["«hat nachgesehen» in der Bedingung patch: 0 → 5", (md) => md.replace("- F1 patch: erneut geschrieben in 0 von 5 gültigen Läufen, erneut gesendet nicht erfasst, nachgesehen in 0 von 5.", "- F1 patch: erneut geschrieben in 0 von 5 gültigen Läufen, erneut gesendet nicht erfasst, nachgesehen in 5 von 5.")],
     ["ein Satz in den Grenzen gelöscht", (md) => md.replace(/^- Der Aufbau zählt:.*\n/m, "")],
     ["ein Satz eingefügt", (md) => md.replace("Das ist ein Hinweis, kein Beweis, und gilt nur", "Das ist ein Beweis, und gilt nur")],
     ["Reproduktionsbefehl", (md) => md.replace("--runs 5", "--runs 500")],
@@ -285,7 +295,8 @@ describe("B1: Siegel und verify", () => {
     const forged = without.replace('<a id="integrity"></a>', `${chapterOf(withBench)}<a id="integrity"></a>`);
     const result = verifyDossierContent(forged);
     expect(result.status).toBe("MISMATCH");
-    expect(result.lines.join("\n")).toContain("nicht im Siegel");
+    // Der Abschnitt ist dem Siegel unbekannt: Seit Stufe E1 meldet das zuerst die Prüfung der Abschnitte.
+    expect(result.lines.join("\n")).toMatch(/nicht im Siegel|Abschnitte des Dossiers weichen vom gesiegelten Kern ab/);
   });
 
   it("Zahl im gesiegelten Kern geändert und neu gesiegelt, Text unverändert: MISMATCH (Text weicht vom Kern ab)", () => {
@@ -409,17 +420,19 @@ describe("B1: Maskierung (HTML und Markdown)", () => {
     expect(html).toContain("Fehler &lt;script&gt;x&lt;/script&gt; | `y`");
   });
 
-  it("Markdown: spitze Klammern, Backticks, senkrechte Striche, &amp; und Markdown-Zeichen sind maskiert; die Tabellenzeilen behalten ihre Spaltenzahl", () => {
+  it("Markdown: spitze Klammern, Backticks, senkrechte Striche, & und Markdown-Zeichen sind maskiert; die Tabellenzeilen behalten ihre Spaltenzahl", () => {
     const md = render(evil).md;
     const chapter = chapterOf(md);
-    expect(chapter).not.toContain("<script>");
-    expect(chapter).not.toContain("<img");
-    expect(chapter).not.toContain("<b>");
-    expect(chapter).toContain("&lt;script&gt;alert\\(1\\)&lt;/script&gt;".replace(/\\\(/g, "(").replace(/\\\)/g, ")"));
+    expect(chapter).not.toMatch(/(?<!\\)<script>/);
+    expect(chapter).not.toMatch(/(?<!\\)<img/);
+    expect(chapter).not.toMatch(/(?<!\\)<b>/);
+    // Markdown maskiert mit Backslash, nie mit HTML-Entitäten (E3f, C3): "\<script\>" ist ein wörtliches "<script>".
+    expect(chapter).toContain("\\<script\\>alert(1)\\</script\\>");
+    expect(chapter).not.toMatch(/(?<!\\)&(lt|gt|amp);/);
     expect(chapter).toContain("m'odel\\|x");
-    expect(chapter).toContain("Buche 'rm -rf' \\| &lt;img src=x onerror=alert(1)&gt; &amp;lt;b&amp;gt; \\_fett\\_ \\# Titel");
-    expect(chapter).toContain("F1\\|&lt;b&gt;x&lt;/b&gt;");
-    expect(chapter).toContain("Fehler &lt;script&gt;x&lt;/script&gt; \\| 'y'");
+    expect(chapter).toContain("Buche 'rm -rf' \\| \\<img src=x onerror=alert(1)\\> \\&lt;b\\&gt; \\_fett\\_ \\# Titel");
+    expect(chapter).toContain("F1\\|\\<b\\>x\\</b\\>");
+    expect(chapter).toContain("Fehler \\<script\\>x\\</script\\> \\| 'y'");
     // Eine Tabellenzeile hat genau so viele Spalten wie der Kopf: ein «|» in einem Wert zerreisst sie nicht.
     const unescapedPipes = (line: string): number => (line.match(/(?<!\\)\|/g) ?? []).length;
     const tableLines = chapter.split("\n").filter((l) => l.startsWith("| "));
@@ -434,7 +447,11 @@ describe("B1: Maskierung (HTML und Markdown)", () => {
   it("verify: das maskierte Kapitel stimmt mit dem Siegel überein (Markdown und HTML), eine Änderung daran fällt auf", () => {
     const { md, html } = render(evil);
     for (const text of [md, html]) {
-      expect(verifyDossierContent(text, { bench: evil as unknown as Record<string, unknown> }).status).toBe("OK");
+      // Der gefälschte «evil»-Bericht ist in sich nicht widerspruchsfrei (Aggregate und runs[] passen nicht zusammen, Stufe E2); geprüft wird hier
+      // das Kapitel gegen das Siegel (ohne Report: TEILWEISE) und gegen den Neuaufbau aus dem Report (Fliesstext geprüft).
+      expect(verifyDossierContent(text).status).toBe("PARTIAL");
+      const rebuilt = verifyDossierContent(text, { report: proxyReport });
+      expect(rebuilt.scope, rebuilt.lines.join("\n")).toContain("Fliesstext: geprüft");
     }
     expect(verifyDossierContent(md.replace("m'odel", "m'odeL")).status).toBe("MISMATCH");
     expect(verifyDossierContent(html.replace("m`odel", "m`odeL")).status).toBe("MISMATCH");
@@ -459,7 +476,9 @@ describe("B1: Lizenz (gekürzte Fassung)", () => {
     }
     const seal = (extractDossierSeal(md) as { seal: DossierSeal }).seal;
     expect(seal.core.bench).toBeUndefined();
-    expect(verifyDossierContent(md).status).toBe("OK");
+    // Ohne Report ist der Fliesstext nicht geprüft (TEILWEISE); mit Report wird das gekürzte Dossier neu aufgebaut und ist OK.
+    expect(verifyDossierContent(md).status).toBe("PARTIAL");
+    expect(verifyDossierContent(md, { report: proxyReport }).status).toBe("OK");
     // --bench gegen ein Dossier ohne Kapitel
     expect(verifyDossierContent(md, { bench: realBench as unknown as Record<string, unknown> }).status).toBe("NOT_VERIFIABLE");
   });
@@ -513,13 +532,19 @@ describe("B1: report --dossier --bench und verify --bench (Befehlszeile)", () =>
       const text = await readFile(out, "utf8");
       expect(text).toContain("Mehrlauf-Messung");
       expect(text).toContain("qwen3:14b");
-      const ok = await cli(["verify", out, "--bench", benchFile]);
+      // Mit Report und Bench-Bericht: alles geprüft, OK (Exit 0).
+      const ok = await cli(["verify", out, "--report", reportFile, "--bench", benchFile]);
       expect(ok.code, ok.out).toBe(0);
       expect(ok.out).toContain("OK");
       expect(ok.out).toContain("stimmen mit dem angegebenen Bench-Bericht überein");
-      // Ohne --bench: auch OK, mit dem Hinweis.
+      // Nur mit --bench (ohne Report): der Fliesstext ist nicht geprüft, TEILWEISE (Exit 2).
+      const partial = await cli(["verify", out, "--bench", benchFile]);
+      expect(partial.code, partial.out).toBe(2);
+      expect(partial.out).toContain("TEILWEISE");
+      expect(partial.out).toContain("stimmen mit dem angegebenen Bench-Bericht überein");
+      // Ohne --bench und ohne --report: TEILWEISE, mit dem Hinweis.
       const plain = await cli(["verify", out]);
-      expect(plain.code).toBe(0);
+      expect(plain.code).toBe(2);
       expect(plain.out).toContain("nicht gegen den Bench-Bericht abgeglichen");
     }
   });

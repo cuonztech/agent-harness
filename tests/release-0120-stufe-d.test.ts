@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { canonicalJson, extractDossierSeal, sealToComment, sha256Hex, type DossierSeal } from "../src/core/artifact-integrity.js";
 import { renderDossierHtml, renderDossierMarkdown } from "../src/dossier-report.js";
 import { benchCoreOf, validateBenchDocument, type DossierBenchCore } from "../src/dossier-bench.js";
@@ -454,7 +454,9 @@ describe("D2/D3 mit echten Läufen: Sonde funktioniert, fällt mitten im Lauf au
   it("die Zählweise ist gesiegelt: jede Fälschung von counting oder countingBasis ist ein MISMATCH mit dem Feld", async () => {
     for (const d of [records, mixed, allExec, none]) {
       const file = JSON.parse(await readFile(d.jsonPath, "utf8")) as Json;
-      expect((await verifyBenchReportContent(file, {})).status).toBe("OK");
+      // Mit dem Ordner (Lauf-Dateien, Lesetext) daneben ist alles geprüft: OK.
+      const checked = await verifyBenchReportContent(file, { dir: dirname(d.jsonPath) });
+      expect(checked.status, checked.lines.join("\n")).toBe("OK");
     }
     const tamper = async (d: Done, change: (doc: Json) => void, field: string): Promise<void> => {
       const file = JSON.parse(await readFile(d.jsonPath, "utf8")) as Json;
@@ -504,8 +506,9 @@ describe("D2/D3 mit echten Läufen: Sonde funktioniert, fällt mitten im Lauf au
     for (const d of [records, mixed, allExec, none]) {
       const { md, html } = renderBoth(d.document);
       for (const text of [md, html]) {
-        expect(verifyDossierContent(text).status).toBe("OK");
-        expect(verifyDossierContent(text, { bench: d.document as unknown as Record<string, unknown> }).status).toBe("OK");
+        // Ohne Report ist der Fliesstext nicht geprüft: TEILWEISE (Stufe E1); mit Report und Bench-Bericht OK.
+        expect(verifyDossierContent(text).status).toBe("PARTIAL");
+        expect(verifyDossierContent(text, { bench: d.document as unknown as Record<string, unknown> }).status).toBe("PARTIAL");
         const re = verifyDossierContent(text, { report: proxyReport, bench: d.document as unknown as Record<string, unknown>, rerender: true });
         expect(re.status, re.lines.join("\n")).toBe("OK");
       }
@@ -587,7 +590,7 @@ describe("D2/D3 mit echten Läufen: Sonde funktioniert, fällt mitten im Lauf au
 
 describe("ältere Berichte und Dossiers bleiben gültig und prüfbar", () => {
   it("älterer Bench-Bericht ohne `counting`: verify OK; Kapitel und bench-report.md nennen die Zählweise aus den Läufen", async () => {
-    expect((await verifyBenchReportContent(realBench as unknown as Record<string, unknown>, {})).status).toBe("OK");
+    expect((await verifyBenchReportContent(realBench as unknown as Record<string, unknown>, {})).status).toBe("PARTIAL");
     const md = renderBenchMarkdown(realBench);
     expect(md).toContain("**Zählweise:** Datensätze (Wirkungs-Sonde: nachher minus vorher)");
     expect(md).not.toContain("**Hinweis:**");
@@ -603,7 +606,7 @@ describe("ältere Berichte und Dossiers bleiben gültig und prüfbar", () => {
       }
       for (const a of d.aggregates) a.countingBasis = "executions";
     });
-    expect((await verifyBenchReportContent(stale as unknown as Record<string, unknown>, {})).status).toBe("OK");
+    expect((await verifyBenchReportContent(stale as unknown as Record<string, unknown>, {})).status).toBe("PARTIAL");
     const md = renderBenchMarkdown(stale);
     expect(md).toContain("**Zählweise:** Ausführungen (Sonde in 10 von 10 Läufen nicht verwertbar: Sonde ohne verwertbares Ergebnis");
     expect(md).toContain(`**Hinweis:** ${COUNTING_WARNING_DE}`);
@@ -613,7 +616,7 @@ describe("ältere Berichte und Dossiers bleiben gültig und prüfbar", () => {
       expect(text).toContain("Ausführungen (Sonde in 10 von 10 Läufen nicht verwertbar");
       expect(text).toContain(COUNTING_WARNING_DE);
       expect(text).not.toContain("Zählweise (aus den Läufen): Datensätze");
-      expect(verifyDossierContent(text, { bench: stale as unknown as Record<string, unknown> }).status).toBe("OK");
+      expect(verifyDossierContent(text, { bench: stale as unknown as Record<string, unknown> }).status).toBe("PARTIAL");
     }
   });
 
@@ -625,7 +628,10 @@ describe("ältere Berichte und Dossiers bleiben gültig und prüfbar", () => {
     expect(chapterOf(md)).toContain("Zählweise (aus den Läufen): nicht aus den Läufen ablesbar");
     expect(chapterOf(md)).toContain("ob sie verwertbar war, lässt sich aus dem Bericht nicht ablesen");
     expect(chapterOf(md)).toContain(COUNTING_WARNING_DE);
-    expect(verifyDossierContent(md, { bench: noRuns as unknown as Record<string, unknown> }).status).toBe("OK");
+    // Ein Bericht ohne runs[] lässt sich nicht auf Widersprüche prüfen: Das Löschen der Läufe ist kein Weg am Abgleich vorbei (Stufe E2).
+    const noRunsResult = verifyDossierContent(md, { bench: noRuns as unknown as Record<string, unknown> });
+    expect(noRunsResult.status).toBe("MISMATCH");
+    expect(noRunsResult.lines.join("\n")).toContain("Felder (runs, scenarios, conditions, runsPerCell)");
   });
 
   it("Dossier aus einer Fassung davor (der gesiegelte Kern trägt keine Zählweise aus den Läufen): bleibt mit seinem damaligen Wortlaut gültig, auch mit --bench und --rerender", () => {
@@ -637,9 +643,9 @@ describe("ältere Berichte und Dossiers bleiben gültig und prüfbar", () => {
       expect(text).toContain("Wirkungs-Sonde: ja (Lese-Tool ");
       expect(text).not.toContain("Zählweise (aus den Läufen)");
       expect(text).not.toContain(COUNTING_WARNING_DE);
-      expect(verifyDossierContent(text).status).toBe("OK");
+      expect(verifyDossierContent(text).status).toBe("PARTIAL");
       const withBench = verifyDossierContent(text, { bench: realBench as unknown as Record<string, unknown> });
-      expect(withBench.status, withBench.lines.join("\n")).toBe("OK");
+      expect(withBench.status, withBench.lines.join("\n")).toBe("PARTIAL");
       const re = verifyDossierContent(text, { report: proxyReport, bench: realBench as unknown as Record<string, unknown>, rerender: true });
       expect(re.status, re.lines.join("\n")).toBe("OK");
     }

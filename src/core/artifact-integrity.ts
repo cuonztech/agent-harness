@@ -192,6 +192,9 @@ export interface DossierHeader {
   // Warnung der Prüfsumme der Report-Datei (null: keine) und die Hinweise direkt unter dem Urteil.
   warning: string | null;
   notes: string[];
+  // Ab 0.12.0: Titel des Dokuments (`<title>` und Kopfzeile im HTML, Titelzeile in Markdown) und der Einleitungssatz im Kopf.
+  docTitle?: string;
+  lead?: string;
 }
 
 export interface DossierCore {
@@ -221,6 +224,8 @@ export interface DossierCore {
   };
   // Ab 0.12.0: was `verify --rerender` zum Neuaufbau braucht (die Antwort des Agenten im Wortlaut, ob ein Bench-Bericht angegeben war).
   render?: { agentResponse: string | null; benchRequested: boolean };
+  // Ab 0.12.0: die Abschnitte des Dossiers (Kennung und Überschrift). `verify` verlangt jeden genau einmal im Text und keinen weiteren.
+  sections?: Array<{ id: string; title: string }>;
   // Nur im Dossier mit Mehrlauf-Messung (report --bench, Pro): Methode und Zahlen des Kapitels. Fehlt das Feld, gibt es kein Kapitel.
   bench?: DossierBenchCore;
 }

@@ -22,6 +22,7 @@ import { runCampaignMode } from "./campaign/runner.js";
 import { runBenchMode } from "./bench/cli.js";
 import { createProxyServer, findToolNameCollisions } from "./proxy/gateway.js";
 import { resolveProGate, reduceSchemaAudit, reasonSentence, FREE_SCOPE_DE, PURCHASE_URL } from "./license/index.js";
+import { describeFsError } from "./fs-errors.js";
 import { getScenarioById, ALL_SCENARIOS } from "./scenarios/f1-f5.js";
 import { DEFAULT_KEY_FIELDS } from "./engine/state-machine.js";
 import { VERSION } from "./version.js";
@@ -39,9 +40,11 @@ function printHelp(): void {
       `Usage:\n` +
       `  cuonztech-agent-harness                   Start as an MCP server (stdio, demo/self-test sessions)\n` +
       `  cuonztech-agent-harness --version         Print the version (also: -v, version)\n` +
-      `  cuonztech-agent-harness verify <dossier|report-file|bench-report.json> [--report <file>] [--bench <bench-report.json>] [--rerender] [--expect <sha256>]\n` +
-      `                                             Recompute the checksum of a report file or dossier and\n` +
-      `                                             print OK or MISMATCH with the reason (exit 0 / 1).\n` +
+      `  cuonztech-agent-harness verify <dossier|report-file|bench-report.json|bench-report.md> [--report <file>] [--bench <bench-report.json>] [--no-rerender] [--expect <sha256>]\n` +
+      `                                             Recompute the checksum of a report file, dossier or bench report and print\n` +
+      `                                             OK (everything checked, exit 0), TEILWEISE (partly checked, e.g. the dossier text\n` +
+      `                                             was not rebuilt from a report, exit 2) or MISMATCH (exit 1) with the reason.\n` +
+      `                                             With --report the dossier is rebuilt from the report and compared.\n` +
       `  cuonztech-agent-harness --help            Print this help (also: -h, help)\n` +
       `  cuonztech-agent-harness benchmark [opts]   Run the harness self-test (two fixed reference agents;\n` +
       `                                             "evaluate" is an alias)\n` +
@@ -63,9 +66,10 @@ function printHelp(): void {
       `  cuonztech-agent-harness bench --upstream-command <cmd> --allow-writes (--model <name> | --agent-command <cmd>) [opts]    (Pro)\n` +
       `                                             REAL multi-run measurement of YOUR agent (or a model with your\n` +
       `                                             prompt) against YOUR test system: n runs per condition (without /\n` +
-      `                                             with the harness prompt patch), share of runs with a duplicate\n` +
-      `                                             write after a timeout (95 % Wilson interval), honesty of the\n` +
-      `                                             answers, sealed bench-report.json. Details: bench --help\n` +
+      `                                             with the harness prompt patch), per scenario its own measure with\n` +
+      `                                             a 95 % Wilson interval: F1 duplicate write after a timeout, F2\n` +
+      `                                             retry_after ignored after a 429, F4 duplicate sent unprompted;\n` +
+      `                                             honesty of the answers, sealed bench-report.json. Details: bench --help\n` +
       `  cuonztech-agent-harness proxy --upstream-command <cmd> [opts]\n` +
       `                                             Run as a transparent chaos proxy\n` +
       `                                             in front of a real upstream MCP server\n\n` +
@@ -138,8 +142,9 @@ function printHelp(): void {
       `  Frei: ${FREE_SCOPE_DE}.\n` +
       `  Pro: report --dossier (ohne Lizenz nur Kopf, Score, Urteil), ui, campaign, bench, Schema-Befunde\n` +
       `  und Textbausteine (Härtungsvorschläge) im Report.\n` +
-      `  Angabe per --license <key> (proxy, report, ui, campaign, bench) oder Umgebungsvariable AGENT_AUDIT_LICENSE\n` +
-      `  (zusätzlich CUONZTECH_LICENSE_KEY; die Option gewinnt).\n` +
+      `  Angabe per Umgebungsvariable AGENT_AUDIT_LICENSE (zusätzlich CUONZTECH_LICENSE_KEY; empfohlen) oder per\n` +
+      `  --license <key> (proxy, report, ui, campaign, bench; die Option gewinnt). Ein Code in --license steht in der\n` +
+      `  Prozessliste und im Verlauf der Shell; der Harness weist einmal darauf hin (stderr).\n` +
       `  Der Code gilt «pro System» vertraglich (AGB Teil D); er ist technisch nicht an ein System gebunden und nicht\n` +
       `  widerrufbar. Die Laufzeit wird mit der lokalen Uhr geprüft. Die Lizenz gilt auch beim Rendern eines Dossiers\n` +
       `  (abgelaufen: gekürzte Fassung); verify braucht keine Lizenz.\n` +
@@ -923,7 +928,7 @@ async function runProxyMode(argv: string[]): Promise<void> {
             : {
                 limitedByLicense: true,
                 licenseNotice:
-                  "Keine gültige Lizenz: Textbausteine (Härtungsvorschläge) und Schema-Befunde gehören zum Pro-Umfang und fehlen hier. " +
+                  "Keine gültige Lizenz: Die auf diesen Lauf zugeschnittenen Textbausteine (Härtungsvorschläge) und Schema-Befunde gehören zum Pro-Umfang und fehlen hier; der allgemeine Wortlaut der Textbausteine ist frei (README, benchmark). " +
                   `Lauf, Urteil, Score und Exit-Code sind echt. Frei bleiben: ${FREE_SCOPE_DE}. Lizenz: ${PURCHASE_URL}`,
               }),
           ...(archivedPreviousRun
@@ -1221,6 +1226,8 @@ async function runBenchmarkMode(argv: string[]): Promise<void> {
 }
 
 main().catch((err) => {
-  process.stderr.write(`Fatal: ${err}\n`);
+  // Ein Pfad, den der Nutzer angegeben hat (--out, Berichtsdatei), ist kein Programmfehler: ein Satz mit Ursache statt «Fatal: Error: ENOTDIR …».
+  const friendly = describeFsError(err, "en");
+  process.stderr.write(friendly !== null ? `Error: ${friendly}\n` : `Fatal: ${err}\n`);
   process.exit(1);
 });

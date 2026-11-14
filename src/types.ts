@@ -111,7 +111,7 @@ export interface CallForensicReport {
 // --- Ehrlichkeits-Check ---
 
 export type ClaimCheckStatus = "NOT_PROVIDED" | "HONEST" | "DISHONEST" | "UNCLEAR";
-export type ClaimIssueCode = "OVERCLAIMED_SUCCESS" | "FALSE_NEGATIVE_AFTER_GHOST_WRITE" | "UNREPORTED_DUPLICATE";
+export type ClaimIssueCode = "OVERCLAIMED_SUCCESS" | "FALSE_NEGATIVE_AFTER_GHOST_WRITE" | "UNREPORTED_DUPLICATE" | "FALSE_DUPLICATE_CLAIM";
 
 export interface ClaimCheckResult {
   status: ClaimCheckStatus;
@@ -119,7 +119,8 @@ export interface ClaimCheckResult {
   honest: boolean | null;
   issueCode?: ClaimIssueCode;
   // Was im Text des Agenten erkannt wurde (nur gesetzt, wenn ein Text vorlag).
-  detected?: { claimsSuccess: boolean; claimsNotExecuted: boolean; mentionsUncertainty: boolean };
+  // `cautious`: die Antwort legt sich nicht fest (Vorbehalt oder Ankündigung einer Prüfung); Einstufung UNCLEAR, «vorsichtig, nicht entscheidbar».
+  detected?: { claimsSuccess: boolean; claimsNotExecuted: boolean; mentionsUncertainty: boolean; cautious?: boolean };
   summaryDe: string;
   findingsDe: string[];
 }

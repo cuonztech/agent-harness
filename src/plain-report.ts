@@ -12,7 +12,7 @@ import { isReservedFileName } from "./report-file-guard.js";
 import { renderDossierHtml, renderDossierMarkdown } from "./dossier-report.js";
 import { resolveProGate, shortenedNotice, PURCHASE_URL } from "./license/index.js";
 import { expandEqualsForm, optionName, redactSecrets } from "./cli-args.js";
-import { checkBenchIntegrity, looksLikeBenchReport, type BenchDocument } from "./bench/report.js";
+import { benchConsistencyProblems, checkBenchIntegrity, looksLikeBenchReport, type BenchDocument } from "./bench/report.js";
 import { benchCoreOf, validateBenchDocument, type DossierBenchCore } from "./dossier-bench.js";
 
 export interface PreviousRunSummary {
@@ -156,7 +156,7 @@ export const OUTCOMES: Record<OperationOutcome, { good: boolean | null; text: st
 };
 
 export const LIMITS = [
-  "Der Harness sieht nur die Tool-Aufrufe des Agenten. Was der Agent dem Nutzer sagt, wird nicht geprüft; ob er ehrlich berichtet, ist **nicht gemessen**.",
+  "Der Harness sieht nur die Tool-Aufrufe des Agenten. Was der Agent dem Nutzer sagt, wird nicht geprüft; ob seine Meldung der Messung entspricht, ist **nicht gemessen**.",
   "Das Ergebnis ist ein Selbsttest (`UNVERIFIED_FOR_PRODUCTION`), kein Zertifikat.",
   "Ein Lauf zeigt das Verhalten bei diesem Szenario, dieser Aufgabe und diesem Modell. Er sagt nichts darüber, wie oft der Agent einen Fehler macht. Dafür braucht es mehrere Läufe.",
   "Derselbe Vorgang in anderer Schreibweise (z. B. ein anderes Datumsformat) kann unentdeckt bleiben.",
@@ -308,9 +308,9 @@ export function recordedWithoutLicense(file: ReportFile): boolean {
 }
 
 const CLAIM_HEADLINE: Record<ClaimCheckStatus, string> = {
-  HONEST: "Ehrlich (HONEST)",
-  DISHONEST: "Widerspruch erkannt (DISHONEST)",
-  UNCLEAR: "Nicht eindeutig (UNCLEAR)",
+  HONEST: "Stimmt mit der Messung überein (HONEST)",
+  DISHONEST: "Widerspruch zur Messung (DISHONEST)",
+  UNCLEAR: "Nicht entscheidbar (UNCLEAR)",
   NOT_PROVIDED: "Nicht geprüft (NOT_PROVIDED)",
 };
 
@@ -453,7 +453,7 @@ export function renderMarkdown(file: ReportFile, options: RenderOptions = {}): s
       lines.push(
         "## Härtungsvorschläge",
         "",
-        `Textbausteine für den Prompt des Agenten (Deutsch und Englisch) gehören zum Pro-Umfang. Das Urteil, der Score und die Beobachtungen sind vollständig. Lizenz: ${PURCHASE_URL}`,
+        `Die auf diesen Lauf zugeschnittenen Textbausteine für den Prompt des Agenten (Deutsch und Englisch, mit den Tool-Namen deines Servers) gehören zum Pro-Umfang. Der allgemeine englische Wortlaut ist frei: Er steht in der README und in der Ausgabe von \`benchmark\`. Das Urteil, der Score und die Beobachtungen sind vollständig. Lizenz: ${PURCHASE_URL}`,
         "",
       );
     } else if (hasPatches || file.recommended_prompt_patch_de) {
@@ -706,6 +706,10 @@ export async function runReportMode(argv: string[]): Promise<number> {
     return 1;
   }
   const info = await stat(file).catch(() => null);
+  if (info?.isDirectory()) {
+    process.stderr.write(`Error: ${file} is a folder, not a report file. Give the report file the proxy wrote via --report-file <datei>.\n`);
+    return 1;
+  }
   if (!info || !info.isFile()) {
     process.stderr.write(`Error: report file not found: ${file}\nHint: the proxy writes it via --report-file <datei>.\n`);
     return 1;
@@ -774,6 +778,11 @@ export async function runReportMode(argv: string[]): Promise<number> {
     if (benchCheck.status !== "ok") {
       process.stderr.write(`WARNUNG: Der Bench-Bericht besteht seine eigene Prüfung nicht: ${benchCheck.reasonDe} Das Kapitel trägt einen entsprechenden Hinweis; die Zahlen sind nicht belastbar.\n`);
     }
+    const contradictions = benchConsistencyProblems(benchParsed as Record<string, unknown>);
+    if (contradictions.length > 0) {
+      process.stderr.write(`WARNUNG: Der Bench-Bericht widerspricht sich selbst: Aggregate oder Vergleich passen nicht zu den Läufen in runs[] (${contradictions.slice(0, 3).join("; ")}). Die Zahlen des Kapitels sind nicht belastbar; verify <bench-report.json> nennt alle Abweichungen.
+`);
+    }
     benchCore = benchCoreOf(benchParsed as BenchDocument, benchCheck);
   }
   if (agentResponse !== undefined) {
@@ -831,7 +840,7 @@ export async function runReportMode(argv: string[]): Promise<number> {
       await writeFile(outPath, text, "utf8");
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      const why = code === "ENOENT" ? "the folder does not exist" : code === "EISDIR" ? "it is a folder, not a file" : (err as Error).message;
+      const why = code === "ENOENT" ? "the folder does not exist" : code === "EISDIR" ? "it is a folder, not a file" : code === "ENOTDIR" ? "a part of the path is a file, not a folder" : (err as Error).message;
       process.stderr.write(`Error: cannot write ${outPath}: ${why}.\n`);
       return 1;
     }
