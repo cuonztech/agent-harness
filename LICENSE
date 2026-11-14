@@ -4,7 +4,12 @@ Copyright (c) 2026 CuonzTech · Carlo Cuonz. Alle Rechte vorbehalten. / All righ
 
 Proprietär, nicht Open Source. Der Quelltext ist einsehbar (GitHub und Paket); die Einsicht
 begründet keine Rechte ausser den hier eingeräumten. Gilt ab Version 0.8.0.
-Fassung vom 30. Oktober 2026 (Revision 1).
+Fassung vom 14. November 2026 (Revision 2). Revision 2 ändert gegenüber Revision 1 nur Ziffer 1.3,
+Ziffer 2.1 d) und f), Ziffer 2.5, Ziffer 2.6 und die englische Zusammenfassung (Mehrlauf-Messung
+bench ausdrücklich im Pro-Umfang; Regel für beauftragte Dienstleister). Die Version 0.12.1 wurde mit
+dem Wortlaut von Revision 1 ausgeliefert, der bench nicht nennt; bench gehört auch in 0.12.1 zum
+Pro-Umfang und wird ohne gültigen Lizenzcode nicht ausgeführt. Im Übrigen gilt für jede Version die
+ihr beiliegende Fassung (Ziffer 9).
 
 HINWEIS ZU FRÜHEREN VERSIONEN
 Die Versionen bis und mit 0.7.0 und alle Stände des öffentlichen Repositories bis und mit
@@ -51,7 +56,9 @@ DEUTSCH
        als PDF) mit Details, Aufruf-Protokoll, Härtungspaket und Anhängen,
     b) die geführte Web-Oberfläche (ui),
     c) das Schema-Gutachten mit den Befunden je Tool und den Schema-Vorschlägen,
-    d) den Textbaustein- und Prompt-Patch-Generator (Härtungsvorschläge),
+    d) den Textbaustein- und Prompt-Patch-Generator (die auf Ihren Lauf und die Tool-Namen Ihres
+       Servers zugeschnittenen Härtungsvorschläge; der allgemeine Wortlaut in README und in der
+       Ausgabe von benchmark bleibt frei),
     e) den Kampagnen-Runner für Mehrfach-Läufe (campaign),
     f) die Mehrlauf-Messung mit dem eigenen Agenten oder Modell (bench).
     Die Freischaltung erfolgt mit dem Lizenzcode (Option --license oder Umgebungsvariable
@@ -71,14 +78,19 @@ DEUTSCH
     Ablauf, Kündigung, Erstattung, Rückbuchung oder Beendigung nach Ziffer 6 endet; danach
     dürfen Sie den Lizenzcode nicht mehr verwenden.
 2.5 Der Lizenzcode ist geheim zu halten (in CI als Secret ablegen, nicht als Argument). Die
-    Lizenz berechtigt Sie als Lizenznehmer. Sie dürfen die Software und den Lizenzcode durch
-    Ihre Mitarbeitenden und beauftragte Dienstleister für Ihr eigenes System einsetzen. Der
-    Einsatz für Systeme Dritter als eigene Dienstleistung ist nur mit Zustimmung von CuonzTech
-    in Textform erlaubt.
+    Lizenz berechtigt Sie als Lizenznehmer für das System, das Sie nach Ziffer 2.3 bezeichnen. Ihre
+    Mitarbeitenden und die Dienstleister, die Sie für dieses System beauftragt haben (zum Beispiel
+    eine Beratungsfirma, die in Ihrem Auftrag den Harness gegen Ihr System ausführt), dürfen die
+    Software und den Lizenzcode dafür einsetzen. Sie bleiben für die Einhaltung dieser Lizenz
+    verantwortlich; der Dienstleister darf den Lizenzcode nicht für andere Systeme oder Auftraggeber
+    verwenden und nach Ende des Auftrags nicht behalten. Wer die Software für Systeme Dritter als
+    eigene Dienstleistung einsetzt (zum Beispiel Prüfungen für mehrere Kunden unter einer eigenen
+    Lizenz), braucht dafür die Zustimmung von CuonzTech in Textform; jedes geprüfte System braucht
+    eine eigene Lizenz nach Ziffer 2.3. Ziffer 3.3 gilt nicht für die Weitergabe nach diesem Absatz.
 2.6 Ergebnisse. Berichte, Dossiers und Exporte, die Sie mit dem freien Umfang oder während einer
     gültigen Lizenz erzeugt haben, dürfen Sie dauerhaft behalten, intern verwenden und in
     unveränderter Form (mit dem Abschnitt «Methodische Grenzen») an Ihre Kunden, Prüfer und
-    Versicherer weitergeben.
+    Versicherer weitergeben (ohne dass dadurch ein Einsatz nach Ziffer 2.5 Satz 5 erlaubt wird).
 2.7 Lizenzschlüssel für CuonzTech Privacy Chaos Gate berechtigen nicht zum Pro-Umfang.
 
 3. Was nicht erlaubt ist
@@ -207,7 +219,9 @@ interface (ui), the schema assessment with findings and suggestions, the prompt 
 campaign runner and the multi-run measurement (bench). Licenses ("Harness Pro 90 days", "Harness Pro monthly") cover one system
 (an MCP server you test). The code is verified offline and cannot be revoked technically; your
 right ends on expiry, termination, refund or chargeback, and you stop using the code. Reports
-you created may be kept and passed on unchanged.
+you created may be kept and passed on unchanged. The licensee's staff and contractors may use the
+code for the licensee's own system; use for third-party systems as your own service requires
+CuonzTech's written consent.
 
 The software executes your agent's write operations for real against the connected upstream.
 Use it only against a test system with synthetic data that is isolated from third parties and
