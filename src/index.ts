@@ -8,7 +8,7 @@ import { computeScore } from "./benchmark/score.js";
 import { generatePatches, generatePromptPatchDe } from "./hardening/patch-generator.js";
 import { auditToolSchemas } from "./schema-audit.js";
 import { generateReport } from "./core/report-generator.js";
-import type { EffectProbeConfig } from "./core/effect-probe.js";
+import { parseProbeArgs, type EffectProbeConfig } from "./core/effect-probe.js";
 import { buildCallForensics } from "./core/call-forensics.js";
 import { sealReportFile } from "./core/artifact-integrity.js";
 import { ProxyInterceptor } from "./proxy/interceptor.js";
@@ -438,31 +438,6 @@ const PROXY_FLAGS: Record<string, FlagKind> = {
   "--allow-writes": "boolean",
   "--license": "single",
 };
-
-// --effect-probe-args: a JSON object. cmd.exe and Windows PowerShell 5.1 strip the
-// double quotes of '{"status":"open"}' and hand over {status:open}; that form is
-// read as well (flat key:value pairs, numbers/true/false/null as such).
-function parseProbeArgs(raw: string): Record<string, unknown> | null {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
-  } catch {
-    // fall through to the loose form
-  }
-  const m = /^\s*\{(.*)\}\s*$/s.exec(raw);
-  if (!m || /["'\[\]{}]/.test(m[1])) return null;
-  const out: Record<string, unknown> = {};
-  for (const pair of m[1].split(",")) {
-    if (pair.trim() === "") continue;
-    const colon = pair.indexOf(":");
-    if (colon <= 0) return null;
-    const key = pair.slice(0, colon).trim();
-    const value = pair.slice(colon + 1).trim();
-    if (key === "" || value === "") return null;
-    out[key] = value === "true" ? true : value === "false" ? false : value === "null" ? null : /^-?\d+(\.\d+)?$/.test(value) ? Number(value) : value;
-  }
-  return Object.keys(out).length > 0 ? out : null;
-}
 
 function parseEnvPair(pair: string, flag: string, into: Record<string, string>): void {
   const eq = pair.indexOf("=");

@@ -9,6 +9,15 @@ import type { BenchAggregate, BenchDocument, ComparisonMeasure } from "./bench/r
 import { pointsDe, proportionDe, round, type Proportion } from "./bench/stats.js";
 import { redactSecrets } from "./cli-args.js";
 import { CLAIM_CHECK_VERSION } from "./core/claim-check.js";
+import {
+  COUNTING_WARNING_DE,
+  countingLabelDe,
+  countingNeedsWarning,
+  countingOfDocument,
+  isBenchCounting,
+  probeStatementDe,
+  type BenchCounting,
+} from "./bench/counting.js";
 
 export const BENCH_CHAPTER_ID = "mehrlauf-messung";
 /** Nummer des Kapitels im Dossier mit Mehrlauf-Messung; der Abschnitt «Prüfsumme & Methodische Grenzen» rückt auf 7. */
@@ -42,6 +51,12 @@ export interface DossierBenchCore {
   toolCount: number;
   toolsSha256: string;
   effectProbe: { used: boolean; tool: string | null };
+  /**
+   * Zählweise aus dem Ergebnis der Läufe (nicht aus der Konfiguration). Fehlt in Kernen von Dossiers, die vor dieser Angabe erzeugt wurden;
+   * deren Kapitel wird mit dem damaligen Wortlaut nachgebaut.
+   */
+  counting?: BenchCounting;
+  /** Lesetext der Zählweise (bei neuen Kernen aus `counting`). */
   countingBasis: string;
   limits: { runTimeoutSec: number; stepTimeoutSec: number };
   reproduction: string;
@@ -151,6 +166,7 @@ export function validateBenchDocument(doc: unknown): string | null {
     need(Array.isArray(doc.tools) && isStr(doc.toolsSha256), "tools / toolsSha256"),
     need(isObj(doc.effectProbe) && typeof doc.effectProbe.used === "boolean", "effectProbe"),
     need(isStr(doc.countingBasis), "countingBasis"),
+    need(doc.counting === undefined || isBenchCounting(doc.counting), "counting"),
     need(isObj(doc.limits) && isNum(doc.limits.runTimeoutSec) && isNum(doc.limits.stepTimeoutSec), "limits"),
     need(isStr(doc.reproduction), "reproduction"),
     ...evaluation,
@@ -165,6 +181,8 @@ const numOrNull = (x: unknown): number | null => (typeof x === "number" && Numbe
 /** Der Kern, der ins Siegel des Dossiers geht. Der Bench-Bericht muss `validateBenchDocument` bestanden haben. */
 export function benchCoreOf(doc: BenchDocument, check: IntegrityCheck): DossierBenchCore {
   const agent = doc.agent;
+  // Die Zählweise folgt den Läufen: bei älteren Berichten ohne das Feld wird sie aus `runs` abgeleitet (soweit ablesbar).
+  const counting = countingOfDocument(doc);
   return {
     sealStatus: check.status,
     reportSha256: doc.integrity?.payloadSha256 ?? null,
@@ -192,7 +210,8 @@ export function benchCoreOf(doc: BenchDocument, check: IntegrityCheck): DossierB
     toolCount: doc.tools.length,
     toolsSha256: doc.toolsSha256,
     effectProbe: { used: doc.effectProbe.used, tool: textOrNull(doc.effectProbe.tool) },
-    countingBasis: doc.countingBasis,
+    counting,
+    countingBasis: countingLabelDe(counting),
     limits: { runTimeoutSec: doc.limits.runTimeoutSec, stepTimeoutSec: doc.limits.stepTimeoutSec },
     reproduction: redactSecrets(doc.reproduction),
     aggregates: JSON.parse(JSON.stringify(doc.aggregates)) as BenchAggregate[],
@@ -212,6 +231,19 @@ export function benchCoreOf(doc: BenchDocument, check: IntegrityCheck): DossierB
         }
       : {}),
   };
+}
+
+/**
+ * Der Kern, mit dem ein vorhandenes Dossier zu vergleichen oder neu aufzubauen ist: Trägt dessen Kern noch keine Zählweise aus den Läufen
+ * (Dossier aus einer Fassung davor), gilt für den Vergleich der damalige Wortlaut (Angabe der Konfiguration im Bench-Bericht).
+ */
+export function benchCoreMatching(inDossier: DossierBenchCore, doc: BenchDocument, check: IntegrityCheck): DossierBenchCore {
+  const core = benchCoreOf(doc, check);
+  if (inDossier.counting === undefined) {
+    delete core.counting;
+    core.countingBasis = doc.countingBasis;
+  }
+  return core;
 }
 
 // ---------------------------------------------------------------- Abgleich Dossier ↔ Bench-Bericht
@@ -308,6 +340,19 @@ function sealBlock(b: DossierBenchCore): Block {
   };
 }
 
+// Die Sonde als Aussage über das Ergebnis («angegeben; verwertbar in k von n Läufen»), die Zählweise aus den Läufen.
+function probeMethodItems(b: DossierBenchCore): Rich[] {
+  if (b.counting === undefined) {
+    // Kern aus einer Fassung vor der Zählweise aus den Läufen: damaliger Wortlaut.
+    return [
+      b.effectProbe.used
+        ? ["Wirkungs-Sonde: ja (Lese-Tool ", u(b.effectProbe.tool ?? "—"), "); Zählweise: ", u(b.countingBasis)]
+        : ["Wirkungs-Sonde: nein; Zählweise: ", u(b.countingBasis), " (alle Zahlen sind Ausführungen, keine Datensätze)"],
+    ];
+  }
+  return [["Wirkungs-Sonde: ", u(probeStatementDe(b.counting, b.effectProbe.tool))], ["Zählweise (aus den Läufen): ", u(countingLabelDe(b.counting))]];
+}
+
 function methodBlock(b: DossierBenchCore): Block {
   const items: Rich[] = [
     ["Modell / Agent der Messung: ", u(agentText(b.agent))],
@@ -325,9 +370,7 @@ function methodBlock(b: DossierBenchCore): Block {
     ["Aufgabe an den Agenten (Wortlaut): «", u(b.task), "»"],
     b.followup === null ? ["Nachfrage des Benutzers nach der ersten Antwort: keine"] : ["Nachfrage des Benutzers nach der ersten Antwort (Wortlaut): «", u(b.followup), "»"],
     ["Upstream (Testsystem): ", u(`${b.upstream.program}${b.upstream.script ? ` ${b.upstream.script}` : ""}`), `; ${b.toolCount} Tools (SHA-256 der Tool-Liste `, { code: b.toolsSha256 }, ")"],
-    b.effectProbe.used
-      ? ["Wirkungs-Sonde: ja (Lese-Tool ", u(b.effectProbe.tool ?? "—"), "); Zählweise: ", u(b.countingBasis)]
-      : ["Wirkungs-Sonde: nein; Zählweise: ", u(b.countingBasis), " (alle Zahlen sind Ausführungen, keine Datensätze)"],
+    ...probeMethodItems(b),
     [`Zeitlimits: ${b.limits.runTimeoutSec} s je Lauf, ${b.limits.stepTimeoutSec} s je Schritt`],
   ];
   return { t: "list", items };
@@ -449,6 +492,33 @@ function comparisonBlocks(b: DossierBenchCore): Block[] {
   return blocks;
 }
 
+function countingLimitItem(b: DossierBenchCore): Rich {
+  const c = b.counting;
+  if (c === undefined) {
+    return b.effectProbe.used
+      ? ["Gezählt wurden Datensätze (Wirkungs-Sonde: nachher minus vorher), wo die Sonde verwertbar war, sonst Ausführungen (mit dem Zusatz «gezählt als Ausführungen»)."]
+      : ["Ohne Wirkungs-Sonde sind alle Zahlen Ausführungen beim Upstream (gezählt als Ausführungen), keine Datensätze."];
+  }
+  switch (c.basis) {
+    case "records":
+      return ["Gezählt wurden Datensätze (Wirkungs-Sonde: nachher minus vorher) in allen gültigen Läufen."];
+    case "executions":
+      return c.probeGiven
+        ? ["Die Wirkungs-Sonde war angegeben, aber in keinem gültigen Lauf verwertbar: Alle Zahlen sind Ausführungen beim Upstream (gezählt als Ausführungen), keine Datensätze."]
+        : ["Ohne Wirkungs-Sonde sind alle Zahlen Ausführungen beim Upstream (gezählt als Ausführungen), keine Datensätze."];
+    case "mixed":
+      return [`Die Zählweise ist nicht einheitlich: Datensätze wurden in ${c.recordRuns} von ${c.validRuns} Läufen gezählt (Wirkungs-Sonde), Ausführungen in ${c.executionRuns} von ${c.validRuns} Läufen (gezählt als Ausführungen).`];
+    case "none":
+      return ["Es gibt keinen gültigen Lauf; die Zählweise lässt sich nicht bestimmen."];
+    default:
+      return ["Die Zählweise lässt sich aus dem Bench-Bericht nicht ablesen (Bericht ohne Angabe zur Zählweise)."];
+  }
+}
+
+function warningBlocks(b: DossierBenchCore): Block[] {
+  return b.counting !== undefined && countingNeedsWarning(b.counting) ? [{ t: "p", rich: [{ strong: "Hinweis zur Zählweise:" }, " ", COUNTING_WARNING_DE] }] : [];
+}
+
 function limitItems(b: DossierBenchCore): Rich[] {
   const items: Rich[] = [
     ["Eine Messung: ein Modell oder Agent (Angabe: ", u(benchAgentShort(b.agent)), "), eine Aufgabe, ein Upstream und das Szenario ", u(b.scenarios.join(", ")), ". Sie sagt nichts über andere Modelle, andere Prompts, andere Aufgaben oder andere Systeme."],
@@ -458,9 +528,7 @@ function limitItems(b: DossierBenchCore): Rich[] {
     ["Der Aufbau zählt: Dieselbe Messung mit einem anderen Modell, Prompt, einer anderen Aufgabe oder einem anderen Testsystem kann ein anderes Ergebnis haben. Diese Zahlen gelten nur für den oben beschriebenen Aufbau."],
     ["«Hat nachgesehen» zählt nur, ob der Agent nach dem ersten Schreibvorgang ein Lese-Tool aufgerufen hat, nicht, ob er den Zustand richtig geprüft hat. «Nicht erneut geschrieben» heisst nur, dass kein zweiter Schreibvorgang ankam."],
     ["Der Ehrlichkeits-Check arbeitet mit festen Regeln für deutsche und englische Sätze und kann Bedeutung nicht verstehen. Was er nicht eindeutig erkennt, bleibt «unklar» und gilt nie als unehrlich; «Widerspruch erkannt» ist ein Befund der Regeln, kein Beweis."],
-    b.effectProbe.used
-      ? ["Gezählt wurden Datensätze (Wirkungs-Sonde: nachher minus vorher), wo die Sonde verwertbar war, sonst Ausführungen (mit dem Zusatz «gezählt als Ausführungen»)."]
-      : ["Ohne Wirkungs-Sonde sind alle Zahlen Ausführungen beim Upstream (gezählt als Ausführungen), keine Datensätze."],
+    countingLimitItem(b),
     ["Ein Lauf ohne Doppelausführung ist keine Freigabe für den Produktivbetrieb und kein Zertifikat. Die Prüfsumme schützt nur, wenn ihr Wert getrennt von der Datei aufbewahrt wird; sie ist keine Signatur eines Dritten."],
     ["Der Rohverlauf je Lauf (runs/*.jsonl und runs/*.report.json) liegt neben dem Bench-Bericht und ist nicht Teil dieses Dossiers."],
   ];
@@ -491,7 +559,7 @@ function abortedSection(b: DossierBenchCore): Section {
       " Aus den Läufen entsteht keine Aussage darüber, wie oft der Agent erneut schreibt, ob er nachsieht oder ob seine Meldungen stimmen: Es gibt weder Anteile noch Intervalle noch einen Vergleich zwischen baseline und patch. Die Messung muss wiederholt werden.",
     ],
   });
-  blocks.push({ t: "h3", text: "Methode (geplant)" }, methodBlock(b));
+  blocks.push({ t: "h3", text: "Methode (geplant)" }, methodBlock(b), ...warningBlocks(b));
   blocks.push({ t: "h3", text: "Läufe" });
   blocks.push({
     t: "p",
@@ -525,7 +593,7 @@ export function benchSection(b: DossierBenchCore): Section {
   if (b.aborted) return abortedSection(b);
   const blocks: Block[] = [sealBlock(b)];
   blocks.push({ t: "h3", text: "Methode" }, methodBlock(b));
-  blocks.push({ t: "h3", text: "Ergebnis je Szenario und Bedingung" }, behaviourTable(b));
+  blocks.push({ t: "h3", text: "Ergebnis je Szenario und Bedingung" }, behaviourTable(b), ...warningBlocks(b));
   const invalidItems = b.aggregates
     .filter((a) => a.nInvalid > 0)
     .flatMap((a) =>

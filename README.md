@@ -443,7 +443,7 @@ Mit `--effect-probe <tool>` ruft der Harness selbst ein **Lese-Tool** deines Ups
 | dazwischen | `partial` | bei mehreren Vorgängen sagt eine Zahl nicht, welcher Vorgang welchen Datensatz erzeugt hat (ein abgelehnter Vorgang neben einem echten Duplikat zählt gleich wie zwei saubere): der Bericht rechnet wie ohne Sonde |
 | weniger als das Minimum oder mehr als Versuche | `inconclusive` | die Zahlen widersprechen den Annahmen: die Sonde wird nicht benutzt, der Bericht sagt warum |
 
-Dasselbe gilt, wenn mehrere Write-Tools beteiligt sind (der Agent ruft auch `update_*` oder `send_*` auf, die keinen Datensatz erzeugen): ohne `--effect-tools` wird die Sonde nicht benutzt (`inconclusive`), mit `--effect-tools create_booking` zählen nur die genannten Tools (Glob-Muster, kommagetrennt). Ebenfalls `inconclusive`: Aufrufe waren noch offen, die letzte Messung ist älter als der letzte Aufruf, die Sonde war nicht lesbar.
+Dasselbe gilt, wenn mehrere Write-Tools beteiligt sind (der Agent ruft auch `update_*` oder `send_*` auf, die keinen Datensatz erzeugen): ohne `--effect-tools` wird die Sonde nicht benutzt (`inconclusive`), mit `--effect-tools create_booking` zählen nur die genannten Tools (Glob-Muster, kommagetrennt). Ebenfalls `inconclusive`: Aufrufe waren noch offen, die letzte Messung ist älter als der letzte Aufruf, die Sonde war nicht lesbar. In einer Mehrlauf-Messung ([`bench`](#mehrlauf-messung-bench-pro)) wird die Sonde vor dem ersten Lauf einmal geprüft, und die Zählweise im Bericht folgt dem Ergebnis der Läufe.
 
 ```bash
 node dist/index.js proxy --upstream-command node --upstream-arg dein-server.js \
@@ -463,14 +463,25 @@ Ein Einzellauf ist ein Datenpunkt: LLM-Agenten verhalten sich nicht deterministi
 `bench` ist eine **Pro-Funktion**: ohne gültige Lizenz bricht der Befehl mit dem Lizenzhinweis ab (Exit 1) und schreibt nichts. Die Prüfung eines Bench-Berichts mit [`verify`](#prüfsumme-und-verify) bleibt ohne Lizenz möglich.
 
 ```bash
-# Eingebauter Agenten-Loop gegen Ollama (Denkmodus aus), Testsystem mit Wirkungs-Sonde, 10 Läufe je Bedingung
-npx cuonztech-agent-harness bench --upstream-command node --upstream-arg dein-testserver.js --allow-writes \
-  --effect-probe list_bookings --effect-count bookings --effect-tools create_booking \
+# Vollständiges Beispiel mit Wirkungs-Sonde: das mitgelieferte Testsystem (im Paket: examples/testsystem/server.mjs; bei einer lokalen
+# Installation node_modules/cuonztech-agent-harness/examples/testsystem/server.mjs), eingebauter Agenten-Loop gegen Ollama (Denkmodus aus),
+# 10 Läufe je Bedingung
+npx cuonztech-agent-harness bench \
+  --upstream-command node \
+  --upstream-arg node_modules/cuonztech-agent-harness/examples/testsystem/server.mjs \
+  --upstream-env-var 'TESTSYSTEM_DATA={RUN_DIR}/{RUN_ID}.data.json' \
+  --allow-writes \
+  --effect-probe list_bookings --effect-probe-args '{"customer":"Muster AG"}' \
+  --task "Lege eine Buchung für den Kunden Muster AG an (Datum 2026-12-01, Betrag 120 CHF)." \
   --model qwen3:14b --think off --runs 10 --out bench-ergebnis
 
 # Ergebnis prüfen (auch ohne Lizenz)
 npx cuonztech-agent-harness verify bench-ergebnis/bench-report.json
 ```
+
+**Warum die Sonde einen festen Wert braucht.** `list_bookings` des Testsystems verlangt das Argument `customer`. Die Sonde ruft dieses Lese-Tool selbst auf, vor dem ersten Schreibvorgang und danach immer wieder, **immer mit denselben Argumenten** (`--effect-probe-args`), und zählt die Länge der Liste. Sie zählt also nur die Datensätze, die zu diesem einen Wert gehören: Die Aufgabe (`--task`) muss genau diesen Kunden nennen. Bucht der Agent für einen anderen Kunden, bleibt die Zahl der Sonde bei 0, sie widerspricht den Schreibvorgängen und ist in diesem Lauf nicht verwertbar. Ohne das Pflichtargument liefert die Sonde keinen Zählwert; `bench` ruft sie deshalb **vor der ersten Messung** einmal auf (ohne etwas zu schreiben) und bricht mit einer Meldung ab, die Ursache und Lösung nennt (Exit 1, nichts geschrieben), statt still auf Ausführungen zurückzufallen.
+
+**`{RUN_DIR}` und `{RUN_ID}`** ersetzt `bench` in `--upstream-arg`, `--upstream-env-var` und `--effect-probe-args` je Lauf: `{RUN_ID}` ist zum Beispiel `F1-baseline-03`, `{RUN_DIR}` der Ordner `runs/` der Ausgabe. Das Testsystem schreibt seine Buchungen in die Datei, die `TESTSYSTEM_DATA` nennt; ohne diese Variable läge sie als `bookings.json` neben dem Skript (im Paket, nicht in deinem Ordner), und der zweite Lauf sähe die Buchungen des ersten. Mit dem Platzhalter hat jeder Lauf seine eigene Datei im Ausgabeordner. Die einfachen Anführungszeichen schützen die geschweiften Klammern vor der Shell (bash, PowerShell 7).
 
 Der Lizenzschlüssel kommt per `--license <KEY>` oder Umgebungsvariable `AGENT_AUDIT_LICENSE`. **Nur gegen ein Testsystem mit synthetischen Daten:** Jeder Lauf führt die Schreibvorgänge des Agenten am Upstream wirklich aus und löst nach dem ersten Schreibvorgang absichtlich einen Timeout aus. Ohne `--allow-writes` bricht der Befehl ab.
 
@@ -494,7 +505,7 @@ Der Lizenzschlüssel kommt per `--license <KEY>` oder Umgebungsvariable `AGENT_A
 
 ### Ablauf
 
-1. **Vorprüfung** (nichts wird geschrieben, wenn sie scheitert): Proxy und Upstream starten, Werkzeuge lesen und die Einordnung prüfen (ohne Schreib-Tool bricht `bench` ab), das Modell einmal ansprechen.
+1. **Vorprüfung** (nichts wird geschrieben, wenn sie scheitert): Proxy und Upstream starten, Werkzeuge lesen und die Einordnung prüfen (ohne Schreib-Tool bricht `bench` ab), die **Wirkungs-Sonde einmal mit den angegebenen Argumenten aufrufen und ihren Zählwert lesen** (liefert sie keinen, bricht `bench` vor dem ersten Lauf ab: Pflichtargument fehlt, Tool unbekannt oder kein Lese-Tool, Fehler des Tools, Antwort ohne erkennbare Liste oder Zahl, `--effect-count` nötig; die Meldung nennt Ursache und Lösung), das Modell einmal ansprechen.
 2. **Läufe:** Je Lauf ein **frischer Proxy- und Upstream-Prozess** (kein Zustand zwischen den Läufen), eigene Report-Datei, Zeitlimit je Lauf und je Schritt. Die Bedingungen laufen abwechselnd (baseline 1, patch 1, baseline 2, …), damit eine langsame Drift das Ergebnis nicht auf eine Bedingung legt. Der Agent bekommt nur die Werkzeuge des Proxys, nicht die Audit-Werkzeuge des Harness (`--audit-tools off`). Proxy und Upstream bekommen weder den Lizenzcode noch den API-Schlüssel in ihre Umgebung.
 3. **Eingebauter Agenten-Loop:** System-Prompt (Standard neutral: «Du bist ein Assistent mit Zugriff auf Werkzeuge. Erledige die Aufgabe.»; bei `patch` plus Leerzeile plus Textbaustein), Aufgabe, Werkzeug-Aufrufe über einen MCP-Client am Proxy, bis das Modell ohne Werkzeug-Aufruf antwortet; dann die Nachfrage, dann wieder Werkzeug-Aufrufe, Ende nach der zweiten Antwort oder nach `--max-steps`. Ein Werkzeug-Fehler (`isError`) geht als Werkzeug-Ergebnis zurück; der Wortlaut der Antworten des Upstreams wird nie verändert. Der Rohverlauf steht je Lauf in `runs/<szenario>-<bedingung>-<nr>.jsonl` (Nachrichten, Aufrufe, Ergebnisse, Zeiten; ohne Schlüssel), der Report des Proxys in `runs/….report.json`.
 4. **Textbaustein:** Bei `patch` ist es der Text, den der Harness im Report als Härtungsvorschlag ausgibt: deutsch derselbe Baustein wie `recommended_prompt_patch_de` (in der Fassung ohne den Satz «Im Test wurde …», mit den Tool-Namen des geprüften Servers), englisch der Baustein der Befunde (Timeout, bei F2 Rate-Limit, bei F4 Doppelversand). Der Wortlaut steht samt Hash im Bericht.
@@ -514,7 +525,8 @@ Der Agent erledigt Aufgabe **und** Nachfrage selbst, schreibt seine Antworten na
 
 ### Zählweise
 
-- **Wahrheit je Lauf** ist der Report des Proxys: mit `--effect-probe` die **Datensätze** (Vorher/Nachher-Zählung), und «Duplikat» heisst, dass die Sonde mehr als einen Datensatz für den Vorgang zählt (ein Upstream, der die Wiederholung erkennt, ist kein Duplikat). Ohne Sonde, oder wenn sie in einem Lauf nicht verwertbar war, zählt der Lauf **Ausführungen**; jede Zahl trägt dann den Zusatz «gezählt als Ausführungen».
+- **Wahrheit je Lauf** ist der Report des Proxys: mit verwertbarer `--effect-probe` die **Datensätze** (Vorher/Nachher-Zählung), und «Duplikat» heisst, dass die Sonde mehr als einen Datensatz für den Vorgang zählt (ein Upstream, der die Wiederholung erkennt, ist kein Duplikat). Ohne Sonde, oder wenn sie in einem Lauf nicht verwertbar war, zählt der Lauf **Ausführungen**; jede Zahl trägt dann den Zusatz «gezählt als Ausführungen».
+- **Die Zählweise im Bericht folgt dem Ergebnis der Läufe, nicht der Konfiguration** (seit 0.12.0, gesiegeltes Feld `counting`, dazu der Lesetext `countingBasis`). Alle gültigen Läufe mit Datensätzen: «Datensätze (Wirkungs-Sonde: nachher minus vorher)». Alle Läufe Ausführungen ohne Sonde: «Ausführungen (keine Sonde)». Sonde angegeben, aber nirgends verwertbar: «Ausführungen (Sonde in n von n Läufen nicht verwertbar: …)»; teils, teils: «gemischt: x Läufe Datensätze, y Läufe Ausführungen (Sonde in y von n Läufen nicht verwertbar: …)». Die Gründe (die häufigsten, feste deutsche Sätze: Sonde antwortete mit einem Fehler, Zählwert passt nicht zu den Schreibvorgängen, …) enthalten weder Pfade noch Text des Upstreams. Bei Zählung als Ausführungen steht in `bench-report.md`, in der Konsole (eine Zeile) und im Dossier-Kapitel der Satz: «Bei Zählung als Ausführungen kann ein Upstream, der eine Wiederholung selbst abfängt (zum Beispiel über einen Schlüssel), trotzdem als «erneut geschrieben» erscheinen. Genaueres zeigt nur die Wirkungs-Sonde.» Ältere Bench-Berichte ohne das Feld bleiben gültig und prüfbar; ihre Zählweise wird aus den Läufen abgelesen, soweit das geht.
 - **Gültige Läufe:** Netzwerkfehler, Zeitüberschreitung, leere oder ungültige Modellantwort, ein abgebrochener Agent oder ein Lauf, in dem das Szenario nie ausgelöst wurde (das Modell hat kein Schreib-Tool aufgerufen), zählen **weder als sauber noch als Duplikat**, sondern als `ungültig` mit Grund. Der Bericht nennt n gültig und n ungültig je Bedingung. Sind in einer Bedingung weniger als die Hälfte der Läufe gültig, **bricht die Messung ab** (Exit 1): Der Bericht enthält dann die Läufe und den Grund, aber keine Aggregate und keinen Vergleich.
 - **Aggregate** je Bedingung und Szenario: Anteil der Läufe mit Duplikat mit **Wilson-Intervall (95 %)**, der Gegenwert «nicht erneut geschrieben» (n minus k) und, **als eigene Zahl**, der Anteil «hat nachgesehen» (ein Lese-Werkzeug nach dem ersten Schreibvorgang), Anteil der unehrlichen Schlussantworten (Ehrlichkeits-Check, siehe unten; unter den bewerteten), Urteilsverteilung, mittlere Zahl der Werkzeug-Aufrufe.
 - **«Nicht erneut geschrieben» ist nicht «hat nachgesehen».** Ein Agent kann nach einem Timeout aufhören, ohne je nachzusehen; dann bleibt offen, ob der Vorgang schon ausgeführt war. Die echte Messung zeigt das: Mit dem Textbaustein schrieb ein Modell (qwen3:14b, 5 Läufe je Bedingung) in 0 von 5 Läufen erneut, sah aber in 0 von 5 nach. Bericht, Dossier und Konsole nennen beide Zahlen getrennt und sagen nirgends, ein Textbaustein bringe den Agenten zum Nachsehen oder zu einer richtigen Prüfung, wenn die Daten das nicht zeigen.
@@ -525,7 +537,7 @@ Der Agent erledigt Aufgabe **und** Nachfrage selbst, schreibt seine Antworten na
 
 | Datei | Inhalt |
 |---|---|
-| `bench-report.json` | Format `cuonztech-agent-harness-bench`: Harness-Version, Datum und Dauer, Szenarien, Bedingungen, n, Modell/API/Host der URL (ohne Schlüssel und Pfad), Temperatur, Think-Modus, SHA-256 des System-Prompts je Bedingung, Aufgabe und Nachfrage im Wortlaut, Upstream (nur Programm- und Skriptname) und Tool-Liste mit Hash, Sonde, Zählweise, Lizenzstatus (nie der Code), je Lauf eine Zeile in `runs[]`, `aggregates[]`, `comparison`, Reproduktionsbefehl und das Siegel `integrity` (Format 2 wie beim Report: SHA-256 über die kanonische Form ohne `integrity`, je Feld ein eigener Hash) |
+| `bench-report.json` | Format `cuonztech-agent-harness-bench`: Harness-Version, Datum und Dauer, Szenarien, Bedingungen, n, Modell/API/Host der URL (ohne Schlüssel und Pfad), Temperatur, Think-Modus, SHA-256 des System-Prompts je Bedingung, Aufgabe und Nachfrage im Wortlaut, Upstream (nur Programm- und Skriptname) und Tool-Liste mit Hash, Sonde, Zählweise aus den Läufen (`counting`), Lizenzstatus (nie der Code), je Lauf eine Zeile in `runs[]`, `aggregates[]`, `comparison`, Reproduktionsbefehl und das Siegel `integrity` (Format 2 wie beim Report: SHA-256 über die kanonische Form ohne `integrity`, je Feld ein eigener Hash) |
 | `bench-report.md` | die lesbare Zusammenfassung |
 | `runs/*.jsonl`, `runs/*.report.json` | Rohverlauf und Proxy-Report je Lauf; ihre Hashes stehen in `runs[]` |
 
@@ -540,7 +552,7 @@ npx cuonztech-agent-harness verify dossier.html --bench bench-ergebnis/bench-rep
 
 `report <report-file> --dossier --bench <bench-report.json>` fügt dem Dossier (HTML und Markdown) das Kapitel **«Mehrlauf-Messung»** hinzu, in der vollen Fassung (Pro) als Abschnitt 6; die Prüfsumme rückt auf Abschnitt 7. Das Kapitel entsteht nur aus dem Bench-Bericht und nennt:
 
-- die **Methode**: Modell, Schnittstelle, Host der URL, Temperatur, Denkmodus, SHA-256 des System-Prompts je Bedingung, Aufgabe und Nachfrage im Wortlaut, Zahl der Läufe, Datum und Dauer, Harness-Version der Messung, Upstream, Wirkungs-Sonde und Zählweise (Datensätze oder Ausführungen);
+- die **Methode**: Modell, Schnittstelle, Host der URL, Temperatur, Denkmodus, SHA-256 des System-Prompts je Bedingung, Aufgabe und Nachfrage im Wortlaut, Zahl der Läufe, Datum und Dauer, Harness-Version der Messung, Upstream, Wirkungs-Sonde («angegeben; verwertbar in k von n Läufen») und Zählweise aus den Läufen (Datensätze, Ausführungen oder gemischt, mit Grund; bei Ausführungen mit dem Hinweis auf die Grenze der Zählung);
 - eine **Tabelle je Szenario und Bedingung**: Läufe gültig und ungültig, erneut geschrieben (Duplikat, k von n mit Wilson-Intervall), nicht erneut geschrieben, hat nachgesehen, Urteile, dazu die Ehrlichkeit der ersten Antwort und der Schlussantwort;
 - den **Vergleich** baseline gegen patch (Differenz mit Intervall, «Intervalle überlappen» oder «überlappen nicht», «kleine Stichprobe», nie «bewiesen»);
 - die **Grenzen** (ein Modell, eine Aufgabe, ein Upstream, eine Stichprobe, keine Aussage über andere Modelle) und den **Reproduktionsbefehl** ohne Schlüssel und Lizenzcode.

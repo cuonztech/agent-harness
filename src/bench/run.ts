@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { createHash } from "node:crypto";
 import { CLAIM_CHECK_VERSION, evaluateAgentClaim } from "../core/claim-check.js";
+import { ProbeReadError, parseProbeArgs, parseProbeReading } from "../core/effect-probe.js";
 import { scriptNameOf, toolListSha256 } from "../core/upstream-identity.js";
 import { sha256Hex } from "../core/artifact-integrity.js";
 import type { AuditReport } from "../core/report-generator.js";
@@ -17,13 +18,13 @@ import { VERSION } from "../version.js";
 import type { ReportFile } from "../plain-report.js";
 import { DEFAULT_SYSTEM_PROMPT_DE, type BenchCondition, type BenchOptions } from "./args.js";
 import { parseAgentOutput, runAgentProcess } from "./agent-command.js";
+import { countingLabelDe, countingOfRuns, probeReasonDe } from "./counting.js";
 import { InvalidRunError, createBackend, runAgentLoop, type AgentLoopResult, type ChatBackend, type ToolClient, type ToolDef } from "./agent-loop.js";
 import {
   BENCH_FORMAT,
   BENCH_FORMAT_VERSION,
   BENCH_NOTES_DE,
   BENCH_REPORT_NAME,
-  COUNTING_DE,
   aggregateRuns,
   compareConditions,
   renderBenchMarkdown,
@@ -81,14 +82,14 @@ interface ProxySession {
   close: () => Promise<void>;
 }
 
-function proxyArgsFor(options: BenchOptions, scenario: string, reportFile: string, runId: string, runDir: string): string[] {
+function proxyArgsFor(options: BenchOptions, scenario: string, reportFile: string, runId: string, runDir: string, withProbe = true): string[] {
   const sub = (s: string): string => s.replaceAll("{RUN_ID}", runId).replaceAll("{RUN_DIR}", runDir);
   const args: string[] = ["proxy", `--upstream-command=${options.upstream.command}`];
   for (const a of options.upstream.args) args.push(`--upstream-arg=${sub(a)}`);
   if (options.upstream.cwd !== null) args.push(`--upstream-cwd=${options.upstream.cwd}`);
   for (const [k, v] of Object.entries(options.upstream.env)) args.push(`--upstream-env-var=${k}=${sub(v)}`);
   args.push(`--scenario=${scenario}`, "--allow-writes", "--audit-tools=off", `--report-file=${reportFile}`);
-  if (options.probe) {
+  if (options.probe && withProbe) {
     args.push(`--effect-probe=${options.probe.tool}`);
     if (options.probe.argsRaw !== null) args.push(`--effect-probe-args=${sub(options.probe.argsRaw)}`);
     if (options.probe.countPath !== null) args.push(`--effect-count=${options.probe.countPath}`);
@@ -328,6 +329,7 @@ async function executeRun(ctx: RunContext, spec: RunSpec): Promise<BenchRunRow> 
   let records: number | null = null;
   let probeConclusion: string | null = null;
   let truthBasis: BenchRunRow["truthBasis"] = null;
+  let probeReason: string | null = null;
   let duplicate: boolean | null = null;
   let toolCalls: number | null = null;
   let lookedUp: boolean | null = null;
@@ -338,6 +340,8 @@ async function executeRun(ctx: RunContext, spec: RunSpec): Promise<BenchRunRow> 
     probeConclusion = probe ? probe.conclusion : null;
     records = probe && probe.delta !== null ? probe.delta : null;
     truthBasis = probe && (probe.conclusion === "confirmed" || probe.conclusion === "deduplicated") ? "records" : "executions";
+    // Sonde angegeben, aber in diesem Lauf nicht verwertbar: fester deutscher Grund (kein Text des Upstreams).
+    if (ctx.probeConfigured && truthBasis === "executions") probeReason = probeReasonDe(probe ? probe.conclusion : null, probe ? probe.note : "");
     duplicate = rep.duplicateExecutions > 0;
     toolCalls = rep.totalCalls;
     lookedUp = lookedUpOf(finalFile);
@@ -380,6 +384,7 @@ async function executeRun(ctx: RunContext, spec: RunSpec): Promise<BenchRunRow> 
     executions,
     records,
     probeConclusion,
+    probeReason,
     truthBasis,
     duplicate,
     retryAfterViolations,
@@ -399,6 +404,100 @@ async function executeRun(ctx: RunContext, spec: RunSpec): Promise<BenchRunRow> 
 
 // ---------------------------------------------------------------- Vorprüfung
 
+const PROBE_OR_WITHOUT_DE = "oder starte ohne --effect-probe (dann zählt bench Ausführungen).";
+
+/**
+ * Ruft die Wirkungs-Sonde einmal mit den angegebenen Argumenten gegen den Upstream auf und liest ihren Zählwert (dieselbe Logik wie der
+ * Proxy: parseProbeReading). Ein Lese-Aufruf, nichts wird geschrieben. Null: die Sonde liefert einen Zählwert; sonst die Meldung.
+ */
+async function checkProbe(
+  input: BenchRunInput,
+  tools: ToolDef[],
+  classification: Array<{ name: string; class: string }>,
+  dir: string,
+  scrub: (t: string) => string,
+): Promise<string | null> {
+  const { options } = input;
+  const probe = options.probe;
+  if (!probe) return null;
+  const head = `Die Wirkungs-Sonde ${probe.tool} liefert keinen Zählwert: `;
+  const known = tools.find((t) => t.name === probe.tool);
+  if (!known) {
+    return `${head}Der Upstream hat kein Tool dieses Namens (vorhanden: ${tools.map((t) => t.name).join(", ") || "keine Tools"}). Prüfe den Namen bei --effect-probe, ${PROBE_OR_WITHOUT_DE}`;
+  }
+  const cls = classification.find((c) => c.name === probe.tool)?.class;
+  if (cls !== "read") {
+    return `${head}Das Tool ist ${cls === "write" ? "als Schreib-Tool" : "weder als Lese- noch als Schreib-Tool"} erkannt, und bench ruft die Sonde selbst auf, mehrfach: Ein Schreib-Tool würde verändern, was sie misst. Wähle ein Lese-Tool, ordne es mit --read-tools zu, ${PROBE_OR_WITHOUT_DE}`;
+  }
+  const sub = (v: string): string => v.replaceAll("{RUN_ID}", "preflight").replaceAll("{RUN_DIR}", dir);
+  let args: Record<string, unknown> = {};
+  if (probe.argsRaw !== null) {
+    const parsed = parseProbeArgs(sub(probe.argsRaw));
+    if (parsed === null) {
+      return `${head}--effect-probe-args ist kein JSON-Objekt (erhalten: «${scrub(probe.argsRaw).slice(0, 120)}»). Beispiel: --effect-probe-args '{"customer":"Muster AG"}'. Oder ${PROBE_OR_WITHOUT_DE}`;
+    }
+    args = parsed;
+  }
+  const schema = (known.inputSchema ?? {}) as { required?: unknown };
+  const required = Array.isArray(schema.required) ? schema.required.filter((k): k is string => typeof k === "string") : [];
+  const missing = required.filter((k) => !(k in args));
+  if (missing.length > 0) {
+    const example = `{${missing.map((k) => `"${k}":"…"`).join(",")}}`;
+    return (
+      `${head}Das Tool verlangt ${missing.length === 1 ? "das Argument" : "die Argumente"} ${missing.join(", ")}. ` +
+      `Gib --effect-probe-args '${example}' an und lass die Aufgabe ${missing.length === 1 ? "diesen Wert" : "diese Werte"} verwenden (--task), ${PROBE_OR_WITHOUT_DE}`
+    );
+  }
+
+  // Ein eigener Proxy ohne Sonde, damit sich ein Fehler der Sonde melden lässt, statt den Start zu verhindern.
+  let session: ProxySession;
+  try {
+    session = await openProxy(input, proxyArgsFor(options, options.scenarios[0]!, join(dir, "preflight-probe.report.json"), "preflight", dir, false), 60_000);
+  } catch (err) {
+    return err instanceof InvalidRunError ? err.reason : scrub(err instanceof Error ? err.message : String(err));
+  }
+  try {
+    let result: { content?: unknown; structuredContent?: unknown; isError?: boolean };
+    try {
+      result = (await session.client.callTool({ name: probe.tool, arguments: args }, undefined, { timeout: 30_000 })) as typeof result;
+    } catch (err) {
+      if (err instanceof McpError && err.code === ErrorCode.RequestTimeout) {
+        return `${head}Das Tool hat nicht innerhalb von 30 s geantwortet. Nimm ein schnelleres Lese-Tool oder grenze es mit --effect-probe-args ein, ${PROBE_OR_WITHOUT_DE}`;
+      }
+      return `${head}Der Aufruf ist fehlgeschlagen (${scrub(err instanceof Error ? err.message : String(err)).slice(0, 200)}). Prüfe --effect-probe und --effect-probe-args, ${PROBE_OR_WITHOUT_DE}`;
+    }
+    try {
+      const reading = parseProbeReading(result as Parameters<typeof parseProbeReading>[0], probe.countPath ?? undefined);
+      input.log(`Wirkungs-Sonde ${probe.tool}: Zählwert ${reading.count} vor der Messung (einmal mit den angegebenen Argumenten gelesen, nichts geschrieben).`);
+      if (reading.warning) {
+        input.log("WARNUNG: Die Antwort der Sonde sieht gekürzt oder seitenweise aus; eine gekürzte Liste zählt zu wenig. Zähle mit --effect-count einen Gesamtwert.");
+      }
+      if (probe.argsRaw !== null && options.task === null) {
+        input.log("WARNUNG: Die Standardaufgabe nennt die Werte der Sonden-Argumente nicht. Gib mit --task eine Aufgabe an, die sie verwendet, sonst bleibt der Zählwert der Sonde gleich und der Lauf zählt Ausführungen.");
+      }
+      return null;
+    } catch (err) {
+      if (err instanceof ProbeReadError) {
+        switch (err.kind) {
+          case "error_result":
+            return `${head}Das Tool antwortet mit einem Fehler${err.detail ? `: «${scrub(err.detail)}»` : ""}. Prüfe --effect-probe-args (braucht das Tool Argumente, und welche?), ${PROBE_OR_WITHOUT_DE}`;
+          case "not_json":
+            return `${head}Die Antwort des Tools ist kein JSON. Nimm ein Lese-Tool, das JSON liefert, ${PROBE_OR_WITHOUT_DE}`;
+          case "not_countable":
+            return `${head}Die Antwort enthält keine erkennbare Liste oder Zahl. Gib mit --effect-count <Pfad> an, was gezählt wird (Pfad zu einer Liste, einer Zahl oder einem Objekt), ${PROBE_OR_WITHOUT_DE}`;
+          case "count_path":
+            return `${head}--effect-count «${scrub(probe.countPath ?? "")}» führt in der Antwort zu keiner Liste, Zahl oder keinem Objekt. Prüfe den Pfad, ${PROBE_OR_WITHOUT_DE}`;
+          case "bad_number":
+            return `${head}Die Antwort ist eine Zahl, die kein Zählwert ist (negativ oder keine Zahl). Gib mit --effect-count <Pfad> einen Zähler an, ${PROBE_OR_WITHOUT_DE}`;
+        }
+      }
+      return `${head}${scrub(err instanceof Error ? err.message : String(err))} ${PROBE_OR_WITHOUT_DE}`;
+    }
+  } finally {
+    await session.close();
+  }
+}
+
 interface Preflight {
   tools: ToolDef[];
   classification: Array<{ name: string; class: string }>;
@@ -411,7 +510,8 @@ async function preflight(input: BenchRunInput, backend: ChatBackend | null, scru
     const reportPath = join(dir, "preflight.report.json");
     let session: ProxySession;
     try {
-      session = await openProxy(input, proxyArgsFor(options, options.scenarios[0]!, reportPath, "preflight", dir), 60_000);
+      // Ohne Sonde gestartet: Ein Fehler der Sonde soll `checkProbe` melden (mit Ursache und Lösung), nicht den Start verhindern.
+      session = await openProxy(input, proxyArgsFor(options, options.scenarios[0]!, reportPath, "preflight", dir, false), 60_000);
     } catch (err) {
       return { error: err instanceof InvalidRunError ? err.reason : scrub(err instanceof Error ? err.message : String(err)) };
     }
@@ -432,6 +532,9 @@ async function preflight(input: BenchRunInput, backend: ChatBackend | null, scru
           "Ohne Schreib-Tool löst kein Szenario aus. Ordne es mit --write-tools <Muster> zu.",
       };
     }
+    // Die Wirkungs-Sonde einmal aufrufen (Fail-fast, vor der Messung und vor dem Modell): Liefert sie keinen Zählwert, wird nichts gemessen.
+    const probeProblem = await checkProbe(input, tools, classification, dir, scrub);
+    if (probeProblem !== null) return { error: probeProblem };
     if (backend) {
       // Das Modell einmal ansprechen: prüft Adresse und Name und lädt es, damit der erste Lauf nicht an der Ladezeit scheitert.
       try {
@@ -494,7 +597,7 @@ export async function runBench(input: BenchRunInput): Promise<BenchOutcome> {
   const readTools = pre.classification.filter((c) => c.class === "read").map((c) => c.name);
   log(`Schreib-Tools: ${writeTools.join(", ")}; Lese-Tools: ${readTools.join(", ") || "keine"}.`);
   if (readTools.length === 0) log("WARNUNG: Der Upstream hat kein Lese-Tool: Der Agent kann nach einem Timeout nicht nachsehen.");
-  if (!options.probe) log("HINWEIS: Ohne --effect-probe zählt die Messung Ausführungen, nicht Datensätze; jede Zahl trägt den Zusatz «gezählt als Ausführungen».");
+  if (!options.probe) log("HINWEIS: Ohne --effect-probe zählt die Messung Ausführungen, nicht Datensätze; jede Zahl trägt den Zusatz «gezählt als Ausführungen». Bei Zählung als Ausführungen kann ein Upstream, der eine Wiederholung selbst abfängt, trotzdem als «erneut geschrieben» erscheinen.");
 
   const task =
     options.task ??
@@ -528,7 +631,7 @@ export async function runBench(input: BenchRunInput): Promise<BenchOutcome> {
         const row = await executeRun(ctx, { scenario, condition, nr, id, systemPrompt: promptOf(scenario, condition), patchText: condition === "patch" ? patchTexts.get(scenario)! : "" });
         rows.push(row);
         log(
-          `${id}: ${row.valid ? `gültig, ${row.duplicate ? "Doppelausführung" : "keine Doppelausführung"} (${row.verdict})` : `UNGÜLTIG: ${row.invalidReason}`} [${(row.durationMs / 1000).toFixed(1)} s]`,
+          `${id}: ${row.valid ? `gültig, ${row.duplicate ? "Doppelausführung" : "keine Doppelausführung"} (${row.verdict})${row.probeReason ? `; Sonde nicht verwertbar, gezählt als Ausführungen: ${row.probeReason}` : ""}` : `UNGÜLTIG: ${row.invalidReason}`} [${(row.durationMs / 1000).toFixed(1)} s]`,
         );
         const cell = rows.filter((r) => r.scenario === scenario && r.condition === condition);
         const invalidCount = cell.filter((r) => !r.valid).length;
@@ -553,6 +656,8 @@ export async function runBench(input: BenchRunInput): Promise<BenchOutcome> {
   const aborted = abortReason !== null;
   const aggregates = aborted ? [] : aggregateRuns(options.scenarios, options.conditions, options.runs, rows);
   const agent = options.agent;
+  // Zählweise aus dem Ergebnis der Läufe, nicht aus der Konfiguration.
+  const counting = countingOfRuns(rows, options.probe !== null);
   const doc: Omit<BenchDocument, "integrity"> = {
     format: BENCH_FORMAT,
     formatVersion: BENCH_FORMAT_VERSION,
@@ -591,7 +696,8 @@ export async function runBench(input: BenchRunInput): Promise<BenchOutcome> {
     tools: pre.classification,
     toolsSha256: toolListSha256(pre.tools),
     effectProbe: { used: options.probe !== null, tool: options.probe?.tool ?? null, countPath: options.probe?.countPath ?? null, effectTools: options.probe?.tools ?? [] },
-    countingBasis: options.probe ? COUNTING_DE.records : COUNTING_DE.executions,
+    counting,
+    countingBasis: countingLabelDe(counting),
     limits: { runTimeoutSec: options.runTimeoutSec, stepTimeoutSec: options.stepTimeoutSec },
     reproduction: input.reproduction,
     runs: rows,

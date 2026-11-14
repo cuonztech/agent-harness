@@ -9,7 +9,7 @@ import { DOSSIER_SEAL_MARKER, canonicalJson, checkReportIntegrity, extractDossie
 import { BENCH_CHAPTER_ANCHOR, dossierBenchChecks, dossierHeaderChecks, renderDossierHtml, renderDossierMarkdown, type DossierOptions } from "./dossier-report.js";
 import { evaluateAgentClaim } from "./core/claim-check.js";
 import { VERSION } from "./version.js";
-import { CLAIM_CHECK_OLDER_DE, benchCoreOf, claimCheckOlder, diffBenchCores, validateBenchDocument } from "./dossier-bench.js";
+import { CLAIM_CHECK_OLDER_DE, benchCoreMatching, claimCheckOlder, diffBenchCores, validateBenchDocument } from "./dossier-bench.js";
 import { CLAIM_CHECK_VERSION } from "./core/claim-check.js";
 import type { ReportFile } from "./plain-report.js";
 import { checkBenchIntegrity, looksLikeBenchReport, type BenchDocument, type BenchRunRow } from "./bench/report.js";
@@ -86,7 +86,7 @@ function compareWithBench(core: DossierCore, benchFile: Record<string, unknown>)
   }
   const invalid = validateBenchDocument(benchFile);
   if (invalid !== null) return { status: "NOT_VERIFIABLE", lines: [`Der angegebene Bench-Bericht lässt sich nicht abgleichen: ${invalid}`] };
-  const diffs = diffBenchCores(core.bench, benchCoreOf(benchFile as unknown as BenchDocument, check));
+  const diffs = diffBenchCores(core.bench, benchCoreMatching(core.bench, benchFile as unknown as BenchDocument, check));
   if (diffs.length > 0) {
     return { status: "MISMATCH", lines: ["Die Zahlen oder die Methode im Kapitel «Mehrlauf-Messung» des Dossiers passen nicht zum angegebenen Bench-Bericht:", ...diffs.map((d) => `  ${d}`)] };
   }
@@ -201,7 +201,7 @@ function rerenderCheck(text: string, core: DossierCore, report: ReportFile, benc
   }
   let benchCore = core.bench;
   if (bench !== undefined && core.bench !== undefined && validateBenchDocument(bench) === null) {
-    benchCore = benchCoreOf(bench as unknown as BenchDocument, checkBenchIntegrity(bench));
+    benchCore = benchCoreMatching(core.bench, bench as unknown as BenchDocument, checkBenchIntegrity(bench));
   }
   const agentResponse = typeof core.render.agentResponse === "string" ? core.render.agentResponse : undefined;
   const file: ReportFile = { ...report };

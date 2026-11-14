@@ -77,8 +77,8 @@ describe("B1: Inhalt des Kapitels", () => {
     expect(chapter).toContain("Läufe je Bedingung und Szenario (geplant): 5");
     expect(chapter).toContain("2026-11-14 14:31 UTC bis 2026-11-14 14:34 UTC (137 s)");
     expect(chapter).toContain("Harness-Version der Messung: 0.11.1");
-    expect(chapter).toContain("Zählweise: Datensätze (Wirkungs-Sonde: nachher minus vorher)");
-    expect(chapter).toContain("Wirkungs-Sonde: ja");
+    expect(chapter).toContain("Zählweise (aus den Läufen): Datensätze (Wirkungs-Sonde: nachher minus vorher)");
+    expect(chapter).toContain("Wirkungs-Sonde: angegeben (list\\_bookings); verwertbar in 10 von 10 Läufen");
     expect(chapter).toContain("--model qwen3:14b --api ollama --url http://localhost:11434");
   });
 

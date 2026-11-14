@@ -386,7 +386,8 @@ describe("Zählweise: Datensätze mit Sonde, Ausführungen ohne", () => {
     }
     const doc = withoutProbe.document;
     expect(doc.effectProbe.used).toBe(false);
-    expect(doc.countingBasis).toContain("gezählt als Ausführungen");
+    expect(doc.countingBasis).toBe("Ausführungen (keine Sonde)");
+    expect(doc.counting).toMatchObject({ basis: "executions", probeGiven: false, validRuns: 5, recordRuns: 0, executionRuns: 5 });
     expect(doc.aggregates[0]!.countingBasis).toBe("executions");
     const md = await readFile(withoutProbe.mdPath, "utf8");
     expect(md).toContain("gezählt als Ausführungen");
@@ -488,13 +489,13 @@ describe("ungültige Läufe (Abnahme 3)", () => {
     expect(existsSync(join(dir, "out"))).toBe(false);
   }, 120_000);
 
-  it("Vorprüfung scheitert (die Wirkungs-Sonde gibt es nicht): Fehler mit Ausgabe des Proxys, nichts geschrieben", async () => {
+  it("Vorprüfung scheitert (die Wirkungs-Sonde gibt es nicht): Fehler mit Ursache und Lösung, nichts geschrieben", async () => {
     const dir = await tmp();
     const fake = await model(blindRetry);
     const argv = argvFor(fake.url, dir, ["--runs", "5"]).map((a) => (a === "list_bookings" ? "gibt_es_nicht" : a));
     const outcome = await bench(argv, dir);
     expect(outcome.status).toBe("fehler");
-    if (outcome.status === "fehler") expect(outcome.error).toMatch(/Proxy oder der Upstream ist nicht gestartet/);
+    if (outcome.status === "fehler") expect(outcome.error).toMatch(/Die Wirkungs-Sonde gibt_es_nicht liefert keinen Zählwert: Der Upstream hat kein Tool dieses Namens/);
     expect(existsSync(join(dir, "out"))).toBe(false);
   }, 120_000);
 });

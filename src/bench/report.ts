@@ -13,6 +13,15 @@ import {
 import type { ReportIntegrityProof } from "../types.js";
 import { differenceInterval, intervalsOverlap, pointsDe, proportionDe, round, wilson, type Proportion } from "./stats.js";
 import type { BenchCondition } from "./args.js";
+import {
+  COUNTING_RECORDS_DE,
+  COUNTING_WARNING_DE,
+  countingLabelDe,
+  countingNeedsWarning,
+  countingOfDocument,
+  probeStatementDe,
+  type BenchCounting,
+} from "./counting.js";
 
 export const BENCH_FORMAT = "cuonztech-agent-harness-bench";
 export const BENCH_FORMAT_VERSION = 1;
@@ -41,6 +50,8 @@ export interface BenchRunRow {
   /** Neue Datensätze laut Wirkungs-Sonde (nachher minus vorher); null ohne Sonde oder ohne Messung. */
   records: number | null;
   probeConclusion: string | null;
+  /** Fester deutscher Grund, warum die Sonde in diesem Lauf nicht verwertbar war (nur bei angegebener Sonde und Zählung als Ausführungen); fehlt in Berichten bis zur Vorabfassung 0.12.0. */
+  probeReason?: string | null;
   /** Worauf die Zählung dieses Laufs beruht. */
   truthBasis: "records" | "executions" | null;
   /** Doppelausführung ja/nein; null bei ungültigem Lauf. */
@@ -131,6 +142,9 @@ export interface BenchDocument {
   tools: Array<{ name: string; class: string }>;
   toolsSha256: string;
   effectProbe: { used: boolean; tool: string | null; countPath: string | null; effectTools: string[] };
+  /** Zählweise aus dem Ergebnis der Läufe (nicht aus der Konfiguration); fehlt in älteren Berichten, dann wird sie aus `runs` abgeleitet. */
+  counting?: BenchCounting;
+  /** Lesetext der Zählweise (aus `counting`); in älteren Berichten die Angabe aus der Konfiguration. */
   countingBasis: string;
   limits: { runTimeoutSec: number; stepTimeoutSec: number };
   reproduction: string;
@@ -309,9 +323,8 @@ export function checkBenchIntegrity(file: Record<string, unknown>): IntegrityChe
 // ---------------------------------------------------------------- Lesetext
 
 export const COUNTING_DE = {
-  records: "Datensätze (Wirkungs-Sonde: nachher minus vorher)",
-  executions: "Ausführungen beim Upstream (ohne Wirkungs-Sonde gezählt als Ausführungen)",
-  mixed: "gemischt: Datensätze, wo die Wirkungs-Sonde verwertbar war, sonst Ausführungen",
+  records: COUNTING_RECORDS_DE,
+  executions: "Ausführungen (keine Sonde)",
 };
 
 function table(head: string[], rows: string[][]): string[] {
@@ -340,7 +353,9 @@ export function renderBenchMarkdown(doc: BenchDocument): string {
     `Harness ${doc.harnessVersion} · ${doc.startedAt} bis ${doc.finishedAt} (${Math.round(doc.durationMs / 1000)} s) · Szenario ${doc.scenarios.join(", ")} · ${doc.runsPerCell} Läufe je Bedingung (${doc.conditions.join(", ")}) · Agent: ${agentText}`,
     "",
   );
-  lines.push(`**Zählweise:** ${doc.countingBasis}`, "");
+  const counting = countingOfDocument(doc);
+  lines.push(`**Zählweise:** ${countingLabelDe(counting)}`, "");
+  if (countingNeedsWarning(counting)) lines.push(`**Hinweis:** ${COUNTING_WARNING_DE}`, "");
   lines.push("## Ergebnis je Bedingung", "");
   if (doc.aggregates.length === 0) lines.push("Keine Auswertung (Messung abgebrochen).", "");
   else {
@@ -390,7 +405,7 @@ export function renderBenchMarkdown(doc: BenchDocument): string {
   lines.push(`- Aufgabe: «${doc.task}»`);
   lines.push(`- Nachfrage: ${doc.followup === null ? "keine" : `«${doc.followup}»`}`);
   lines.push(`- Upstream: ${doc.upstream.program}${doc.upstream.script ? ` ${doc.upstream.script}` : ""}; ${doc.tools.length} Tools (SHA-256 der Tool-Liste ${doc.toolsSha256.slice(0, 16)}…)`);
-  lines.push(`- Wirkungs-Sonde: ${doc.effectProbe.used ? `ja (${doc.effectProbe.tool})` : "nein (die Zahlen sind Ausführungen)"}`);
+  lines.push(`- Wirkungs-Sonde: ${probeStatementDe(counting, doc.effectProbe.tool)}`);
   lines.push(`- Textbaustein «patch»: ${doc.patchLang === "de" ? "deutsch" : "englisch"}, aus dem Textbaustein-Generator des Harness`);
   for (const p of doc.prompts) lines.push(`- System-Prompt ${p.scenario} ${p.condition}: SHA-256 ${p.sha256}`);
   lines.push(`- Zeitlimits: ${doc.limits.runTimeoutSec} s je Lauf, ${doc.limits.stepTimeoutSec} s je Schritt`);
@@ -407,6 +422,9 @@ export function renderBenchMarkdown(doc: BenchDocument): string {
 
 export function summaryLines(doc: BenchDocument): string[] {
   const out: string[] = [];
+  const counting = countingOfDocument(doc);
+  out.push(`Zählweise: ${countingLabelDe(counting)}`);
+  if (countingNeedsWarning(counting)) out.push(`Hinweis: ${COUNTING_WARNING_DE}`);
   for (const a of doc.aggregates) {
     out.push(
       `${a.scenario} ${a.condition}: ${a.nValid} gültig von ${a.planned}` +

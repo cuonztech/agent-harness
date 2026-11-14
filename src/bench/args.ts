@@ -349,6 +349,9 @@ export const BENCH_HELP =
   "                           für einen Pfad je Lauf, zum Beispiel eine eigene Protokolldatei des Testsystems.\n" +
   "  --allow-writes           Pflicht: Der Lauf schreibt wirklich (nur Testsystem mit synthetischen Daten).\n" +
   "  --effect-probe <lese-tool> [--effect-probe-args <json>] [--effect-count <feld>] [--effect-tools a,b]   (empfohlen)\n" +
+  "                           Die Sonde wird vor der Messung einmal aufgerufen (nichts wird geschrieben). Liefert sie keinen Zählwert\n" +
+  "                           (Pflichtargument fehlt, Fehler des Tools, keine erkennbare Liste oder Zahl), bricht bench vor dem ersten\n" +
+  "                           Lauf ab. Die Zählweise im Bericht folgt den Läufen: Datensätze nur dort, wo die Sonde verwertbar war.\n" +
   "  --write-tools a,b  --read-tools a,b  --key-fields a,b   wie bei proxy\n\n" +
   "Agent, genau eine der beiden Arten:\n" +
   "  --model <name> [--api ollama|openai] [--url <basis-url>] [--api-key-env <NAME>]    eingebauter Agenten-Loop\n" +

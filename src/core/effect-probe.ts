@@ -111,6 +111,46 @@ export interface ProbeReading {
   warning?: string;
 }
 
+// Why a reading failed, as a code (the message stays the English text of the report). `bench` maps it to a German hint.
+export type ProbeReadErrorKind = "error_result" | "not_json" | "count_path" | "bad_number" | "not_countable";
+
+export class ProbeReadError extends Error {
+  constructor(
+    readonly kind: ProbeReadErrorKind,
+    message: string,
+    // The text of the tool's error answer (error_result only), shortened.
+    readonly detail?: string,
+  ) {
+    super(message);
+    this.name = "ProbeReadError";
+  }
+}
+
+// --effect-probe-args: a JSON object. cmd.exe and Windows PowerShell 5.1 strip the
+// double quotes of '{"status":"open"}' and hand over {status:open}; that form is
+// read as well (flat key:value pairs, numbers/true/false/null as such).
+export function parseProbeArgs(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    // fall through to the loose form
+  }
+  const m = /^\s*\{(.*)\}\s*$/s.exec(raw);
+  if (!m || /["'\[\]{}]/.test(m[1])) return null;
+  const out: Record<string, unknown> = {};
+  for (const pair of m[1].split(",")) {
+    if (pair.trim() === "") continue;
+    const colon = pair.indexOf(":");
+    if (colon <= 0) return null;
+    const key = pair.slice(0, colon).trim();
+    const value = pair.slice(colon + 1).trim();
+    if (key === "" || value === "") return null;
+    out[key] = value === "true" ? true : value === "false" ? false : value === "null" ? null : /^-?\d+(\.\d+)?$/.test(value) ? Number(value) : value;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 function errorText(result: { content?: Array<Record<string, unknown>> }): string {
   const first = result.content?.find((c) => c.type === "text");
   const text = typeof first?.text === "string" ? first.text.replace(/\s+/g, " ").trim() : "";
@@ -124,7 +164,7 @@ export function parseProbeReading(
   countPath?: string,
 ): ProbeReading {
   if (result.isError) {
-    throw new Error(`the probe tool answered with an error result${errorText(result)} (does it need arguments? see --effect-probe-args)`);
+    throw new ProbeReadError("error_result", `the probe tool answered with an error result${errorText(result)} (does it need arguments? see --effect-probe-args)`, errorText(result).replace(/^: "/, "").replace(/"$/, ""));
   }
   let data: unknown = result.structuredContent;
   if (data === undefined) {
@@ -133,13 +173,13 @@ export function parseProbeReading(
     try {
       data = JSON.parse(text);
     } catch {
-      throw new Error("the probe tool's answer is not JSON (use a tool that returns JSON)");
+      throw new ProbeReadError("not_json", "the probe tool's answer is not JSON (use a tool that returns JSON)");
     }
   }
   if (countPath !== undefined) {
     const picked = countPath === "" ? data : walk(data, countPath);
     const n = countOf(picked);
-    if (n === null) throw new Error(`--effect-count "${countPath}" does not lead to an array, a number or an object in the answer`);
+    if (n === null) throw new ProbeReadError("count_path", `--effect-count "${countPath}" does not lead to an array, a number or an object in the answer`);
     const parts = countPath.split(".").filter((p) => p !== "");
     const last = parts.length > 0 ? parts[parts.length - 1] : null;
     const parent = parts.length > 1 ? walk(data, parts.slice(0, -1).join(".")) : data;
@@ -149,7 +189,7 @@ export function parseProbeReading(
   if (Array.isArray(data)) return { count: data.length };
   if (typeof data === "number") {
     const n = countOf(data);
-    if (n === null) throw new Error("the probe's answer is a number that is not a count (negative or not finite)");
+    if (n === null) throw new ProbeReadError("bad_number", "the probe's answer is a number that is not a count (negative or not finite)");
     return { count: n };
   }
   if (data !== null && typeof data === "object") {
@@ -164,7 +204,7 @@ export function parseProbeReading(
       if (n !== null) return { count: n };
     }
   }
-  throw new Error("cannot tell what to count in the probe's answer: pass --effect-count <path>");
+  throw new ProbeReadError("not_countable", "cannot tell what to count in the probe's answer: pass --effect-count <path>");
 }
 
 export function parseProbeCount(
