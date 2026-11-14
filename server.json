@@ -6,12 +6,12 @@
     "url": "https://github.com/cuonztech/agent-harness",
     "source": "github"
   },
-  "version": "0.11.1",
+  "version": "0.12.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "cuonztech-agent-harness",
-      "version": "0.11.1",
+      "version": "0.12.0",
       "transport": {
         "type": "stdio"
       }

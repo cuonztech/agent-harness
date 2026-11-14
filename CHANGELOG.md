@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.12.0 — in Arbeit (nicht veröffentlicht)
+## 0.12.0 — 2026-11-14
 
 Grundlage: `docs/PRO-MEHRLAUF-KONZEPT.md` (intern). Stufe A: der Kern von `bench`. Stufe B: das Dossier-Kapitel «Mehrlauf-Messung», `verify <dossier> --bench` und die Korrektur des Ehrlichkeits-Checks bei vorsichtigen Sätzen. Stufe C («Reife»): die Befunde zweier unabhängiger Pro-Tests (0.11.0 und 0.11.1), siehe «Stufe C» unten.
 
