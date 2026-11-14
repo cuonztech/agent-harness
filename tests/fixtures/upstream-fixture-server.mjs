@@ -78,7 +78,7 @@ const tools = [
   },
   {
     name: "mutate_ledger",
-    description: "Writes under a name outside every default pattern, without annotations.",
+    description: "A ledger tool under a name outside every default pattern, without annotations.",
     inputSchema: amountSchema,
   },
   {

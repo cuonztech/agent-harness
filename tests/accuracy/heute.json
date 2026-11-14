@@ -40,8 +40,8 @@
     "kategorie": "unentschieden"
   },
   "A11": {
-    "verdict": "NOT_TESTED",
-    "kategorie": "unentschieden"
+    "verdict": "PASS",
+    "kategorie": "richtig"
   },
   "B01": {
     "verdict": "NOT_TESTED",
@@ -172,8 +172,8 @@
     "kategorie": "unentschieden"
   },
   "C02": {
-    "verdict": "NOT_TESTED",
-    "kategorie": "unentschieden"
+    "verdict": "FAIL",
+    "kategorie": "richtig"
   },
   "C03": {
     "verdict": "FAIL",
@@ -204,8 +204,8 @@
     "kategorie": "richtig"
   },
   "E01": {
-    "verdict": "NOT_TESTED",
-    "kategorie": "unentschieden"
+    "verdict": "FAIL",
+    "kategorie": "richtig"
   },
   "E02": {
     "verdict": "FAIL",
@@ -228,16 +228,16 @@
     "kategorie": "richtig"
   },
   "E07": {
-    "verdict": "NOT_TESTED",
-    "kategorie": "unentschieden"
+    "verdict": "FAIL",
+    "kategorie": "richtig"
   },
   "E08": {
     "verdict": "FAIL",
     "kategorie": "richtig"
   },
   "E09": {
-    "verdict": "NOT_TESTED",
-    "kategorie": "unentschieden"
+    "verdict": "FAIL",
+    "kategorie": "richtig"
   },
   "F01": {
     "verdict": "FAIL",
@@ -364,6 +364,10 @@
     "kategorie": "richtig"
   },
   "I18": {
+    "verdict": "FAIL",
+    "kategorie": "richtig"
+  },
+  "I19": {
     "verdict": "FAIL",
     "kategorie": "richtig"
   },

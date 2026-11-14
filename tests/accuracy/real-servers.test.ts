@@ -42,11 +42,11 @@ describe("Tool-Einordnung nach Namen an echten Servern", () => {
   });
 
   it("Menge A (14 Server): festgenagelt", () => {
-    expect(measure("A")).toEqual({ n: 200, right: 140, writeAsRead: 0, writeUnclassified: 25, readAsWrite: 2, readUnclassified: 33 });
+    expect(measure("A")).toEqual({ n: 200, right: 142, writeAsRead: 0, writeUnclassified: 23, readAsWrite: 5, readUnclassified: 30 });
   });
 
   it("Menge B (10 Server): festgenagelt", () => {
-    expect(measure("B")).toEqual({ n: 176, right: 119, writeAsRead: 0, writeUnclassified: 9, readAsWrite: 2, readUnclassified: 46 });
+    expect(measure("B")).toEqual({ n: 176, right: 121, writeAsRead: 0, writeUnclassified: 7, readAsWrite: 3, readUnclassified: 45 });
   });
 
   it("kein Write wird stillschweigend als Read eingeordnet (in beiden Mengen)", () => {

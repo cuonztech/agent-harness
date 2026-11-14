@@ -192,7 +192,18 @@ export const DEFAULT_WRITE_TOOL_PATTERNS: string[] = [
   "approve_*",
 ];
 
-export const DEFAULT_KEY_FIELDS: string[] = ["idempotency_key"];
+// Argument names that carry a per-attempt identifier. Compared case-insensitively and ignoring "-"/"_",
+// so "requestId" and "client-token" are covered too. Top-level arguments only (see --key-fields).
+export const DEFAULT_KEY_FIELDS: string[] = [
+  "idempotency_key",
+  "idempotency_token",
+  "request_id",
+  "client_request_id",
+  "client_token",
+  "dedupe_key",
+  "dedup_key",
+  "nonce",
+];
 
 export const DEFAULT_RETRY_AFTER_SEC = 60;
 
@@ -502,10 +513,13 @@ export function isReadTool(toolName: string): boolean {
   // The prefix must be a whole word ("get_booking", "getBooking", "get"),
   // not just the first letters of a longer one — otherwise "checkout_cart"
   // (a write) would count as a read because it starts with "check".
-  const lower = toolName.toLowerCase();
+  // A name in capitals ("CHECKOUT_BOOKING") has no camelCase boundary: every letter is upper case,
+  // so it is compared in lower case. Otherwise the "O" after "CHECK" looked like a new word.
+  const name = toolName === toolName.toUpperCase() ? toolName.toLowerCase() : toolName;
+  const lower = name.toLowerCase();
   return prefixes.some((p) => {
     if (!lower.startsWith(p)) return false;
-    const rest = toolName.slice(p.length);
+    const rest = name.slice(p.length);
     return rest === "" || /^[_\-.A-Z0-9]/.test(rest);
   });
 }

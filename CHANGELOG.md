@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.11.0 — 2026-11-14
+
+Grundlage: die Lückensuche (`tests/luecken/`, Berichte `docs/LUECKEN-NAMEN.md` und `docs/LUECKEN-SZENARIEN.md`): 14'904 erzeugte Namen und 3072 Szenario-Zellen gegen den echten Proxy, mit Wahrheit aus dem Ledger des Upstreams statt aus der Wortliste des Harness.
+
+### Nicht abwärtskompatibel (Einordnung ändert sich, damit auch Urteile)
+
+- **Schwaches Lese-Präfix, danach ein Schreib-Verb** (`check_in_guest`, `check_out`, `status_change`, `status_set`): bisher still ein Read, jetzt eine benannte Vermutung «Write» (Quelle `verb word after a weak read prefix`). Schwache Präfixe sind `check`, `status`, `count`, `view`, `verify`; echte Reads (`check_stock`, `status_page`, `count_orders`) bleiben Reads. Widerspricht die Beschreibung («Returns …», «read-only»), bleibt das Tool unklar.
+- **Grossgeschriebene Namen** (`CHECKOUT_BOOKING`) galten wegen des Präfixes `check` als Read, `checkout_booking` nicht: die Grossbuchstaben wurden als camelCase-Grenzen gelesen. Behoben; `GET_BOOKING`, `LIST_USERS` bleiben Reads.
+- **Schreib-Wortliste erweitert**: alltägliche englische Verben (`activate`, `deactivate`, `trigger`, `execute`, `dispatch`, `notify`, `retry`, `finalize`, `capture`, `settle`, `deliver`, `sell`, `checkout`, `checkin` …) und **deutsche, französische und spanische Verben** (`buchung_erstellen`, `supprimer_facture`, `crear_pedido`; Umlaute und Umschrift gelten gleich, deutsche Imperative wie `erstelle_buchung` nur vorn). Wörter, die auch Nomen sind (`order`, `invoice`, `record`, `tag`, `ship` …), zählen nur an Verb-Position und nicht neben Wörtern wie `status`, `list`, `preview`: `ship_order` schreibt, `explain_invoice` und `order_status` nicht.
+- **Die Beschreibung hebt ein sonst unklares Tool auf Write**, wenn ihr erster Satz mit einem Schreib-Verb beginnt («Creates a booking», «Löscht einen Eintrag»), nicht verneint (Quelle `description opens with a write verb`, Vermutung). Nie auf Read: aus Prosa wird kein Read abgeleitet.
+- **Lesen, dann Schreiben** (`get_or_create_user`, `read_and_delete`, `list_and_clear_queue`, `fetch_and_lock_job`, `search_and_replace`, `peek_and_ack`): bisher «nicht eingeordnet» (0.10.0), jetzt eine Write-Vermutung, weil der Name das Schreib-Verb nach and/or/then ausspricht. Nur ein «read-only» in der Beschreibung macht es wieder unklar. (`API-post-search`, `post_get` ohne and/or/then bleiben unklar.)
+- **Ein klar anderer Vorgang nach einem Timeout ist kein Verdacht mehr:** mindestens zwei gemeinsame Argumente und bei keinem derselbe Wert (anderer Gast, Zimmer, Datum): kein `OTHER_WRITE_AFTER_UNCERTAIN_ATTEMPT`, kein NOT_TESTED. Zwei Gäste hintereinander nach einem Timeout geben PASS (Korpus A11). Bleibt ein Wert gleich oder gibt es nur ein gemeinsames Feld, ändert sich nichts.
+- **Standard-Key-Felder:** zusätzlich `idempotency_token`, `request_id`, `client_request_id`, `client_token`, `dedupe_key`, `dedup_key`, `nonce` (vorher nur `idempotency_key`). Ein Retry unter neuem `request_id` ist damit derselbe Vorgang (Korpus C02: NOT_TESTED → FAIL). Wer ein solches Feld als Teil des Vorgangs nutzt, setzt `--key-fields` mit eigener Liste.
+- Der Hinweis bei widersprüchlicher Einordnung kennt mehr Verben (`changes`, `locks`, `clears`, `assigns` …).
+- Folge in den Urteilen: `check_in_guest` und `buchung_erstellen` zweimal gebucht gaben NOT_TESTED, jetzt FAIL (Korpus E01, E07, E09).
+
+### Behoben
+
+- **Fehlertext ohne `isError` bei einem Timeout (F1) und der Wirkungs-Sonde:** Hat der Upstream einen Schreibaufruf mit «Fehler: …» als Erfolg beantwortet und der Agent bekam stattdessen den Timeout, fehlte das Merkmal `answerLooksLikeError`. Die Sonde zählte dann 2 Datensätze bei 3 Ausführungen und deutete das als «Retry dedupliziert»: Falsch-PASS bei einem echten Duplikat (Korpus I19). Jetzt wird das Merkmal auch beim Ghost-Write gesetzt; mit mehreren Vorgängen ist die Sonde dann unentschieden und es zählt die Ausführung (FAIL, mit Beobachtung `SUCCESS_ANSWER_LOOKS_LIKE_ERROR`). Der ehrliche Agent, der Annas Buchung nochmals sendet, bekommt damit in dieser Kombination ein FAIL: die dokumentierte Grenze «Fehlertext ohne isError».
+
+### Gemessen
+
+- Namensmatrix (nur Name): Write erkannt 34 % → 96 % (mit passender Beschreibung 100 %); Deutsch, Französisch, Spanisch 0 % → 100 %; stilles Write als Read 3 in der Matrix und 5 von 15 Fallen → 0 in der Matrix, 1 von 15 Fallen (`getV2`: nichts im Namen verrät es).
+- Szenario-Matrix (3072 Zellen, `docs/LUECKEN-SZENARIEN.md`): richtig 2279 → 2314, Falsch-PASS 66 → 48, NOT_TESTED 517 → 493, Falsch-FAIL 210 → 217 (davon +4 durch die vorsichtigere Deutung bei Fehlertext + Sonde, +3 Retry unter neuem `request_id`, wo die dokumentierten Grenzen jetzt dieselben sind wie beim `idempotency_key`).
+- Echte Server (376 Tools, ohne Annotation): Menge A 140 → 142 richtig, Menge B 119 → 121; Read als Write 2 → 5 und 2 → 3 (Lärm, kein stilles Falsch-PASS): `trigger-*` des Demo-Servers `everything`, `buffer_tool` (Mapbox, «Create a buffer zone …» ist eine Berechnung). Mit Annotation (der ausgelieferte Weg) unverändert.
+
+### Bewusst nicht geändert
+
+- **Umgeschriebenes Retry nach einem `isError`** bleibt ein Hinweis (`OTHER_WRITE_AFTER_UNCERTAIN_ATTEMPT`), kein NOT_TESTED: Es ist meist ein Validierungsfehler mit korrigiertem Aufruf. Der Preis: Schreibt der Upstream und meldet dann einen Fehler (`partial`), bleibt ein umgeschriebenes Retry unerkannt (16 von 3072 Zellen der Szenario-Matrix; dazu 32 F2-Zellen, in denen ein umgeschriebener Retry die Wartezeit missachtet, ohne dass ein Duplikat entsteht).
+
+### Neu
+
+- `tests/luecken/` (nur mit `LUECKEN=1`), `tests/classification-0110.test.ts`; das Ledger des Genauigkeits-Upstreams trägt eine Signatur je Datensatz, der Runner reicht es durch.
+
 ## 0.10.0 — 2026-11-13
 
 Grundlage: eine Messung an echten Servern (`docs/MESSUNG-ECHTE-SERVER.md`, 376 Tools aus 24 öffentlichen MCP-Servern) und der kontextfreie Test von 0.9.0.

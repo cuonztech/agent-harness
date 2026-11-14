@@ -1,6 +1,6 @@
 # Messung Genauigkeit: wie oft stimmt das Urteil des Harness?
 
-Gemessen an Version 0.10.0, 98 Fälle, jeder gegen den echten, gebauten Proxy (`dist/index.js proxy`) und einen echten Upstream, der mitschreibt, wie viele Datensätze wirklich entstanden sind (`tests/accuracy/corpus-upstream.mjs`). Der Harness sieht dieses Protokoll nie.
+Gemessen an Version 0.11.0, 99 Fälle, jeder gegen den echten, gebauten Proxy (`dist/index.js proxy`) und einen echten Upstream, der mitschreibt, wie viele Datensätze wirklich entstanden sind (`tests/accuracy/corpus-upstream.mjs`). Der Harness sieht dieses Protokoll nie.
 
 Erzeugt von `tests/accuracy/accuracy.test.ts` (`ACC_WRITE=1 npx vitest run tests/accuracy`), nicht von Hand ändern: Ein Test prüft, dass dieses Dokument der Messung entspricht.
 
@@ -17,30 +17,30 @@ Erzeugt von `tests/accuracy/accuracy.test.ts` (`ACC_WRITE=1 npx vitest run tests
 
 | | Fälle | richtig | NOT_TESTED | FALSCH-PASS | FALSCH-FAIL |
 |---|---:|---:|---:|---:|---:|
-| alle Fälle | 98 | 51 (52 %) | 39 | 0 | 8 |
-| Soll FAIL (es gab ein Duplikat oder einen Regelverstoss) | 57 | 23 (40 %) | 34 | 0 | 0 |
-| Soll PASS (nichts Falsches passiert) | 41 | 28 (68 %) | 5 | 0 | 8 |
+| alle Fälle | 99 | 57 (58 %) | 34 | 0 | 8 |
+| Soll FAIL (es gab ein Duplikat oder einen Regelverstoss) | 58 | 28 (48 %) | 30 | 0 | 0 |
+| Soll PASS (nichts Falsches passiert) | 41 | 29 (71 %) | 4 | 0 | 8 |
 
-- **Falsch-PASS-Quote** (Anteil der Soll-FAIL-Fälle mit PASS): 0 von 57 (0 %).
+- **Falsch-PASS-Quote** (Anteil der Soll-FAIL-Fälle mit PASS): 0 von 58 (0 %).
 - **Falsch-FAIL-Quote** (Anteil der Soll-PASS-Fälle mit FAIL): 8 von 41 (20 %).
-- **Ohne Aussage** (NOT_TESTED): 39 von 98 (40 %).
+- **Ohne Aussage** (NOT_TESTED): 34 von 99 (34 %).
 - **Beschriftung der Operation** (z. B. `VERIFIED_NO_RETRY` nur bei richtigem Nachsehen): 6 von 6 Fällen richtig.
 
 ## Nach Gruppe
 
 | Gruppe | Fälle | richtig | NOT_TESTED | FALSCH-PASS | FALSCH-FAIL |
 |---|---:|---:|---:|---:|---:|
-| A. Wiederholung nach Timeout (F1) | 11 | 7 | 2 | 0 | 2 |
+| A. Wiederholung nach Timeout (F1) | 11 | 8 | 1 | 0 | 2 |
 | B. Umformung beim Wiederholen | 16 | 0 | 16 | 0 | 0 |
 | B2. Umformung nach Nachsehen | 11 | 2 | 9 | 0 | 0 |
 | B3. Doppelt gebucht ohne vorherigen Fehler | 4 | 0 | 4 | 0 | 0 |
-| C. Key-Felder | 5 | 1 | 2 | 0 | 2 |
+| C. Key-Felder | 5 | 2 | 1 | 0 | 2 |
 | D. Verifikation (Beschriftung) | 4 | 4 | 0 | 0 | 0 |
-| E. Tool-Einordnung | 9 | 4 | 4 | 0 | 1 |
+| E. Tool-Einordnung | 9 | 7 | 1 | 0 | 1 |
 | F. Fehlerdarstellung des Upstreams | 4 | 1 | 2 | 0 | 1 |
 | G. Weitere Szenarien | 13 | 12 | 0 | 0 | 1 |
 | H. Mehrere Vorgaenge | 3 | 3 | 0 | 0 | 0 |
-| I. Wirkungs-Sonde (--effect-probe) | 18 | 17 | 0 | 0 | 1 |
+| I. Wirkungs-Sonde (--effect-probe) | 19 | 18 | 0 | 0 | 1 |
 
 ## Alle Fälle
 
@@ -58,7 +58,7 @@ Erzeugt von `tests/accuracy/accuracy.test.ts` (`ACC_WRITE=1 npx vitest run tests
 | A08 | Retry gegen einen Upstream, der fachlich dedupliziert (Gast, Zimmer, Datum) | PASS | FAIL | 1 (1) | FALSCH-FAIL | Grenze: «Ausführungen, keine Effekte» (README) |
 | A09 | Nachgesehen, dann trotzdem erneut gebucht | FAIL | FAIL | 2 (1) | richtig |  |
 | A10 | Nach dem Timeout bewusst ein anderer Gast | PASS | NOT_TESTED | 2 (2) | NOT_TESTED (offen) |  |
-| A11 | Nach dem Timeout eine klar andere Buchung (anderer Gast, Zimmer, Datum) | PASS | NOT_TESTED | 2 (2) | NOT_TESTED (offen) |  |
+| A11 | Nach dem Timeout eine klar andere Buchung (anderer Gast, Zimmer, Datum) | PASS | PASS | 2 (2) | richtig |  |
 
 ### B. Umformung beim Wiederholen
 
@@ -111,7 +111,7 @@ Erzeugt von `tests/accuracy/accuracy.test.ts` (`ACC_WRITE=1 npx vitest run tests
 | ID | Fall | Soll | Urteil | Datensätze (gewollt) | Kategorie | Bemerkung |
 |---|---|---|---|---:|---|---|
 | C01 | Retry mit neuem meta.request_id (verschachtelt) | FAIL | NOT_TESTED | 2 (1) | NOT_TESTED (offen) | Grenze: Key-Felder nur oberste Ebene (README) |
-| C02 | Retry mit neuem request_id, ohne --key-fields | FAIL | NOT_TESTED | 2 (1) | NOT_TESTED (offen) | Grenze: Key-Felder nur mit --key-fields (README) |
+| C02 | Retry mit neuem request_id, ohne --key-fields | FAIL | FAIL | 2 (1) | richtig |  |
 | C03 | Wie C02, mit --key-fields request_id | FAIL | FAIL | 2 (1) | richtig |  |
 | C04 | Retry mit gleichem request_id, Upstream dedupliziert per request_id | PASS | FAIL | 1 (1) | FALSCH-FAIL | Grenze: «Ausführungen, keine Effekte» (README) |
 | C05 | Wie C04, mit --key-fields request_id | PASS | FAIL | 1 (1) | FALSCH-FAIL | Grenze: «Ausführungen, keine Effekte» (README) |
@@ -129,15 +129,15 @@ Erzeugt von `tests/accuracy/accuracy.test.ts` (`ACC_WRITE=1 npx vitest run tests
 
 | ID | Fall | Soll | Urteil | Datensätze (gewollt) | Kategorie | Bemerkung |
 |---|---|---|---|---:|---|---|
-| E01 | Write mit Namen check_in_guest, zweimal (F1) | FAIL | NOT_TESTED | 2 (1) | NOT_TESTED (offen) | Grenze: Namensmuster irren in beide Richtungen (README); Hinweis im Bericht: Beschreibung des Tools widerspricht der Einordnung |
+| E01 | Write mit Namen check_in_guest, zweimal (F1) | FAIL | FAIL | 2 (1) | richtig | Grenze: Namensmuster irren in beide Richtungen (README) |
 | E02 | Read mit Namen update_status_view, zweimal (F1) | PASS | FAIL | 0 (0) | FALSCH-FAIL | Grenze: Namensmuster irren in beide Richtungen (README); Hinweis im Bericht: Beschreibung des Tools widerspricht der Einordnung |
 | E03 | Write process_order, zweimal, ohne --write-tools | FAIL | NOT_TESTED | 2 (1) | NOT_TESTED (offen) |  |
 | E04 | Wie E03, mit --write-tools process_* | FAIL | FAIL | 2 (1) | richtig |  |
 | E05 | Write tag_booking, nur durch Annotation erkennbar, zweimal | FAIL | FAIL | 2 (1) | richtig |  |
 | E06 | Write submitOrder (camelCase), zweimal | FAIL | FAIL | 2 (1) | richtig |  |
-| E07 | Write buchung_erstellen (deutscher Name), zweimal, ohne --write-tools | FAIL | NOT_TESTED | 2 (1) | NOT_TESTED (offen) |  |
+| E07 | Write buchung_erstellen (deutscher Name), zweimal, ohne --write-tools | FAIL | FAIL | 2 (1) | richtig |  |
 | E08 | Wie E07, mit --write-tools buchung_* | FAIL | FAIL | 2 (1) | richtig |  |
-| E09 | Write check_in_guest, zweimal (F4, keine Injektion) | FAIL | NOT_TESTED | 2 (1) | NOT_TESTED (offen) | Grenze: Namensmuster irren in beide Richtungen (README); Hinweis im Bericht: Beschreibung des Tools widerspricht der Einordnung |
+| E09 | Write check_in_guest, zweimal (F4, keine Injektion) | FAIL | FAIL | 2 (1) | richtig | Grenze: Namensmuster irren in beide Richtungen (README) |
 
 ### F. Fehlerdarstellung des Upstreams
 
@@ -190,6 +190,7 @@ Erzeugt von `tests/accuracy/accuracy.test.ts` (`ACC_WRITE=1 npx vitest run tests
 | I10 | Zwei Vorgaenge: A dedupliziert (gleicher Key), B doppelt (ohne Key) | FAIL | FAIL | 3 (2) | richtig |  |
 | I13 | Abgelehnter Vorgang (Max) neben einem echten Duplikat (Anna zweimal) | FAIL | FAIL | 2 (1) | richtig |  |
 | I18 | Fehlertext ohne isError (Max) neben einem echten Duplikat (Anna zweimal) | FAIL | FAIL | 2 (1) | richtig |  |
+| I19 | F1 (Timeout nach Ausführung), Anna mit Fehlertext ohne isError, Max zweimal, mit Sonde | FAIL | FAIL | 2 (1) | richtig |  |
 | I14 | Abgelehnter Vorgang (Max) neben einem korrekten Retry (Anna, gleicher Key, Upstream dedupliziert) | PASS | PASS | 1 (2) | richtig |  |
 | I15 | Duplikat plus update_booking (Write ohne Datensatz), --effect-tools create_booking | FAIL | FAIL | 2 (1) | richtig |  |
 | I16 | Retry gegen deduplizierenden Upstream plus update_booking, --effect-tools create_booking | PASS | PASS | 1 (1) | richtig |  |

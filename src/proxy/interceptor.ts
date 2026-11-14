@@ -8,7 +8,13 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { VERSION } from "../version.js";
 import { classificationDoubt } from "./classification-doubt.js";
-import { classifyByVerbWords, readPrefixThenWrites } from "./verb-words.js";
+import {
+  classifyByDescriptionOpener,
+  compoundWriteGuess,
+  classifyByVerbWords,
+  readPrefixThenWrites,
+  weakReadPrefixThenWrites,
+} from "./verb-words.js";
 import { looksLikeErrorAnswer } from "./error-answer.js";
 import { parseProbeReading, type EffectProbeConfig } from "../core/effect-probe.js";
 import { readFileSync, readdirSync } from "node:fs";
@@ -139,7 +145,18 @@ function classifyByRules(
   if (isReadTool(name)) {
     // "get_or_create_user", "read_and_delete": the read prefix alone would call a write a read.
     if (explicitWrite.length === 0 && readPrefixThenWrites(name)) {
+      if (explicitRead.length === 0 && compoundWriteGuess(tool.description) === "write") {
+        return { name, class: "write", source: "read verb, then a write verb (and/or/then)", guess: true };
+      }
       return { name, class: "unclassified", source: "read prefix, but a write verb follows (and/or/then)" };
+    }
+    // "check_in_guest", "status_change": a weak read prefix (a noun as often as a verb) followed by a write verb.
+    if (explicitWrite.length === 0 && explicitRead.length === 0) {
+      const weak = weakReadPrefixThenWrites(name, tool.description);
+      if (weak === "write") return { name, class: "write", source: "verb word after a weak read prefix", guess: true };
+      if (weak === "unclassified") {
+        return { name, class: "unclassified", source: "weak read prefix, then a write verb, but the description says it reads" };
+      }
     }
     return { name, class: "read", source: "read prefix" };
   }
@@ -148,6 +165,10 @@ function classifyByRules(
   if (explicitWrite.length === 0 && explicitRead.length === 0) {
     const byWord = classifyByVerbWords(name, tool.description);
     if (byWord !== "unclassified") return { name, class: byWord, source: "verb word in name", guess: true };
+    // Nothing in the name: the description opens with a plain write verb ("Creates a booking").
+    if (classifyByDescriptionOpener(tool.description) === "write") {
+      return { name, class: "write", source: "description opens with a write verb", guess: true };
+    }
   }
   return { name, class: "unclassified", source: "no annotation, no pattern match" };
 }
@@ -692,6 +713,9 @@ export class ProxyInterceptor {
           outcome: "injected_failure",
           toolClass,
           tookEffect,
+          // The agent is told "timeout", but the upstream's own answer may read like an error ("Fehler: …"
+          // without isError): the effect probe must not take it for a record that exists (same as below).
+          ...(tookEffect && looksLikeErrorAnswer(upstreamText) ? { answerLooksLikeError: true } : {}),
           scenarioTriggered: decision.scenarioTriggered,
           ...(decision.retryAfterSec !== null ? { retryAfterSec: decision.retryAfterSec } : {}),
           ...(upstreamText !== undefined ? { upstreamResponse: upstreamText } : {}),

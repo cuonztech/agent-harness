@@ -55,7 +55,7 @@ Für Tools, die weder Annotation noch `--write-tools`/`--read-tools` noch ein Pr
 
 - **Namen ohne Verb**, vor allem Werkzeug-Suffixe (`union_tool`, `buffer_tool`, `bbox_tool` bei Mapbox) und Browser-Aktionen (`browser_click`, `puppeteer_fill`). Das sind meist Reads oder mehrdeutige Aktionen; ohne Annotation bleiben sie «nicht eingeordnet». **Empfehlung an Server-Autoren: `readOnlyHint` setzen.** Dann ist die Einordnung ohne jede Namens-Heuristik richtig.
 - **Namespace-Tools** (Azure: ein Tool mit Befehlen zum Lesen und Schreiben) lassen sich nicht in lesend oder schreibend teilen. Dafür gibt es keine richtige Antwort auf Tool-Ebene.
-- **Verben in einer Sprache, die die Liste nicht kennt** (deutsche oder französische Tool-Namen): bleiben unklar, sind also sicher, aber ohne Einordnung.
+- **Verben in einer Sprache, die die Liste nicht kennt**: Seit 0.11.0 kennt sie deutsche, französische und spanische Infinitive (`buchung_erstellen`, `supprimer_facture`, `crear_pedido`); andere Sprachen und Imperative (ausser dem deutschen vorn) bleiben unklar, sind also sicher, aber ohne Einordnung.
 
 ## Grenzen dieser Messung
 
@@ -63,3 +63,18 @@ Für Tools, die weder Annotation noch `--write-tools`/`--read-tools` noch ein Pr
 - 24 Server sind eine Stichprobe öffentlicher, bekannter Server, nicht der Markt. Server mit deutschen oder eigenen Namenskonventionen sind kaum darunter.
 - Es wurde nur die Tool-Liste gelesen. Wie sich ein Tool bei einem Aufruf wirklich verhält, ist nicht geprüft.
 - Die Zahlen gelten für die genannten Serverversionen; die Tool-Listen ändern sich.
+
+## Nachtrag 0.11.0 (Lückensuche, 14.11.2026)
+
+Die Einordnung ohne Annotation, an denselben 376 Tools (die Zahlen sind in `real-servers.test.ts` festgenagelt):
+
+| | 0.10.0 | 0.11.0 |
+|---|---:|---:|
+| Menge A (200 Tools), richtig | 140 (70 %) | **142 (71 %)** |
+| Menge B (176 Tools), richtig | 119 (68 %) | **121 (69 %)** |
+| Write als Read (still), beide Mengen | 0 | **0** |
+| Read als Write, A / B | 2 / 2 | 5 / 3 |
+
+Der ausgelieferte Weg (Annotation zuerst) ist unverändert: Gegenprobe Tool für Tool, 0 Unterschiede. Neu als Write geraten und falsch: `trigger-list-changed`, `trigger-log-messages`, `trigger-long-running-operation` (Demo-Server `everything`, «trigger» ist ein Schreib-Verb) und `buffer_tool` (Mapbox, Beschreibung «Create a buffer zone …» ist eine Berechnung). Das ist Lärm in der sicheren Richtung. Richtig geworden: `firecrawl_search_feedback` («Submit feedback …») und weitere Tools über die Beschreibung bzw. die erweiterte Verbliste.
+
+Die erzeugte Namensmatrix (`docs/LUECKEN-NAMEN.md`) misst, was echte Server nicht zeigen: deutsche, französische und spanische Namen, 15 Schreibweisen, Grossbuchstaben. Sie ist eine eigene Messung mit eigener Wahrheit; der Anker an echten Servern bleibt dieser Datensatz.

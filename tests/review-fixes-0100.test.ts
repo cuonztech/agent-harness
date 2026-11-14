@@ -32,7 +32,9 @@ describe("Befund 1: ein Write wird nie still als Read geraten", () => {
     expect(nameWords("Ändern_Status")).toEqual(["ändern", "status"]);
     expect(nameWords("создать_booking")).toEqual(["создать", "booking"]);
     expect(nameWords("創建_status")).toEqual(["創建", "status"]);
-    for (const n of ["Ändern_Status", "создать_booking", "創建_status"]) {
+    // Seit 0.11.0 kennt die Liste deutsche, französische und spanische Verben: «Ändern» ist ein Write.
+    expect(classifyByVerbWords("Ändern_Status")).toBe("write");
+    for (const n of ["создать_booking", "創建_status"]) {
       expect(classifyByVerbWords(n), n).toBe("unclassified");
     }
   });
@@ -52,8 +54,8 @@ describe("Befund 1: ein Write wird nie still als Read geraten", () => {
     expect(classifyByVerbWords("slack_post_message", "Post a new message to a Slack channel")).toBe("write");
   });
 
-  it("firecrawl_search_feedback: mit Beschreibung unklar (vorher still als Read), ohne Beschreibung eine benannte Vermutung", () => {
-    expect(classifyUpstreamTool(tool("firecrawl_search_feedback", "Submit feedback about a search result so the results improve."), cfg).class).toBe("unclassified");
+  it("firecrawl_search_feedback: mit Beschreibung ein Write (seit 0.11.0 aus «Submit …», vorher still als Read), ohne Beschreibung eine benannte Vermutung", () => {
+    expect(classifyUpstreamTool(tool("firecrawl_search_feedback", "Submit feedback about a search result so the results improve."), cfg)).toMatchObject({ class: "write", source: "description opens with a write verb", guess: true });
     expect(classifyUpstreamTool(tool("firecrawl_search_feedback"), cfg)).toMatchObject({ class: "read", source: "verb word in name", guess: true });
   });
 
@@ -75,9 +77,12 @@ describe("Befund 1: ein Write wird nie still als Read geraten", () => {
 });
 
 describe("Befund 2: get_or_create_user und Verwandte", () => {
-  it.each(["get_or_create_user", "read_and_delete", "fetch_and_store", "search_and_replace", "list_then_cancel"])("%s bleibt unklar, kein stiller Read", (name) => {
+  // 0.10.0: unklar statt Read. Seit 0.11.0 eine benannte Write-Vermutung (der Name spricht das Schreib-Verb aus),
+  // ausser die Beschreibung sagt ausdruecklich «read-only».
+  it.each(["get_or_create_user", "read_and_delete", "fetch_and_store", "search_and_replace", "list_then_cancel"])("%s ist kein stiller Read, sondern eine Write-Vermutung", (name) => {
     expect(readPrefixThenWrites(name)).toBe(true);
-    expect(classifyUpstreamTool(tool(name), cfg).class).toBe("unclassified");
+    expect(classifyUpstreamTool(tool(name), cfg)).toMatchObject({ class: "write", guess: true });
+    expect(classifyUpstreamTool(tool(name, "Read-only: only reads, never changes anything."), cfg).class).toBe("unclassified");
   });
   it("Lese-Namen mit «and» ohne folgendes Schreibverb bleiben Reads", () => {
     for (const n of ["list_users_and_groups", "get_name_or_id", "search_and_filter_results"]) {

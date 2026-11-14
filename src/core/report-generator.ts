@@ -470,6 +470,19 @@ function looksLikeSameOperation(
   return sharedFieldsMatch(a, b, 0);
 }
 
+// Two argument sets that cannot be the same operation however it was written: they share at least two
+// given fields and NOT ONE of them has the same value (another guest, another room, another date).
+// One shared field is too little (a retry with a changed amount shares the rest), and a single equal
+// value ("same guest, another day") may be a retry with a corrected detail: both stay "cannot be told".
+function clearlyDifferentOperation(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
+): boolean {
+  const keysB = givenKeys(b);
+  const shared = givenKeys(a).filter((k) => keysB.includes(k));
+  return shared.length >= 2 && shared.every((k) => !looselyEqual(a[k], b[k], 0));
+}
+
 // A field that is null, "" or missing counts as not given.
 function givenKeys(obj: Record<string, unknown>): string[] {
   return Object.keys(obj).filter((k) => obj[k] !== null && obj[k] !== undefined && obj[k] !== "");
@@ -793,7 +806,11 @@ export function generateReport(session: SessionState): AuditReport {
       lookalike = later.find((r) =>
         looksLikeSameOperation(anchorArgs, stripKeyFields(r.args, session.keyFields)),
       );
-      otherLater = later.find((r) => (r.receivedAt ?? r.timestamp) >= anchorAttempt.timestamp);
+      otherLater = later.find(
+        (r) =>
+          (r.receivedAt ?? r.timestamp) >= anchorAttempt.timestamp &&
+          !clearlyDifferentOperation(anchorArgs, stripKeyFields(r.args, session.keyFields)),
+      );
     }
     const why = !anchorAttempt
       ? ""

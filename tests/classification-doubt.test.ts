@@ -14,15 +14,15 @@ function tool(name: string, description?: string, annotations?: Tool["annotation
 describe("Zweifel an der Namens-Einordnung", () => {
   describe("ein Read dem Namen nach, dessen Beschreibung schreibt", () => {
     it("check_in_guest: «Checks a guest in and bills the first night»", () => {
+      // Seit 0.11.0 fängt die Einordnung selbst das schwache Lese-Präfix «check» + Schreib-Verb ab
+      // (vorher: Read mit Zweifel). Der Zweifel bleibt für die übrigen Präfixe, siehe unten.
       const c = classifyUpstreamTool(tool("check_in_guest", "Checks a guest in and bills the first night."), cfg);
-      expect(c.class).toBe("read"); // die Klasse bleibt, nur der Zweifel kommt dazu
-      expect(c.doubt).toContain("bills");
+      expect(c).toMatchObject({ class: "write", source: "verb word after a weak read prefix", guess: true });
     });
 
     it.each([
       ["get_customer", "Returns the customer, or creates one if none exists."],
       ["fetch_report", "Fetches the report and sends it to the customer."],
-      ["check_out", "Closes the stay and charges the card."],
       ["list_stale", "Lists bookings and cancels the oldest."],
       ["verify_payment", "Verifies a payment and stores the result."],
     ])("%s", (name, description) => {

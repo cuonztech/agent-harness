@@ -29,6 +29,8 @@ export interface Messung {
   einordnungsHinweis: boolean;
   /** Fehler im Korpus selbst (Beschriftung passt nicht zur Wahrheit). */
   korpusFehler: string | null;
+  /** Rohes Wahrheitsprotokoll des Upstreams (je Schreibaufruf: Tool, wirksam, Signatur). */
+  ledger: Array<{ tool: string; effective: boolean; sig?: string }>;
 }
 
 export function kategorie(soll: "PASS" | "FAIL", verdict: string): Kategorie {
@@ -89,9 +91,11 @@ export async function runCase(c: Case): Promise<Messung> {
     ) as ReportJson;
 
     let effekte = 0;
+    let ledger: Messung["ledger"] = [];
     try {
       const lines = (await readFile(ledgerFile, "utf8")).split("\n").filter(Boolean);
-      effekte = lines.map((l) => JSON.parse(l) as { effective: boolean }).filter((e) => e.effective).length;
+      ledger = lines.map((l) => JSON.parse(l) as Messung["ledger"][number]);
+      effekte = ledger.filter((e) => e.effective).length;
     } catch {
       effekte = 0; // Ledger fehlt: der Upstream hat nie geschrieben.
     }
@@ -116,6 +120,7 @@ export async function runCase(c: Case): Promise<Messung> {
       labelOk,
       einordnungsHinweis: report.coverage.notes.some((n) => n.startsWith("Classification doubt")),
       korpusFehler,
+      ledger,
     };
   } finally {
     await client.close().catch(() => undefined);

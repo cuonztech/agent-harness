@@ -31,6 +31,13 @@ const WRITE_VERBS = new Set([
   "speichert", "zahlt", "belastet", "verrechnet", "überweist", "ueberweist", "registriert", "entfernt",
   "schickt", "versendet", "aktualisiert", "reserviert", "bestätigt", "bestaetigt", "setzt", "erzeugt",
   "überschreibt", "ueberschreibt", "verbucht",
+  // 0.11.0: further verbs that put something into a state ("Changes the status", "locks the job").
+  "changes", "locks", "unlocks", "clears", "resets", "assigns", "grants", "revokes", "moves", "renames",
+  "deploys", "restarts", "stops", "starts", "enables", "disables", "activates", "deactivates", "invites",
+  "subscribes", "unsubscribes", "inserts", "appends", "replaces", "kills", "terminates", "closes", "reopens",
+  "dispatches", "enqueues", "settles", "captures", "voids", "orders", "ships", "invoices", "mints", "burns",
+  "swaps", "stakes", "claims", "votes", "shares", "tags", "labels", "flags", "pops", "acknowledges", "dismisses",
+  "ändert", "legt", "löscht", "setzt", "sperrt",
 ]);
 const BARE_WRITE_VERBS = new Set([
   "create", "book", "bill", "charge", "send", "delete", "remove", "cancel", "update", "modify",
@@ -90,6 +97,27 @@ const READ_OPENERS = new Set([
 export function descriptionOpensWithReadVerb(description: string): boolean {
   const first = description.slice(0, 200).trim().toLowerCase().match(/^[\p{L}]+/u);
   return first !== null && READ_OPENERS.has(first[0]);
+}
+
+// The first sentence opens with a plain write verb ("Creates a booking", "Löscht einen Eintrag"), not
+// negated. Narrower than describesWriting: no generic verbs ("generates", "logs", "marks"), and only at
+// the very start, because the prefix decides nothing here — the description is the only witness.
+const OPENING_WRITE_VERBS = new Set([
+  "creates", "adds", "inserts", "updates", "modifies", "deletes", "removes", "cancels", "books", "sends",
+  "submits", "pays", "transfers", "refunds", "charges", "writes", "saves", "stores", "registers", "approves",
+  "publishes", "uploads", "schedules", "reserves", "places", "posts", "archives", "overwrites", "changes",
+  "assigns", "deploys", "restarts", "activates", "deactivates", "enables", "disables",
+  "create", "add", "insert", "update", "modify", "delete", "remove", "cancel", "book", "send", "submit",
+  "pay", "transfer", "refund", "charge", "write", "save", "store", "register", "approve", "publish",
+  "upload", "schedule", "reserve", "place", "post", "archive", "overwrite", "change", "assign", "deploy",
+  "erstellt", "legt", "löscht", "loescht", "ändert", "aendert", "sendet", "bucht", "storniert", "speichert",
+  "überweist", "ueberweist", "entfernt", "aktualisiert", "versendet", "registriert", "reserviert",
+  "bestätigt", "bestaetigt", "schreibt", "verbucht", "setzt",
+]);
+export function descriptionOpensWithWriteVerb(description: string): boolean {
+  const tokens = tokenize(firstSentence(description));
+  if (tokens.length === 0 || !OPENING_WRITE_VERBS.has(tokens[0])) return false;
+  return !tokens.slice(1, 1 + NEGATION_AFTER + 1).some((t) => NEGATIONS.has(t));
 }
 
 export function descriptionSaysReadOnly(description: string): boolean {

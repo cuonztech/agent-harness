@@ -40,14 +40,18 @@ describe("Verb im Namen (nur fuer Tools, die sonst nicht einzuordnen waeren)", (
     expect(classifyByVerbWords(name)).toBe(expected);
   });
 
-  it("Lese- UND Schreibverb im Namen bleibt unklar (nie raten)", () => {
-    for (const name of ["get_or_create_user", "API-post-search", "list_then_delete", "post_get"]) {
+  it("Lese- UND Schreibverb im Namen bleibt unklar (nie raten), ausser das Schreib-Verb folgt nach and/or/then", () => {
+    for (const name of ["API-post-search", "post_get", "search_post"]) {
       expect(classifyByVerbWords(name), name).toBe("unclassified");
+    }
+    // 0.11.0: «get_or_create», «list_then_delete» sprechen das Schreib-Verb aus.
+    for (const name of ["get_or_create_user", "list_then_delete"]) {
+      expect(classifyByVerbWords(name), name).toBe("write");
     }
   });
 
   it("kein Verb im Namen bleibt unklar", () => {
-    for (const name of ["echo", "whoami", "union_tool", "buchung_erstellen", "sequentialthinking"]) {
+    for (const name of ["echo", "whoami", "union_tool", "sequentialthinking"]) {
       expect(classifyByVerbWords(name), name).toBe("unclassified");
     }
   });
@@ -68,8 +72,11 @@ describe("Verb im Namen (nur fuer Tools, die sonst nicht einzuordnen waeren)", (
   });
 
   it("ein Lese-Wort im Namen eines Tools, das schreibt: mit Beschreibung bleibt es unklar, ohne eine benannte Vermutung", () => {
+    // 0.11.0: eine Beschreibung, die mit einem Schreib-Verb beginnt («Submit …»), hebt unklar auf Write.
     const withDescription: Tool = { ...tool("firecrawl_search_feedback"), description: "Submit feedback about a search result." };
-    expect(classifyUpstreamTool(withDescription, cfg).class).toBe("unclassified");
+    expect(classifyUpstreamTool(withDescription, cfg)).toMatchObject({ class: "write", source: "description opens with a write verb" });
+    const consistent: Tool = { ...tool("firecrawl_search_feedback"), description: "Returns the feedback given for a search result." };
+    expect(classifyUpstreamTool(consistent, cfg).class).toBe("read");
     expect(classifyUpstreamTool(tool("firecrawl_search_feedback"), cfg)).toMatchObject({ class: "read", guess: true });
   });
 });

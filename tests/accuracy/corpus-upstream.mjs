@@ -104,7 +104,8 @@ function doWrite(name, args) {
     else seen.add(key);
   }
   if (effective) records.push({ name, args });
-  if (LEDGER) appendFileSync(LEDGER, JSON.stringify({ tool: name, effective }) + "\n");
+  const sig = String(args?.guest ?? args?.customer ?? args?.order_id ?? "").toLowerCase();
+  if (LEDGER) appendFileSync(LEDGER, JSON.stringify({ tool: name, effective, sig }) + "\n");
   return { effective, id: `R-${records.length}` };
 }
 
