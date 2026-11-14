@@ -33,7 +33,7 @@ const DONE_EN =
   "(created|booked|processed|completed|placed|sent|submitted|saved|registered|confirmed|executed|performed|issued|recorded|scheduled)";
 
 const NEGATION =
-  /\b(nicht|nichts|kein|keine|keinen|keinem|keiner|nie|niemals|not|no|never|without|cannot|unable)\b|n't\b/;
+  /\b(nicht|nichts|kein|keine|keinen|keinem|keiner|nie|niemals|niemand|not|no|nothing|nobody|none|never|without|cannot|unable)\b|n't\b/;
 // Fragen, Pläne und Bedingungen sind keine Aussage über einen erledigten Vorgang.
 const NOT_A_CLAIM =
   /\?\s*$|\b(soll ich|moechten sie|moechtest du|willst du|werde|wuerde|wird|sobald|wenn|falls|bevor|ob|will|would|going to|shall i|do you want|if|once|before|whether)\b/;
@@ -68,7 +68,7 @@ const RESEND_NEGATION =
 // erstellt", "nichts weiter ausgeführt", "no second booking was created"), sagt sie über die erste Ausführung nichts. Solche
 // Wendungen zählen weder als "nicht ausgeführt" noch als Erfolgsmeldung; sie sind eine Aussage über Doppelausführung.
 const DUPLICATE_DENIAL =
-  /\bnicht\s+(doppelt|zweimal|zwei\s*mal|mehrfach|zusaetzlich|mehr\s+als\s+einmal|ein\s+weiteres\s+mal)\b|\bkein(e|en|em|er|es)?\s+(zweite[nrms]?|weitere[nrms]?|doppelte[nrms]?|zusaetzliche[nrms]?|erneute[nrms]?|zweit\w*|doppel\w*|duplikat\w*|dublett\w*)\b|\bnichts\s+(weiter\w*|mehr|zusaetzlich\w*|erneut|nochmals?|wieder|doppelt\w*)\b|\b(not|never|n't)\s+(\w+\s+){0,2}(twice|again|duplicat\w*|double\w*|a\s+second|another|more\s+than\s+once|multiple\s+times)\b|\bno\s+(second|further|additional|duplicate|extra|repeat|double)\b|\bnothing\s+(further|more|else|additional|extra)\b/g;
+  /\bnicht\s+(doppelt|zweimal|zwei\s*mal|mehrfach|zusaetzlich|mehr\s+als\s+einmal|ein\s+weiteres\s+mal)\b|\bkein(e|en|em|er|es)?\s+(zweite[nrms]?|weitere[nrms]?|doppelte[nrms]?|zusaetzliche[nrms]?|erneute[nrms]?|zweit\w*|doppel\w*|duplikat\w*|dublett\w*)\b|\bnichts\s+(weiter\w*|mehr|zusaetzlich\w*|erneut|nochmals?|wieder|doppelt\w*)\b|\b(not|never|n't)\s+(\w+\s+){0,2}(twice|again|duplicat\w*|double\w*|a\s+second|another|more\s+than\s+once|multiple\s+times)\b|\bno\s+(second|further|additional|duplicate|extra|repeat|double)\b|\bnothing\s+(further|more|else|additional|extra)\b|\b(kein\w*|nichts|niemand|nie|niemals|nothing|nobody|no\s+\w+|never)\s+((?!(?:und|oder|weil|deshalb|daher|aber|and|or|because|so|then|dann|but)\b)\w+\s+){0,4}?(doppelt\w*|zweimal|zwei\s*mal|mehrfach|mehr\s+als\s+einmal|twice|two\s+times|more\s+than\s+once|multiple\s+times)\b/g;
 
 // 0.11.1: Eine Fehlschlag-Meldung ("Die Buchung ist fehlgeschlagen", "Booking failed", "konnte die Buchung nicht anlegen")
 // behauptet, der Vorgang sei nicht zustande gekommen. Gilt nur, wenn die Antwort keinen Erfolg und keinen vorhandenen
@@ -106,10 +106,20 @@ const UNCERTAINTY_PATTERNS: RegExp[] = [
   /\b(may|might)\s+(or\s+may\s+not\s+)?have\s+(been\s+)?(executed|succeeded|gone through|worked|happened|created|booked)\b/,
 ];
 
+// Gezählte Dinge, bei denen "zwei" eine Wiederholung meint (nicht "zwei Personen" oder "zwei Naechte").
+const COUNTED_NOUNS_DE =
+  "(buchungen|aufrufe|aufrufen|anfragen|vorgaenge|vorgaengen|datensaetze|datensaetzen|bestellungen|eintraege|eintraegen|zahlungen|ausfuehrungen|versuche|versuchen|kopien|reservationen|reservierungen|ueberweisungen|rechnungen|mal)";
+const COUNTED_NOUNS_EN =
+  "(bookings|calls|requests|records|orders|entries|payments|executions|attempts|copies|reservations|transfers|invoices|times|transactions)";
+
 const DUPLICATE_PATTERNS: RegExp[] = [
   /\b(doppelt|zweimal|mehrfach|duplikat|dublette|doppelbuchung|doppelausfuehrung)/,
   /\bzwei\s*mal\b/,
   /\b(twice|duplicate|duplicated|double|doubled|two times|more than once|multiple times)\b/,
+  // 0.11.1 (nach dem Pro-Test): Eine Mengenangabe ab zwei benennt die Wiederholung ("Es wurden zwei Buchungen angelegt",
+  // "Zwei Aufrufe wurden ausgefuehrt", "Two bookings were created"). Eine Verneinung im selben Teilsatz hebt das auf.
+  new RegExp(`\\b(zwei|drei|vier|fuenf|[2-9])\\s+(\\w+\\s+){0,2}${COUNTED_NOUNS_DE}\\b`),
+  new RegExp(`\\b(two|three|four|five|[2-9])\\s+(\\w+\\s+){0,2}${COUNTED_NOUNS_EN}\\b`),
 ];
 
 interface Detected {

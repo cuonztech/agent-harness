@@ -6,10 +6,12 @@
 import {
   LIMITS,
   OUTCOMES,
+  BASELINE_NOTE_DE,
   RECORDED_WITHOUT_LICENSE_DE,
   claimHeadline,
   countingBasis,
   duplicateFindingDe,
+  duplicateRecordsProven,
   effectProbeLinesDe,
   recordedWithoutLicense,
   verdictNotesDe,
@@ -23,6 +25,7 @@ import {
   sealDossierCore,
   sealToComment,
   type DossierCore,
+  type DossierHeader,
   type DossierSeal,
   type IntegrityCheck,
 } from "./core/artifact-integrity.js";
@@ -259,7 +262,7 @@ function businessMatrix(file: ReportFile): MatrixRow[] {
       dimension: d4,
       label: "KEY-FELD VORHANDEN",
       tone: "muted",
-      basis: `Das Schema bietet bei allen ${audit.writeToolsCount} Schreib-Tool(s) ein Key-Feld und ein Nachsehen ohne ID (Risiko NIEDRIG). Ob der Upstream das Feld beachtet, zeigt der Lauf (erste Zeile).${(report?.duplicateExecutions ?? 0) > 0 ? " Im Lauf wurde trotzdem doppelt ausgeführt: Das Feld allein schützt nicht." : ""}`,
+      basis: `Das Schema bietet bei allen ${audit.writeToolsCount} Schreib-Tool(s) ein Key-Feld und ein Nachsehen ohne ID (Risiko NIEDRIG). Ob der Upstream das Feld beachtet, zeigt der Lauf (erste Zeile).${duplicateRecordsProven(report) ? " Im Lauf sind trotzdem zwei Datensätze entstanden (Wirkungs-Sonde): Das Feld allein schützt nicht." : (report?.duplicateExecutions ?? 0) > 0 ? " Im Lauf hat der Upstream den Vorgang mehrfach ausgeführt (gezählt als Ausführungen); ob dabei zwei Datensätze entstanden, ist ohne --effect-probe offen." : ""}`,
     });
   }
   return rows;
@@ -283,7 +286,7 @@ function summarySection(file: ReportFile): Section {
     title: "1. Management Summary & Geschäftsrisiko-Matrix",
     intro: "Die ersten drei Zeilen beurteilen Risikodimensionen anhand der Messdaten dieses einen Laufs; die vierte beschreibt nur das Schema der Tools und widerspricht dem Laufergebnis nie.",
     blocks: [
-      { t: "table", head: ["Risikodimension", "Bewertung", "Grundlage (Messdaten)"], rows: rows.map((r) => [[r.dimension], [badgeOf(r.label, r.tone)], [r.basis]]) },
+      { t: "table", head: ["Risikodimension", "Bewertung", "Grundlage (Messdaten)"], rows: rows.map((r) => [[r.dimension], [badgeOf(r.label, r.tone)], inlineMarkup(r.basis)]) },
       ...(effectProbeLinesDe(file.report).length > 0
         ? [{ t: "note" as const, title: "Wirkungs-Sonde (--effect-probe)", items: effectProbeLinesDe(file.report).map((l) => inlineMarkup(l)) }]
         : []),
@@ -548,16 +551,19 @@ function integritySection(file: ReportFile, options: DossierOptions, check: Inte
     head: ["Merkmal", "Wert"],
     rows: [
       [["Prüfsumme dieses Dossiers (SHA-256 über den eingebetteten Kern)"], [{ code: seal.sha256 }]],
-      [["Kern"], ["Urteil, Score, Szenario, Operationen, Kunden- und Systemname, Lizenzstatus, Harness-Version, Zählweise und die Prüfsumme der Report-Datei; als JSON-Kommentar am Ende dieses Dokuments"]],
+      [["Kern"], ["Urteil, Score, Szenario, Operationen, Kunden- und Systemname, Lizenzstatus, Harness-Version, Zählweise, die Prüfsumme der Report-Datei und der sichtbare Kopf; als JSON-Kommentar am Ende dieses Dokuments"]],
     ],
   });
   blocks.push({
     t: "note",
     title: "Was die Prüfsumme leistet und was nicht",
     items: [
-      ["Sie zeigt, ob Report-Datei und Dossier seit dem Erzeugen unverändert sind. Nachprüfen: npx cuonztech-agent-harness verify <Dossier-Datei>, oder verify <Report-Datei>; der Befehl rechnet neu und meldet OK oder MISMATCH mit dem Grund."],
+      ["Sie zeigt, ob Report-Datei und Dossier seit dem Erzeugen unverändert sind. Nachprüfen: npx cuonztech-agent-harness verify dossier.md (bei einem HTML-Dossier dossier.html), oder verify harness-report.json; der Befehl rechnet neu und meldet OK oder MISMATCH mit dem Grund."],
       ["Es ist eine Prüfsumme ohne Signatur eines Dritten und kein Zertifikat. Wer die Datei und die Prüfsumme zusammen ändert, kann fälschen. Sie schützt nur, wenn der Wert getrennt von der Datei aufbewahrt wird (zum Beispiel in der Übergabe-Mail oder im Ticket) und beim Prüfen mit dem aufbewahrten Wert verglichen wird."],
-      ["Gesiegelt sind die Kernaussagen und der Kopf des Dossiers. Der Fliesstext der Abschnitte ist es nicht; er lässt sich nur über die Report-Datei prüfen."],
+      ["Gesiegelt ist der Kopf dieses Dossiers: die Titelzeile mit Datum und Harness-Version, alle Kopfzeilen (Prüfgegenstand, Auftraggeber, Session-ID, Szenario, Umfang, Datum der Aufzeichnung, Harness-Version, Modell / Agent, Zählweise, Lizenzstatus, Einordnung), das Gesamturteil mit seinem Erklärsatz, der Score und die Hinweise direkt unter dem Urteil. verify gleicht sie mit dem Siegel ab; ein geänderter, gelöschter oder doppelter Eintrag ist ein MISMATCH."],
+      ["Im Siegel stehen ausserdem die Operationen (Tool, Versuche, Ausführungen, Ergebnis) und die Prüfsumme der Report-Datei. verify gleicht sie nicht mit den Abschnitten ab."],
+      ["Nicht gesiegelt ist der Fliesstext der Abschnitte 1 bis 6 (Management-Matrix, Schema-Gutachten, Zeitleiste und Argumente, Abgleich mit der Antwort des Agenten, Prompt-Baustein, dieser Abschnitt). Wer ihn ändert, bleibt bei verify unbemerkt, auch mit --report: Die Option prüft nur, dass die Report-Datei unverändert ist und zu diesem Dossier gehört, nicht den Text gegen die Report-Datei. Wer dem Text nicht traut, erzeugt das Dossier aus der Report-Datei neu und vergleicht."],
+      ["Zur Kopfzeile «Modell / Agent»: Der Harness erfasst das Modell und den Agenten nicht. Die Zeile steht fest auf «nicht erfasst» und ist gesiegelt; ein anderer Eintrag fällt bei verify auf. Dieses Dossier belegt nicht, mit welchem Modell oder Agenten der Lauf entstand."],
     ],
   });
   // Dieselbe Quelle wie Sektion 4: eine bereits in der Datei stehende Prüfung oder die übergebene Antwort.
@@ -643,6 +649,10 @@ function licenseStatusText(options: DossierOptions, limited: boolean): string {
   return "EVALUATION (Bibliotheksaufruf ohne Lizenzprüfung, volle Fassung)";
 }
 
+// Der Hinweis zur Basislinie steht wörtlich so im Klartext-Bericht (plain-report.ts).
+const SCHEMA_VS_RUN_DE =
+  "Das Urteil gilt für den aufgezeichneten Lauf; das Schnittstellen-Schema-Gutachten ist eine eigene Aussage über die Beschreibung der Tools und kann trotz bestandenem Lauf ein hohes Risiko ausweisen. Beides sind verschiedene Dinge.";
+
 function build(file: ReportFile, options: DossierOptions = {}): Dossier {
   const { headline, explanation } = verdictText(file);
   const score = file.score?.overall;
@@ -654,6 +664,30 @@ function build(file: ReportFile, options: DossierOptions = {}): Dossier {
   const licenseStatus = clean(licenseStatusText(options, limited));
   const scenarioText = clean(file.report?.scenarioId ?? file.report?.mode ?? "—");
   const scoreText = file.report && typeof score === "number" ? `${score} / 100` : "nicht bewertet";
+  const date = formatDate(file.generatedAt ?? file.report?.generatedAt);
+  const version = file.harnessVersion ? `Harness ${clean(file.harnessVersion)}` : "Harness-Version nicht angegeben";
+  const notes = [...verdictNotesDe(file)];
+  if (recordedWithoutLicense(file) && options.licenseVerdict?.valid) notes.push(RECORDED_WITHOUT_LICENSE_DE);
+  // Ohne eingespielte Störung ist ein PASS nur eine Basislinie (wie im Klartext-Bericht): direkt beim Urteil, nicht erst in der Grenzen-Liste.
+  if (file.report && file.score?.baseline) {
+    notes.push(BASELINE_NOTE_DE);
+    if ((file.schema_audit?.highRiskToolsCount ?? 0) > 0) notes.push(SCHEMA_VS_RUN_DE);
+  }
+  const warning = integrityWarningDe(check);
+  const meta: Array<[string, string]> = [
+    ["Prüfgegenstand / System", system],
+    ["Auftraggeber / Umgebung", customer],
+    ["Session-ID", clean(file.report?.sessionId ?? "—")],
+    ["Szenario / Modus", scenarioText],
+    ["Umfang", "Ein Lauf, ein Szenario; keine Mehrlauf-Auswertung"],
+    ["Datum der Aufzeichnung", date],
+    ["Harness-Version (Lauf)", file.harnessVersion ? clean(file.harnessVersion) : "nicht angegeben"],
+    ["Modell / Agent", "nicht erfasst"],
+    ["Zählweise", clean(basis.textDe)],
+    ["Einordnung", "Selbsttest: keine Produktionsfreigabe, kein Zertifikat"],
+    ["Lizenzstatus", licenseStatus],
+  ];
+  const header: DossierHeader = { titleDate: date, titleVersion: version, rows: meta, explanation, warning, notes };
   const core: DossierCore = {
     format: "cuonztech-agent-harness-dossier",
     formatVersion: 1,
@@ -670,6 +704,7 @@ function build(file: ReportFile, options: DossierOptions = {}): Dossier {
     verdictLabel: headline,
     tone: verdictTone(file),
     scoreText,
+    header,
     countingBasis: basis.basis,
     operations: (file.report?.operations ?? []).map((op) => ({ tool: clean(op.tool), attempts: op.attempts, executions: op.executions, outcome: op.outcome })),
     reportFile: {
@@ -683,8 +718,6 @@ function build(file: ReportFile, options: DossierOptions = {}): Dossier {
   const sections = limited
     ? [limitedSection(file, seal, check)]
     : [summarySection(file), schemaSection(file), forensicsSection(file), claimSection(file, options), hardeningSection(file), integritySection(file, options, check, seal)];
-  const notes = [...verdictNotesDe(file)];
-  if (recordedWithoutLicense(file) && options.licenseVerdict?.valid) notes.push(RECORDED_WITHOUT_LICENSE_DE);
   return {
     limited,
     headline,
@@ -692,22 +725,11 @@ function build(file: ReportFile, options: DossierOptions = {}): Dossier {
     verdictLabel: headline,
     tone: verdictTone(file),
     scoreText,
-    date: formatDate(file.generatedAt ?? file.report?.generatedAt),
-    version: file.harnessVersion ? `Harness ${clean(file.harnessVersion)}` : "Harness-Version nicht angegeben",
+    date,
+    version,
     notes,
-    warning: integrityWarningDe(check),
-    meta: [
-      ["Prüfgegenstand / System", system],
-      ["Auftraggeber / Umgebung", customer],
-      ["Session-ID", clean(file.report?.sessionId ?? "—")],
-      ["Szenario / Modus", scenarioText],
-      ["Umfang", "Ein Lauf, ein Szenario; keine Mehrlauf-Auswertung"],
-      ["Datum der Aufzeichnung", formatDate(file.generatedAt ?? file.report?.generatedAt)],
-      ["Harness-Version (Lauf)", file.harnessVersion ? clean(file.harnessVersion) : "nicht angegeben"],
-      ["Modell / Agent", "nicht erfasst"],
-      ["Zählweise", clean(basis.textDe)],
-      ["Lizenzstatus", licenseStatus],
-    ],
+    warning,
+    meta,
     sections,
     core,
     seal,
@@ -715,26 +737,38 @@ function build(file: ReportFile, options: DossierOptions = {}): Dossier {
 }
 
 // Was im sichtbaren Kopf des Dossiers stehen muss, wenn der eingebettete Kern stimmt. `verify` prüft diese
-// Zeichenfolgen im Dokument; sie sind dieselben Vorlagen wie beim Rendern.
-export function dossierHeaderChecks(core: DossierCore): { md: string[]; html: string[] } {
-  return {
-    md: [
-      mdMetaLine("Prüfgegenstand / System", core.system),
-      mdMetaLine("Auftraggeber / Umgebung", core.customer),
-      mdMetaLine("Lizenzstatus", core.licenseStatus),
-      mdVerdictLine(core.verdictLabel),
-      mdScoreLine(core.scoreText),
-    ],
-    html: [
-      htmlMetaCell("Prüfgegenstand / System", core.system),
-      htmlMetaCell("Auftraggeber / Umgebung", core.customer),
-      htmlMetaCell("Lizenzstatus", core.licenseStatus),
-      htmlVerdictBadge(core.tone, core.verdictLabel),
-      htmlScoreLine(core.scoreText),
-    ],
-  };
+// Zeichenfolgen im Dokument; sie sind dieselben Vorlagen wie beim Rendern. `needle` muss genau einmal vorkommen,
+// `prefix` (der Anfang der Zeile oder Zelle) ebenfalls: ein zweiter, abweichender Eintrag fällt so auf.
+export interface HeaderCheck {
+  needle: string;
+  prefix?: string;
 }
 
+export function dossierHeaderChecks(core: DossierCore): { md: HeaderCheck[]; html: HeaderCheck[] } {
+  const h = core.header;
+  const md: HeaderCheck[] = [
+    { needle: mdTitleLine(h.titleDate, h.titleVersion) },
+    ...h.rows.map(([label, value]) => ({ needle: mdMetaLine(label, value), prefix: `\n- ${label}: ` })),
+    { needle: mdVerdictLine(core.verdictLabel), prefix: "\n**Gesamturteil: " },
+    { needle: escMd(h.explanation) },
+    { needle: mdScoreLine(core.scoreText), prefix: "\nResilience Score: " },
+    ...(h.warning ? [{ needle: `**${escMd(h.warning)}**` }] : []),
+    ...h.notes.map((n) => ({ needle: `- ${escMd(n)}` })),
+  ];
+  const html: HeaderCheck[] = [
+    { needle: htmlTitleSpan(h.titleDate, h.titleVersion) },
+    ...h.rows.map(([label, value]) => ({ needle: htmlMetaCell(label, value), prefix: `<dt>${escHtml(label)}</dt>` })),
+    { needle: htmlVerdictBadge(core.tone, core.verdictLabel), prefix: '<span class="caption">Gesamturteil</span>' },
+    { needle: `<p>${escHtml(h.explanation)}</p>` },
+    { needle: htmlScoreLine(core.scoreText), prefix: "Resilience Score: <strong>" },
+    ...(h.warning ? [{ needle: `<p class="alert">${escHtml(h.warning)}</p>` }] : []),
+    ...h.notes.map((n) => ({ needle: `<li>${escHtml(n)}</li>` })),
+  ];
+  return { md, html };
+}
+
+const mdTitleLine = (date: string, version: string): string => `_${escMd(date)} · ${escMd(version)}_`;
+const htmlTitleSpan = (date: string, version: string): string => `<span>${escHtml(date)} · ${escHtml(version)}</span>`;
 const mdMetaLine = (label: string, value: string): string => `- ${label}: **${escMd(value)}**`;
 const mdVerdictLine = (label: string): string => `**Gesamturteil: ${escMd(label)}**`;
 const mdScoreLine = (score: string): string => `Resilience Score: **${escMd(score)}**`;
@@ -775,7 +809,7 @@ function blockMd(block: Block, level: number): string[] {
 
 export function renderDossierMarkdown(file: ReportFile, options?: DossierOptions): string {
   const d = build(file, options ?? {});
-  const lines: string[] = [`# ${TITLE}`, "", `_${escMd(d.date)} · ${escMd(d.version)}_`, ""];
+  const lines: string[] = [`# ${TITLE}`, "", mdTitleLine(d.date, d.version), ""];
   for (const [label, value] of d.meta) lines.push(mdMetaLine(label, value));
   lines.push("", mdVerdictLine(d.verdictLabel), "", escMd(d.explanation), "");
   if (d.warning) lines.push(`**${escMd(d.warning)}**`, "");
@@ -857,7 +891,7 @@ export function renderDossierHtml(file: ReportFile, options?: DossierOptions): s
     '<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light">',
     `<title>${escHtml(TITLE)}</title>`,
     `<style>${CSS}</style></head><body><main class="wrap"><header>`,
-    `<div class="topline"><strong>${escHtml(TITLE)}</strong><span>${escHtml(d.date)} · ${escHtml(d.version)}</span></div>`,
+    `<div class="topline"><strong>${escHtml(TITLE)}</strong>${htmlTitleSpan(d.date, d.version)}</div>`,
     `<div class="hero"><div><h1>${escHtml(clean(d.meta[0]![1]))}</h1><p>${d.limited ? "Gekürzte Fassung ohne Lizenz: Kopf, Score und Urteil je Szenario. Der Lauf und sein Urteil sind echt." : "Dieses Dossier fasst zusammen, wie der Agent beim Schreiben in das Zielsystem vorgegangen ist, was das Schema der Tools für die Absicherung gegen Doppelausführung hergibt und was zu tun ist."}</p></div>`,
     `<aside class="verdict"><span class="caption">Gesamturteil</span><strong>${htmlVerdictBadge(d.tone, d.verdictLabel)}</strong><p>${escHtml(d.explanation)}</p><p>${htmlScoreLine(d.scoreText)}</p></aside></div>`,
     d.warning || d.notes.length > 0

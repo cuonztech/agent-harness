@@ -169,11 +169,27 @@ export function verifyReportIntegrity(file: ReportFile): { valid: boolean; reaso
 // ---------- Siegel des Dossiers ----------
 //
 // Das Dossier trägt seine Kernaussagen (Urteil, Score, Szenario, Operationen, Kunden- und
-// Systemname, Lizenzstatus, Harness-Version, Zählweise und die Prüfsumme der Report-Datei) als
-// JSON-Kommentar und dessen SHA-256. `verify <dossier>` rechnet beides nach und prüft, dass der
-// sichtbare Kopf des Dossiers dem Kern entspricht. Der Fliesstext darunter ist nicht gesiegelt.
+// Systemname, Lizenzstatus, Harness-Version, Zählweise und die Prüfsumme der Report-Datei) und den
+// ganzen sichtbaren Kopf (`header`: Titelzeile mit Datum und Version, alle Kopfzeilen, Erklärsatz
+// unter dem Urteil, Hinweise direkt unter dem Urteil) als JSON-Kommentar und dessen SHA-256.
+// `verify <dossier>` rechnet beides nach und prüft, dass der sichtbare Kopf genau dem Kern
+// entspricht. Der Fliesstext der Abschnitte 1 bis 6 ist nicht gesiegelt; die Operationen und die
+// Prüfsumme der Report-Datei stehen im Kern, werden aber nicht gegen die Abschnitte abgeglichen.
 
 export const DOSSIER_SEAL_MARKER = "cuonztech-agent-harness-dossier-seal:";
+
+// Der sichtbare Kopf des Dossiers, genau so, wie er gerendert wird (unmaskiert; verify maskiert wie das Rendern).
+export interface DossierHeader {
+  titleDate: string;
+  titleVersion: string;
+  // Alle Kopfzeilen in der Reihenfolge der Darstellung: [Beschriftung, Wert].
+  rows: Array<[string, string]>;
+  // Der Erklärsatz direkt unter dem Gesamturteil.
+  explanation: string;
+  // Warnung der Prüfsumme der Report-Datei (null: keine) und die Hinweise direkt unter dem Urteil.
+  warning: string | null;
+  notes: string[];
+}
 
 export interface DossierCore {
   format: "cuonztech-agent-harness-dossier";
@@ -191,6 +207,7 @@ export interface DossierCore {
   verdictLabel: string;
   tone: string;
   scoreText: string;
+  header: DossierHeader;
   countingBasis: "executions" | "records";
   operations: Array<{ tool: string; attempts: number; executions: number; outcome: string }>;
   reportFile: {

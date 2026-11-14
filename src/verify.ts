@@ -3,11 +3,18 @@
 // eines Dritten: Wer Datei und Prüfsumme zusammen ändert, kann fälschen; der Wert schützt nur, wenn er
 // getrennt von der Datei aufbewahrt wird (dafür gibt es `--expect <sha256>`).
 import { readFile, stat } from "node:fs/promises";
-import { canonicalJson, checkReportIntegrity, extractDossierSeal, sha256Hex, type IntegrityCheck } from "./core/artifact-integrity.js";
+import { DOSSIER_SEAL_MARKER, canonicalJson, checkReportIntegrity, extractDossierSeal, sha256Hex, type IntegrityCheck } from "./core/artifact-integrity.js";
 import { dossierHeaderChecks } from "./dossier-report.js";
 import type { ReportFile } from "./plain-report.js";
 
 const MAX_BYTES = 64 * 1024 * 1024;
+
+function countOf(text: string, part: string): number {
+  if (part === "") return 0;
+  let n = 0;
+  for (let i = text.indexOf(part); i !== -1; i = text.indexOf(part, i + part.length)) n++;
+  return n;
+}
 
 const USAGE = "Usage: verify <dossier|report-file> [--report <report-file>] [--expect <sha256>]\n";
 
@@ -74,16 +81,23 @@ export function verifyDossierContent(text: string, options: { report?: ReportFil
     };
   }
   // Der sichtbare Kopf muss dem gesiegelten Kern entsprechen.
+  const header = seal.core.header as unknown;
+  if (!header || typeof header !== "object" || !Array.isArray((header as { rows?: unknown }).rows) || !Array.isArray((header as { notes?: unknown }).notes)) {
+    return { status: "NOT_VERIFIABLE", kind: "dossier", sha256: seal.sha256, lines: ["Das Siegel enthält den sichtbaren Kopf nicht (Dossier aus einer Vorabfassung von 0.11.1). Nicht prüfbar."] };
+  }
   const isHtml = /<html[\s>]/i.test(text.slice(0, 2000));
   const expected = dossierHeaderChecks(seal.core)[isHtml ? "html" : "md"];
-  const missing = expected.filter((needle) => !text.includes(needle));
+  // Gezählt wird im sichtbaren Teil vor dem Siegel (das JSON des Siegels wiederholt Teile des Kopfes).
+  const sealAt = text.lastIndexOf(`<!-- ${DOSSIER_SEAL_MARKER} `);
+  const visible = sealAt === -1 ? text : text.slice(0, sealAt);
+  const missing = expected.filter((check) => countOf(visible, check.needle) !== 1 || (check.prefix !== undefined && countOf(visible, check.prefix) !== 1));
   if (missing.length > 0) {
     return {
       status: "MISMATCH",
       kind: "dossier",
       sha256: seal.sha256,
       lines: [
-        `Der sichtbare Kopf des Dossiers weicht vom gesiegelten Kern ab (${missing.length} von ${expected.length} Angaben: Urteil, Score, System, Auftraggeber oder Lizenzstatus wurden im Text verändert).`,
+        `Der sichtbare Kopf des Dossiers weicht vom gesiegelten Kern ab (${missing.length} von ${expected.length} Angaben fehlen, sind verändert oder doppelt: Kopfzeilen, Datum, Version, Urteil, Score oder die Hinweise unter dem Urteil wurden im Text verändert).`,
       ],
     };
   }
@@ -104,7 +118,7 @@ export function verifyDossierContent(text: string, options: { report?: ReportFil
     );
     return { status: source.check === "mismatch" ? "MISMATCH" : "NOT_VERIFIABLE", kind: "dossier", sha256: seal.sha256, lines };
   }
-  lines.push("Siegel, Kern und sichtbarer Kopf (Urteil, Score, System, Auftraggeber, Lizenzstatus) stimmen überein. Der Fliesstext der Abschnitte ist nicht gesiegelt.");
+  lines.push("Siegel, Kern und sichtbarer Kopf (Titelzeile, alle Kopfzeilen, Urteil, Score und die Hinweise unter dem Urteil) stimmen überein. Der Fliesstext der Abschnitte 1 bis 6 ist nicht gesiegelt und wurde nicht geprüft.");
   if (options.report) {
     const reportCheck = checkReportIntegrity(options.report);
     if (reportCheck.status !== "ok") {
@@ -118,7 +132,7 @@ export function verifyDossierContent(text: string, options: { report?: ReportFil
         lines: ["Die angegebene Report-Datei ist nicht die, aus der das Dossier erzeugt wurde (ihre Prüfsumme weicht von der im Dossier festgehaltenen ab)."],
       };
     }
-    lines.push("Die angegebene Report-Datei gehört zu diesem Dossier und ist unverändert.");
+    lines.push("Die angegebene Report-Datei gehört zu diesem Dossier und ist unverändert. Der Fliesstext des Dossiers wurde dabei nicht gegen die Report-Datei abgeglichen.");
   } else {
     lines.push("Die Report-Datei wurde nicht mitgeprüft; mit --report <datei> abgleichen.");
   }

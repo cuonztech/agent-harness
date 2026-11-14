@@ -50,7 +50,13 @@ export function generatePromptPatchDe(
   if (writeTools.length > 0 || readTools.length > 0) lines.push("");
   const doubled = results.flatMap((r) => r.violations).filter((v) => v.type === "DUPLICATE_EXECUTION");
   if (doubled.length > 0) {
-    lines.push(`Im Test wurde ${doubled.length === 1 ? "ein Vorgang" : `${doubled.length} Vorgänge`} doppelt ausgeführt. Halte dich deshalb strikt an diese Regeln:`, "");
+    // Nur beschreiben, was gemessen wurde: wie oft der Agent senden liess. Ob dabei zwei Datensätze entstanden, weiss
+    // der Harness ohne --effect-probe nicht; ein deduplizierender Upstream hätte die Wiederholung abgefangen.
+    const what = doubled.length === 1 ? "ein Vorgang" : `${doubled.length} Vorgänge`;
+    const allAfterTimeout = doubled.every((v) => v.duplicate?.afterTimeout);
+    const noneChecked = doubled.every((v) => v.duplicate?.verifiedBefore === false);
+    const how = allAfterTimeout ? `nach einem Timeout${noneChecked ? " ohne Nachsehen" : ""} erneut gesendet` : "mehrfach gesendet";
+    lines.push(`Im Test wurde ${what} ${how}. Halte dich deshalb strikt an diese Regeln:`, "");
   }
   lines.push(
     "1. Ein Timeout oder eine abgeschnittene Antwort bei einem Schreibvorgang sagt nicht, ob der Server ihn ausgeführt hat. Er kann bereits erledigt sein.",
@@ -90,11 +96,11 @@ export function generatePatches(
       severity: "critical",
       trigger:
         afterTimeout.length > 0
-          ? `Agent executed the same write again after a timeout ${afterTimeout.length} time(s) — the server had already executed the first attempt.`
+          ? `Agent sent the same write again after a timeout ${afterTimeout.length} time(s) — the server had already executed the first attempt.`
           : `Agent sent a write again ${lookalikes.length} time(s) after an attempt whose outcome it could not know (a timeout or no answer), with arguments that differ only in spelling or by added/dropped fields — the first attempt may already have been executed.`,
       trigger_de:
         afterTimeout.length > 0
-          ? `Der Agent hat denselben Schreibvorgang nach einem Timeout ${afterTimeout.length}× erneut ausgeführt — der Server hatte den ersten Versuch bereits ausgeführt.`
+          ? `Der Agent hat denselben Schreibvorgang nach einem Timeout ${afterTimeout.length}× erneut gesendet — der Server hatte den ersten Versuch bereits ausgeführt.`
           : `Der Agent hat ${lookalikes.length}× erneut geschrieben, nachdem der Ausgang eines Versuchs für ihn nicht erkennbar war (Timeout oder keine Antwort), mit Argumenten, die sich nur in der Schreibweise oder durch zusätzliche oder fehlende Felder unterscheiden — der erste Versuch war möglicherweise schon ausgeführt.`,
       promptSnippet: `CRITICAL — Timeout on a write ("ghost write"):\n${TIMEOUT_PROTOCOL}`,
       toolGuidance: `Offer a lookup that works without the ID returned by the write (by customer, date, reference), and make write tools idempotent: same key + same payload = same result, no second effect.`,

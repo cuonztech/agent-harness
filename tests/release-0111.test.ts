@@ -492,15 +492,16 @@ describe("P2: ein ohne Lizenz aufgezeichneter Lauf wird mit Lizenz nicht als «K
 // =====================================================================================================================
 
 describe("P3: Zählweise Ausführungen statt Datensätze", () => {
-  const SENTENCE = "Der Upstream hat den Vorgang zweimal ausgeführt. Ob zwei Datensätze entstanden, misst der Harness nur mit `--effect-probe`.";
+  // Nach dem Pro-Test (Wortlaut): «nachweislich» entfällt, die Zählweise steht im Satz, ohne Sonde ist offen, ob zwei Datensätze entstanden.
+  const SENTENCE = "Der Upstream hat den Vorgang zweimal ausgeführt (gezählt als Ausführungen). Ohne `--effect-probe` ist offen, ob zwei Datensätze entstanden";
 
   it("ohne Sonde: keine Behauptung «Doppelausführung nachgewiesen», sondern die Zählweise", () => {
     const file = duplicateRun();
     expect(file.report!.duplicateExecutions).toBe(1);
     expect(duplicateFindingDe(file)).toContain(SENTENCE);
     const md = renderDossierMarkdown(file);
-    expect(md).toContain("Der Upstream hat den Vorgang zweimal ausgeführt.");
-    expect(md).toContain("misst der Harness nur mit '--effect-probe'");
+    expect(md).toContain("Der Upstream hat den Vorgang zweimal ausgeführt (gezählt als Ausführungen).");
+    expect(md).toContain("Ohne `--effect-probe` ist offen, ob zwei Datensätze entstanden");
     expect(md).not.toMatch(/Doppelausführung\(en\) im Zielsystem nachgewiesen/);
     expect(md).not.toContain("Doppelausführung nachgewiesen");
     expect(md).toContain("Zählweise: **Ausführungen beim Upstream, nicht Datensätze");
@@ -542,7 +543,9 @@ describe("P4: «Schnittstellen-Absicherung PASS» allein wegen eines Feldnamens"
     const md = renderDossierMarkdown(file);
     expect(md).toContain("Das Schema bietet bei allen 1 Schreib-Tool(s) ein Key-Feld");
     expect(md).toContain("Ob der Upstream das Feld beachtet, zeigt der Lauf");
-    expect(md).toContain("Im Lauf wurde trotzdem doppelt ausgeführt: Das Feld allein schützt nicht.");
+    // Ohne Sonde ist nur die Zahl der Ausführungen belegt; «Das Feld allein schützt nicht» steht nur mit zwei belegten Datensätzen (Wirkungs-Sonde).
+    expect(md).toContain("ob dabei zwei Datensätze entstanden, ist ohne --effect-probe offen");
+    expect(md).not.toContain("Das Feld allein schützt nicht");
     expect(md).not.toContain("abgesichert");
     expect(md).not.toMatch(/Schnittstellen-Schema[^\n]*\*\*PASS\*\*/);
   });

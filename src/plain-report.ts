@@ -193,7 +193,10 @@ export function verdictText(file: ReportFile): { headline: string; explanation: 
   if (verdict === "FAIL") {
     return {
       headline: "Nicht bestanden (FAIL)",
-      explanation: "Mindestens ein Schreibvorgang wurde nachweislich mehrfach vom Upstream ausgeführt oder eine Wartezeit missachtet. Gezählt werden Ausführungen, nicht Datensätze (Datensätze zählt nur --effect-probe).",
+      explanation:
+        countingBasis(report).basis === "records"
+          ? "Mindestens ein Schreibvorgang wurde nachweislich mehrfach vom Upstream ausgeführt oder eine Wartezeit missachtet. Gezählt wurden Datensätze (Wirkungs-Sonde)."
+          : "Mindestens ein Schreibvorgang wurde mehrfach vom Upstream ausgeführt (gezählt als Ausführungen) oder eine Wartezeit missachtet. Gezählt werden Ausführungen, nicht Datensätze (Datensätze zählt nur --effect-probe).",
     };
   }
   return { headline: "Nicht aussagekräftig (NOT_TESTED)", explanation: report.verdictReason_de ?? report.verdictReason };
@@ -219,7 +222,8 @@ function timesDe(n: number): string {
 }
 
 // Wie das Zielsystem auf Wiederholungen geantwortet hat: ohne Sonde der einzige Hinweis, ob es dedupliziert.
-export function repeatAnswerNoteDe(file: ReportFile): string | null {
+// Liefert die Teilsätze (null: kein Hinweis).
+function repeatAnswerHintsDe(file: ReportFile): string[] | null {
   const entries = file.call_forensics?.entries ?? [];
   const retries = entries.filter((e) => e.toolClass === "write" && e.tookEffect && e.answerComparedToPrevious);
   const same = retries.filter((e) => e.answerComparedToPrevious === "identical").length;
@@ -228,7 +232,23 @@ export function repeatAnswerNoteDe(file: ReportFile): string | null {
   const parts: string[] = [];
   if (same > 0) parts.push(`${same} ${same === 1 ? "Antwort" : "Antworten"} auf eine Wiederholung ${same === 1 ? "war" : "waren"} identisch mit der Antwort auf den früheren Versuch`);
   if (marked > 0) parts.push(`${marked} ${marked === 1 ? "Antwort" : "Antworten"} auf eine Wiederholung ${marked === 1 ? "trug" : "trugen"} ein Wiederholungs-Merkmal (z. B. deduplicated)`);
+  return parts;
+}
+
+export function repeatAnswerNoteDe(file: ReportFile): string | null {
+  const parts = repeatAnswerHintsDe(file);
+  if (!parts) return null;
   return `Beobachtung: ${parts.join("; ")}. Das kann heissen, dass der Upstream die Wiederholung erkannt und keinen zweiten Datensatz angelegt hat.`;
+}
+
+// Hat der Upstream die Wiederholung nach den Antworten womöglich selbst abgefangen? (Nur ein Hinweis, kein Beleg.)
+export function hasDedupHints(file: ReportFile): boolean {
+  return repeatAnswerHintsDe(file) !== null;
+}
+
+// Sind zwei Datensätze belegt? Nur die Wirkungs-Sonde zählt Datensätze; ohne sie steht nur fest, wie oft der Upstream ausführte.
+export function duplicateRecordsProven(report: AuditReport | undefined): boolean {
+  return countingBasis(report).basis === "records" && (report?.duplicateExecutions ?? 0) > 0;
 }
 
 // Die Aussage zur Doppelausführung samt Zählweise: nie «nachgewiesen» für mehr, als gemessen wurde.
@@ -240,12 +260,15 @@ export function duplicateFindingDe(file: ReportFile): string {
   }
   const dupOps = (report?.operations ?? []).filter((op) => op.outcome === "DUPLICATE_EXECUTION");
   const executions = dupOps.length > 0 ? Math.max(...dupOps.map((op) => op.executions)) : n + 1;
-  const note = repeatAnswerNoteDe(file);
+  const hints = repeatAnswerHintsDe(file);
   return (
-    `Der Upstream hat den Vorgang ${timesDe(executions)} ausgeführt. Ob ${executions === 2 ? "zwei" : executions} Datensätze entstanden, misst der Harness nur mit \`--effect-probe\`.` +
-    (note ? ` ${note}` : "")
+    `Der Upstream hat den Vorgang ${timesDe(executions)} ausgeführt (gezählt als Ausführungen). Ohne \`--effect-probe\` ist offen, ob ${executions === 2 ? "zwei" : executions} Datensätze entstanden` +
+    (hints ? `; Hinweise auf Deduplizierung: ${hints.join("; ")}. Das kann heissen, dass der Upstream die Wiederholung erkannt und keinen zweiten Datensatz angelegt hat.` : ".")
   );
 }
+
+// Ohne eingespielte Störung (kein Szenario, F4) ist ein PASS nur eine Basislinie. Klartext-Bericht und Dossier sagen es gleich.
+export const BASELINE_NOTE_DE = "Hinweis: Ohne eingespielte Störung ist dieses PASS nur eine Basislinie.";
 
 // Hinweise direkt unter dem Urteil: was das Urteil nicht trägt.
 export function verdictNotesDe(file: ReportFile): string[] {
@@ -372,10 +395,7 @@ export function renderMarkdown(file: ReportFile, options: RenderOptions = {}): s
   if (verdictNotes.length > 0) lines.push("");
 
   if (report) {
-    const baselineNote = file.score?.baseline
-      ? " Hinweis: Ohne eingespielte Störung ist dieses PASS nur eine Basislinie."
-      : "";
-    if (baselineNote) lines.push(baselineNote.trim(), "");
+    if (file.score?.baseline) lines.push(BASELINE_NOTE_DE, "");
 
     lines.push("## Was getestet wurde", "");
     const scenario = report.scenarioId ? `${report.scenarioId}: ${SCENARIOS[report.scenarioId] ?? ""}` : "Kein Szenario (reines Durchreichen).";
