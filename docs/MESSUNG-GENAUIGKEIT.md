@@ -1,6 +1,6 @@
 # Messung Genauigkeit: wie oft stimmt das Urteil des Harness?
 
-Gemessen an Version 0.12.1, 99 Fälle, jeder gegen den echten, gebauten Proxy (`dist/index.js proxy`) und einen echten Upstream, der mitschreibt, wie viele Datensätze wirklich entstanden sind (`tests/accuracy/corpus-upstream.mjs`). Der Harness sieht dieses Protokoll nie.
+Gemessen an Version 0.12.2, 99 Fälle, jeder gegen den echten, gebauten Proxy (`dist/index.js proxy`) und einen echten Upstream, der mitschreibt, wie viele Datensätze wirklich entstanden sind (`tests/accuracy/corpus-upstream.mjs`). Der Harness sieht dieses Protokoll nie.
 
 Erzeugt von `tests/accuracy/accuracy.test.ts` (`ACC_WRITE=1 npx vitest run tests/accuracy`), nicht von Hand ändern: Ein Test prüft, dass dieses Dokument der Messung entspricht.
 

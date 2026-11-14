@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.2 — 2026-11-14
+
+Nur Lizenz und Doku, der Code ist gegenüber 0.12.1 unverändert. Die `LICENSE` im Paket trägt jetzt die Fassung **Revision 2** (14. November 2026, nach Prüfung durch den Hausanwalt): Ziffer 1.3 und 2.1 f) nennen die Mehrlauf-Messung `bench` ausdrücklich im Pro-Umfang (0.12.1 wurde mit dem Wortlaut von Revision 1 ausgeliefert, der `bench` nicht nannte; `bench` war auch dort nur mit Lizenzcode ausführbar), Ziffer 2.1 d) grenzt die auf den Lauf zugeschnittenen Textbausteine (Pro) vom allgemeinen Wortlaut in README und `benchmark` (frei) ab, Ziffer 2.5 regelt beauftragte Dienstleister für das eigene System und den Einsatz für Systeme Dritter als eigene Dienstleistung, Ziffer 2.6 und die englische Zusammenfassung sind angepasst.
+
 ## 0.12.1 — 2026-11-14
 
 Hinweis: Die Fassung 0.12.0 wurde nie veröffentlicht. 0.12.1 enthält alles darunter Beschriebene (Stufen A bis E3); öffentlich war zuvor 0.11.1. Zusätzlich: Die Lizenzvariablen (`AGENT_AUDIT_LICENSE` u. a.) werden vom Proxy nicht mehr an den Upstream-Prozess vererbt (Befund B3b); ausdrücklich mit `--upstream-env` gesetzte Werte bleiben.
