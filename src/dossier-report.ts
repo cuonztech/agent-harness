@@ -3,13 +3,33 @@
 // aus demselben Seitenmodell (Abschnitte aus Blöcken), damit beide Fassungen
 // dieselbe Aussage tragen. Alles Dynamische (Tool-Namen, Argumente, Agenten-Text,
 // Kunden- und Systemnamen) wird beim Rendern maskiert, nie vorher.
-import { LIMITS, OUTCOMES, claimHeadline, effectProbeLinesDe, verdictText, type ReportFile } from "./plain-report.js";
+import {
+  LIMITS,
+  OUTCOMES,
+  RECORDED_WITHOUT_LICENSE_DE,
+  claimHeadline,
+  countingBasis,
+  duplicateFindingDe,
+  effectProbeLinesDe,
+  recordedWithoutLicense,
+  verdictNotesDe,
+  verdictText,
+  type ReportFile,
+} from "./plain-report.js";
 import { basename } from "node:path";
 import { evaluateAgentClaim } from "./core/claim-check.js";
-import { verifyReportIntegrity } from "./core/artifact-integrity.js";
+import {
+  checkReportIntegrity,
+  sealDossierCore,
+  sealToComment,
+  type DossierCore,
+  type DossierSeal,
+  type IntegrityCheck,
+} from "./core/artifact-integrity.js";
+import { VERSION } from "./version.js";
 import type { ArgumentDiffEntry, CallForensicEntry, ClaimCheckResult, SchemaRiskLevel, ToolSchemaAuditEntry } from "./types.js";
 import type { LicenseVerdict } from "./license/types.js";
-import { PURCHASE_URL } from "./license/gate.js";
+import { PURCHASE_URL, reasonSentence } from "./license/gate.js";
 
 export interface DossierOptions {
   customerName?: string;
@@ -172,9 +192,9 @@ function businessMatrix(file: ReportFile): MatrixRow[] {
   const d1 = "Schutz vor Doppelausführung (Idempotenz im Lauf)";
   if (!report) rows.push(notTested(d1, "Die Datei enthält keinen Bericht."));
   else if (report.duplicateExecutions > 0) {
-    rows.push({ dimension: d1, label: "FAIL", tone: "fail", basis: `${report.duplicateExecutions} Doppelausführung(en) im Zielsystem nachgewiesen.` });
+    rows.push({ dimension: d1, label: "FAIL", tone: "fail", basis: duplicateFindingDe(file) });
   } else if (report.coverage.writeCalls > 0 && !report.operations.some((op) => op.outcome === "EXECUTION_UNKNOWN")) {
-    rows.push({ dimension: d1, label: "PASS", tone: "pass", basis: `${report.coverage.writeCalls} Schreibaufruf(e) beobachtet, keine Doppelausführung.${report.effectProbe?.conclusion === "deduplicated" ? " Gezählt wurden Datensätze (Wirkungs-Sonde): Wiederholungen haben keinen zweiten erzeugt." : ""}` });
+    rows.push({ dimension: d1, label: "PASS", tone: "pass", basis: `${report.coverage.writeCalls} Schreibaufruf(e) beobachtet, keine Doppelausführung (Zählweise: ${countingBasis(report).textDe}).${report.effectProbe?.conclusion === "deduplicated" ? " Gezählt wurden Datensätze (Wirkungs-Sonde): Wiederholungen haben keinen zweiten erzeugt." : ""}` });
   } else {
     rows.push(notTested(d1, report.coverage.writeCalls === 0 ? "Es wurde kein Schreibvorgang beobachtet." : "Der Ausgang mindestens eines Vorgangs blieb offen; weder bestätigt noch als doppelt nachgewiesen."));
   }
@@ -216,7 +236,7 @@ function businessMatrix(file: ReportFile): MatrixRow[] {
   }
 
   // 4. Schnittstellen-Absicherung
-  const d4 = "Schnittstellen-Absicherung (MCP-Tool-Schemas)";
+  const d4 = "Schnittstellen-Schema (nur die Beschreibung der Tools, ohne Wirkung im Lauf)";
   const audit = file.schema_audit;
   if (!audit) rows.push(notTested(d4, "Die Datei enthält kein Schnittstellen-Gutachten."));
   else if (audit.highRiskToolsCount > 0) {
@@ -235,7 +255,12 @@ function businessMatrix(file: ReportFile): MatrixRow[] {
       basis: `Schreib-Tools ohne Idempotenz-Schlüssel: ${audit.writeToolsWithoutIdempotencyKey.length}; ohne Nachsehen-Möglichkeit: ${audit.writeToolsWithoutLookupTool.length}.`,
     });
   } else {
-    rows.push({ dimension: d4, label: "PASS", tone: "pass", basis: `Alle ${audit.writeToolsCount} Schreib-Tool(s) sind gegen Doppelausführung abgesichert (Risiko NIEDRIG).` });
+    rows.push({
+      dimension: d4,
+      label: "KEY-FELD VORHANDEN",
+      tone: "muted",
+      basis: `Das Schema bietet bei allen ${audit.writeToolsCount} Schreib-Tool(s) ein Key-Feld und ein Nachsehen ohne ID (Risiko NIEDRIG). Ob der Upstream das Feld beachtet, zeigt der Lauf (erste Zeile).${(report?.duplicateExecutions ?? 0) > 0 ? " Im Lauf wurde trotzdem doppelt ausgeführt: Das Feld allein schützt nicht." : ""}`,
+    });
   }
   return rows;
 }
@@ -256,7 +281,7 @@ function summarySection(file: ReportFile): Section {
   return {
     id: "management-summary",
     title: "1. Management Summary & Geschäftsrisiko-Matrix",
-    intro: "Die Matrix beurteilt vier konkrete Risikodimensionen ausschliesslich anhand der Messdaten dieses einen Laufs.",
+    intro: "Die ersten drei Zeilen beurteilen Risikodimensionen anhand der Messdaten dieses einen Laufs; die vierte beschreibt nur das Schema der Tools und widerspricht dem Laufergebnis nie.",
     blocks: [
       { t: "table", head: ["Risikodimension", "Bewertung", "Grundlage (Messdaten)"], rows: rows.map((r) => [[r.dimension], [badgeOf(r.label, r.tone)], [r.basis]]) },
       ...(effectProbeLinesDe(file.report).length > 0
@@ -293,14 +318,18 @@ function schemaSection(file: ReportFile): Section {
     { t: "p", rich: [audit.summaryDe] },
     { t: "table", head: ["Tool-Name", "Einordnung", "Idempotenz-Schlüssel", "Nachsehen ohne ID", "MCP-Annotationen", "Risikostufe"], rows: audit.tools.map(toolRow) },
   ];
+  // Mit Lizenz gerendert, ohne Lizenz aufgezeichnet: die Befunde stehen nicht in der Datei. Das ist keine Entwarnung.
+  const noFindingsBecauseUnlicensed = recordedWithoutLicense(file);
+  if (noFindingsBecauseUnlicensed) blocks.push({ t: "p", rich: [{ strong: RECORDED_WITHOUT_LICENSE_DE }, " Die Risikostufen in der Tabelle sind echt; die Befunde je Tool fehlen."] });
   const order: SchemaRiskLevel[] = ["HIGH", "MEDIUM", "LOW"];
-  const detail = audit.tools.filter((t) => t.classification !== "read").sort((a, b) => order.indexOf(a.riskLevel) - order.indexOf(b.riskLevel));
+  const detail = audit.tools.filter((t) => t.classification !== "read" || t.classificationNoteDe).sort((a, b) => order.indexOf(a.riskLevel) - order.indexOf(b.riskLevel));
   for (const tool of detail) {
     const body: Block[] = [];
     if (tool.findingsDe.length > 0) body.push({ t: "list", items: tool.findingsDe.map((f) => [f]) });
+    else if (noFindingsBecauseUnlicensed) body.push({ t: "p", rich: ["Befunde fehlen: Der Lauf wurde ohne Lizenz aufgezeichnet (siehe oben)."] });
     else body.push({ t: "p", rich: ["Keine Befunde."] });
     if (tool.recommendedSchemaPatch) {
-      body.push({ t: "p", rich: ["Vorschlag für das Schema (unter ", { code: "properties" }, " des Tools eintragen):"] });
+      body.push({ t: "p", rich: ["Allgemeiner Vorschlag (Muster, an das Tool und den Server anzupassen; der Server muss das Feld auch auswerten), unter ", { code: "properties" }, " des Tools eintragen:"] });
       body.push({ t: "pre", text: `"idempotency_key": ${JSON.stringify(tool.recommendedSchemaPatch, null, 2)}` });
     }
     blocks.push({
@@ -424,7 +453,7 @@ function claimSection(file: ReportFile, options: DossierOptions): Section {
 }
 
 const VERIFY_STEPS = [
-  "Den deutschen System-Prompt-Baustein unten in den System-Prompt des Agenten übernehmen (am Ende anfügen, Wortlaut nicht kürzen).",
+  "Den deutschen System-Prompt-Baustein oben in den System-Prompt des Agenten übernehmen (am Ende anfügen, Wortlaut nicht kürzen).",
   "Denselben Szenario-Lauf mit demselben Aufbau, derselben Aufgabe und demselben Modell wiederholen (gleiche Proxy-Optionen und Report-Datei an einem neuen Ort).",
   "Beide Berichte vergleichen: Das Gesamturteil und die Zeilen der Geschäftsrisiko-Matrix sollen sich verbessern. Ein einzelner Lauf belegt keine Quote; mehrere Läufe wiederholen.",
 ];
@@ -434,7 +463,12 @@ function hardeningSection(file: ReportFile): Section {
   if (file.recommended_prompt_patch_de) {
     blocks.push({ t: "h3", text: "System-Prompt-Baustein (Deutsch, kopierfertig)" }, { t: "pre", text: file.recommended_prompt_patch_de });
   } else {
-    blocks.push({ t: "p", rich: ["Die Datei enthält keinen deutschen Prompt-Baustein."] });
+    blocks.push({
+      t: "p",
+      rich: recordedWithoutLicense(file)
+        ? [{ strong: RECORDED_WITHOUT_LICENSE_DE }, " Ein Baustein lässt sich aus dieser Datei nicht erzeugen."]
+        : ["Die Datei enthält keinen deutschen Prompt-Baustein."],
+    });
   }
   for (const patch of file.patches ?? []) {
     blocks.push({
@@ -453,25 +487,78 @@ function hardeningSection(file: ReportFile): Section {
   return { id: "hardening", title: "5. Empfohlenes Härtungspaket (Prompt-Baustein & Architektur)", blocks };
 }
 
-function integritySection(file: ReportFile, options: DossierOptions): Section {
-  const result = verifyReportIntegrity(file);
-  const label = result.valid ? "Integrität bestätigt" : file.integrity ? "Integritäts-Prüfung fehlgeschlagen" : "Kein Nachweis enthalten";
-  const blocks: Block[] = [{ t: "p", rich: [badgeOf(label, result.valid ? "pass" : file.integrity ? "fail" : "muted"), ` ${result.reasonDe}`] }];
+function integrityBadge(check: IntegrityCheck): { label: string; tone: Tone } {
+  switch (check.status) {
+    case "ok":
+      // Bewusst neutral: Es wurde nur geprüft, ob die Datei zu ihrer eigenen Prüfsumme passt.
+      return { label: "Selbstprüfung: Prüfsumme stimmt", tone: "muted" };
+    case "mismatch":
+      return { label: "Prüfsumme stimmt nicht", tone: "fail" };
+    case "legacy":
+      return { label: "Prüfsumme nicht prüfbar (Harness < 0.11.1)", tone: "warn" };
+    case "missing":
+      return { label: "Kein Nachweis enthalten", tone: "muted" };
+    default:
+      return { label: "Prüfsumme nicht prüfbar", tone: "warn" };
+  }
+}
+
+// Ein Satz für den Kopf des Dossiers, wenn die Report-Datei ihre Prüfsumme nicht besteht oder keine hat.
+function integrityWarningDe(check: IntegrityCheck): string | null {
+  switch (check.status) {
+    case "ok":
+      return null;
+    case "mismatch":
+      return `ACHTUNG: Die Prüfsumme der Report-Datei stimmt nicht${check.changedFields.length > 0 ? ` (geänderte Felder: ${check.changedFields.join(", ")})` : ""}. Urteil und Score sind nicht belastbar.`;
+    case "legacy":
+      return "Die Prüfsumme der Report-Datei stammt aus Harness < 0.11.1 und deckt das Urteil nicht ab: Das Urteil ist ungeprüft.";
+    case "missing":
+      return "Die Report-Datei trägt keine Prüfsumme: Das Urteil ist ungeprüft.";
+    default:
+      return "Die Prüfsumme der Report-Datei lässt sich nicht prüfen: Das Urteil ist ungeprüft.";
+  }
+}
+
+function integritySection(file: ReportFile, options: DossierOptions, check: IntegrityCheck, seal: DossierSeal): Section {
+  const badge = integrityBadge(check);
+  const blocks: Block[] = [
+    {
+      t: "p",
+      rich: [
+        badgeOf(badge.label, badge.tone),
+        ` ${check.reasonDe} Geprüft wurde beim Erzeugen dieses Dossiers nur, ob die Report-Datei zu ihrer eigenen Prüfsumme passt.`,
+      ],
+    },
+  ];
   if (file.integrity) {
     blocks.push({
       t: "table",
       head: ["Merkmal", "Wert"],
       rows: [
-        [["Verfahren"], [{ code: file.integrity.algorithm }]],
-        [["Prüfsumme (payloadSha256)"], [{ code: String(file.integrity.payloadSha256) }]],
+        [["Verfahren"], [{ code: file.integrity.algorithm }, file.integrity.formatVersion ? ` (Format ${file.integrity.formatVersion})` : " (Format 1, Harness < 0.11.1)"]],
+        [["Gedeckt"], [file.integrity.formatVersion ? "die ganze Report-Datei ausser integrity und claim_check (Urteil, Score, Szenario, Operationen, Zeitleiste, Einordnung, Lizenzstatus, Harness-Version)" : "report, schema_audit, call_forensics, Harness-Version (ohne Urteil und Score)"]],
+        [["Prüfsumme der Report-Datei (payloadSha256)"], [{ code: String(file.integrity.payloadSha256) }]],
         [["Aufruf-Hash-Kette (callChainHeadSha256)"], file.integrity.callChainHeadSha256 ? [{ code: file.integrity.callChainHeadSha256 }] : ["—"]],
         [["Länge der Aufruf-Kette (callChainLength)"], [String(file.integrity.callChainLength)]],
       ],
     });
   }
   blocks.push({
-    t: "p",
-    rich: ["Die Prüfsumme weist nach, dass die Datei seit dem Schreiben nicht verändert wurde, solange der Wert getrennt festgehalten wird. Sie ist keine Fremdsignatur und kein Zertifikat."],
+    t: "table",
+    head: ["Merkmal", "Wert"],
+    rows: [
+      [["Prüfsumme dieses Dossiers (SHA-256 über den eingebetteten Kern)"], [{ code: seal.sha256 }]],
+      [["Kern"], ["Urteil, Score, Szenario, Operationen, Kunden- und Systemname, Lizenzstatus, Harness-Version, Zählweise und die Prüfsumme der Report-Datei; als JSON-Kommentar am Ende dieses Dokuments"]],
+    ],
+  });
+  blocks.push({
+    t: "note",
+    title: "Was die Prüfsumme leistet und was nicht",
+    items: [
+      ["Sie zeigt, ob Report-Datei und Dossier seit dem Erzeugen unverändert sind. Nachprüfen: npx cuonztech-agent-harness verify <Dossier-Datei>, oder verify <Report-Datei>; der Befehl rechnet neu und meldet OK oder MISMATCH mit dem Grund."],
+      ["Es ist eine Prüfsumme ohne Signatur eines Dritten und kein Zertifikat. Wer die Datei und die Prüfsumme zusammen ändert, kann fälschen. Sie schützt nur, wenn der Wert getrennt von der Datei aufbewahrt wird (zum Beispiel in der Übergabe-Mail oder im Ticket) und beim Prüfen mit dem aufbewahrten Wert verglichen wird."],
+      ["Gesiegelt sind die Kernaussagen und der Kopf des Dossiers. Der Fliesstext der Abschnitte ist es nicht; er lässt sich nur über die Report-Datei prüfen."],
+    ],
   });
   // Dieselbe Quelle wie Sektion 4: eine bereits in der Datei stehende Prüfung oder die übergebene Antwort.
   const claim: ClaimCheckResult | null = file.claim_check ?? (file.report ? evaluateAgentClaim(options.agentResponse, file.report) : null);
@@ -486,7 +573,7 @@ function integritySection(file: ReportFile, options: DossierOptions): Section {
       ...(file.previousRun ? [inlineMarkup(`Der Lauf folgte auf einen früheren Lauf (archiviert unter \`${basename(file.previousRun.file)}\`). Durch den Neustart des Prüfstands gilt dieses Urteil nur für die Aufrufe nach dem Neustart.`)] : []),
     ],
   });
-  return { id: "integrity", title: "6. Kryptografischer Integritäts-Nachweis & Methodische Grenzen", blocks };
+  return { id: "integrity", title: "6. Prüfsumme (Hash) & Methodische Grenzen", blocks };
 }
 
 interface Dossier {
@@ -498,13 +585,18 @@ interface Dossier {
   scoreText: string;
   date: string;
   version: string;
+  // Direkt unter dem Urteil: was es nicht trägt (kein Schreibvorgang beobachtet, Einordnung nur geraten, Prüfsumme).
+  notes: string[];
+  warning: string | null;
   meta: Array<[string, string]>;
   sections: Section[];
+  core: DossierCore;
+  seal: DossierSeal;
 }
 
 // Gekürzte Fassung ohne gültige Lizenz (wie «Nur Zahlen» bei CPCG): Kopf, Score und das Urteil je Szenario.
 // Der Lauf und sein Urteil sind echt; Details, Aufruf-Protokoll, Härtungspaket und Anhänge gehören zum Pro-Umfang.
-function limitedSection(file: ReportFile): Section {
+function limitedSection(file: ReportFile, seal: DossierSeal, check: IntegrityCheck): Section {
   const verdict = file.verdict ?? file.report?.verdict ?? "NOT_TESTED";
   const tone: Tone = verdict === "PASS" ? "pass" : verdict === "FAIL" ? "fail" : "warn";
   const score = file.score?.overall;
@@ -531,47 +623,124 @@ function limitedSection(file: ReportFile): Section {
         title: "Umfang dieser Fassung",
         items: [
           ["Das Urteil, der Score und die Zahlen stammen aus dem echten Lauf und sind vollständig."],
-          ["Gekürzt ohne Lizenz: Geschäftsrisiko-Matrix, Schnittstellen-Gutachten, Aufruf-Protokoll mit Parameter-Diff, Abgleich mit der Antwort des Agenten, Härtungspaket und Integritäts-Nachweis."],
+          ["Gekürzt ohne Lizenz: Geschäftsrisiko-Matrix, Schnittstellen-Gutachten, Aufruf-Protokoll mit Parameter-Diff, Abgleich mit der Antwort des Agenten und Härtungspaket."],
           [`Das vollständige Prüf-Dossier gehört zum Pro-Umfang. Lizenz: ${PURCHASE_URL}`],
+          [`Prüfsumme dieses Dossiers (SHA-256): ${seal.sha256}. Selbstprüfung der Report-Datei: ${integrityBadge(check).label}. Nachprüfen mit verify <Dossier-Datei>; die Prüfsumme ist keine Signatur und schützt nur, wenn sie getrennt von der Datei aufbewahrt wird.`],
         ],
       },
     ],
   };
 }
 
+function licenseStatusText(options: DossierOptions, limited: boolean): string {
+  if (options.licenseVerdict?.valid) {
+    return `PRO (${options.licenseVerdict.claims?.sub ?? options.licenseVerdict.claims?.customer ?? "Aktiviert"})`;
+  }
+  if (limited) {
+    const why = options.licenseVerdict ? ` ${reasonSentence(options.licenseVerdict)}` : "";
+    return `EVALUATION (keine gültige Lizenz, gekürzte Fassung.${why} Lizenz: ${PURCHASE_URL})`;
+  }
+  return "EVALUATION (Bibliotheksaufruf ohne Lizenzprüfung, volle Fassung)";
+}
+
 function build(file: ReportFile, options: DossierOptions = {}): Dossier {
   const { headline, explanation } = verdictText(file);
   const score = file.score?.overall;
   const limited = options.limited === true;
+  const check = checkReportIntegrity(file);
+  const basis = countingBasis(file.report);
+  const system = clean(options.systemName ?? "MCP-Tool-Server");
+  const customer = clean(options.customerName ?? "Lokale Prüfumgebung");
+  const licenseStatus = clean(licenseStatusText(options, limited));
+  const scenarioText = clean(file.report?.scenarioId ?? file.report?.mode ?? "—");
+  const scoreText = file.report && typeof score === "number" ? `${score} / 100` : "nicht bewertet";
+  const core: DossierCore = {
+    format: "cuonztech-agent-harness-dossier",
+    formatVersion: 1,
+    renderedWith: VERSION,
+    harnessVersion: typeof file.harnessVersion === "string" ? clean(file.harnessVersion) : null,
+    generatedAt: file.generatedAt ?? file.report?.generatedAt ?? null,
+    sessionId: file.report?.sessionId ?? null,
+    scenario: file.report ? scenarioText : null,
+    system,
+    customer,
+    licenseStatus,
+    limited,
+    verdict: file.verdict ?? file.report?.verdict ?? "NOT_TESTED",
+    verdictLabel: headline,
+    tone: verdictTone(file),
+    scoreText,
+    countingBasis: basis.basis,
+    operations: (file.report?.operations ?? []).map((op) => ({ tool: clean(op.tool), attempts: op.attempts, executions: op.executions, outcome: op.outcome })),
+    reportFile: {
+      check: check.status,
+      payloadSha256: file.integrity?.payloadSha256 ?? null,
+      callChainHeadSha256: file.integrity?.callChainHeadSha256 ?? null,
+      callChainLength: typeof file.integrity?.callChainLength === "number" ? file.integrity.callChainLength : null,
+    },
+  };
+  const seal = sealDossierCore(core);
   const sections = limited
-    ? [limitedSection(file)]
-    : [summarySection(file), schemaSection(file), forensicsSection(file), claimSection(file, options), hardeningSection(file), integritySection(file, options)];
+    ? [limitedSection(file, seal, check)]
+    : [summarySection(file), schemaSection(file), forensicsSection(file), claimSection(file, options), hardeningSection(file), integritySection(file, options, check, seal)];
+  const notes = [...verdictNotesDe(file)];
+  if (recordedWithoutLicense(file) && options.licenseVerdict?.valid) notes.push(RECORDED_WITHOUT_LICENSE_DE);
   return {
     limited,
     headline,
     explanation,
     verdictLabel: headline,
     tone: verdictTone(file),
-    scoreText: file.report && typeof score === "number" ? `${score} / 100` : "nicht bewertet",
+    scoreText,
     date: formatDate(file.generatedAt ?? file.report?.generatedAt),
     version: file.harnessVersion ? `Harness ${clean(file.harnessVersion)}` : "Harness-Version nicht angegeben",
+    notes,
+    warning: integrityWarningDe(check),
     meta: [
-      ["Prüfgegenstand / System", clean(options.systemName ?? "MCP-Tool-Server")],
-      ["Auftraggeber / Umgebung", clean(options.customerName ?? "Lokale Prüfumgebung")],
+      ["Prüfgegenstand / System", system],
+      ["Auftraggeber / Umgebung", customer],
       ["Session-ID", clean(file.report?.sessionId ?? "—")],
-      ["Szenario / Modus", clean(file.report?.scenarioId ?? file.report?.mode ?? "—")],
-      [
-        "Lizenzstatus",
-        options.licenseVerdict?.valid
-          ? `PRO (${options.licenseVerdict.claims?.sub ?? options.licenseVerdict.claims?.customer ?? "Aktiviert"})`
-          : limited
-            ? `EVALUATION (keine gültige Lizenz, gekürzte Fassung; Lizenz: ${PURCHASE_URL})`
-            : "EVALUATION (Bibliotheksaufruf ohne Lizenzprüfung, volle Fassung)",
-      ],
+      ["Szenario / Modus", scenarioText],
+      ["Umfang", "Ein Lauf, ein Szenario; keine Mehrlauf-Auswertung"],
+      ["Datum der Aufzeichnung", formatDate(file.generatedAt ?? file.report?.generatedAt)],
+      ["Harness-Version (Lauf)", file.harnessVersion ? clean(file.harnessVersion) : "nicht angegeben"],
+      ["Modell / Agent", "nicht erfasst"],
+      ["Zählweise", clean(basis.textDe)],
+      ["Lizenzstatus", licenseStatus],
     ],
     sections,
+    core,
+    seal,
   };
 }
+
+// Was im sichtbaren Kopf des Dossiers stehen muss, wenn der eingebettete Kern stimmt. `verify` prüft diese
+// Zeichenfolgen im Dokument; sie sind dieselben Vorlagen wie beim Rendern.
+export function dossierHeaderChecks(core: DossierCore): { md: string[]; html: string[] } {
+  return {
+    md: [
+      mdMetaLine("Prüfgegenstand / System", core.system),
+      mdMetaLine("Auftraggeber / Umgebung", core.customer),
+      mdMetaLine("Lizenzstatus", core.licenseStatus),
+      mdVerdictLine(core.verdictLabel),
+      mdScoreLine(core.scoreText),
+    ],
+    html: [
+      htmlMetaCell("Prüfgegenstand / System", core.system),
+      htmlMetaCell("Auftraggeber / Umgebung", core.customer),
+      htmlMetaCell("Lizenzstatus", core.licenseStatus),
+      htmlVerdictBadge(core.tone, core.verdictLabel),
+      htmlScoreLine(core.scoreText),
+    ],
+  };
+}
+
+const mdMetaLine = (label: string, value: string): string => `- ${label}: **${escMd(value)}**`;
+const mdVerdictLine = (label: string): string => `**Gesamturteil: ${escMd(label)}**`;
+const mdScoreLine = (score: string): string => `Resilience Score: **${escMd(score)}**`;
+const htmlMetaCell = (label: string, value: string): string => `<div><dt>${escHtml(label)}</dt><dd>${escHtml(value)}</dd></div>`;
+const htmlVerdictBadge = (tone: string, label: string): string => `<span class="badge ${tone}">${escHtml(label)}</span>`;
+const htmlScoreLine = (score: string): string => `Resilience Score: <strong>${escHtml(score)}</strong>`;
 
 // ---------- Markdown ----------
 
@@ -607,13 +776,18 @@ function blockMd(block: Block, level: number): string[] {
 export function renderDossierMarkdown(file: ReportFile, options?: DossierOptions): string {
   const d = build(file, options ?? {});
   const lines: string[] = [`# ${TITLE}`, "", `_${escMd(d.date)} · ${escMd(d.version)}_`, ""];
-  for (const [label, value] of d.meta) lines.push(`- ${label}: **${escMd(value)}**`);
-  lines.push("", `**Gesamturteil: ${escMd(d.verdictLabel)}**`, "", escMd(d.explanation), "", `Resilience Score: **${escMd(d.scoreText)}**`, "");
+  for (const [label, value] of d.meta) lines.push(mdMetaLine(label, value));
+  lines.push("", mdVerdictLine(d.verdictLabel), "", escMd(d.explanation), "");
+  if (d.warning) lines.push(`**${escMd(d.warning)}**`, "");
+  for (const note of d.notes) lines.push(`- ${escMd(note)}`);
+  if (d.notes.length > 0) lines.push("");
+  lines.push(mdScoreLine(d.scoreText), "");
   for (const s of d.sections) {
     lines.push(`<a id="${s.id}"></a>`, "", `## ${escMd(s.title)}`, "");
     if (s.intro) lines.push(escMd(s.intro), "");
     lines.push(...s.blocks.flatMap((b) => blockMd(b, 4)));
   }
+  lines.push("", sealToComment(d.seal));
   return `${lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
 }
 
@@ -627,6 +801,7 @@ const CSS = [
   ".topline{display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:13px;color:var(--muted);font-size:.78rem}.topline strong{color:var(--green)}",
   "header{padding:44px 0 24px}.hero{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:48px;align-items:end}",
   ".hero h1{font-size:clamp(2rem,5vw,3.6rem);line-height:1.05;letter-spacing:-.035em;margin:0;max-width:760px}.hero p{max-width:70ch;color:#3f4a44;margin:18px 0 0}",
+  ".verdict-notes{margin:18px 0 0;font-size:.9rem}.verdict-notes ul{margin:8px 0 0;padding-left:20px;color:#3f4a44}.verdict-notes .alert{background:var(--red-soft);color:#78352a;padding:10px 14px;font-weight:700;margin:0}",
   ".verdict{padding:18px;background:var(--sheet);border:1px solid var(--line)}.verdict .caption{display:block;color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.1em}.verdict strong{display:block;font-size:1.2rem;margin:7px 0}.verdict p{font-size:.88rem;margin:6px 0 0;color:var(--muted)}",
   ".badge{display:inline-block;border-radius:3px;padding:3px 8px;font-size:.76rem;font-weight:700;line-height:1.45}.pass{background:var(--green-soft);color:var(--green)}.fail{background:var(--red-soft);color:#78352a}.warn{background:var(--amber-soft);color:#70460b}.muted{background:#e9eae4;color:var(--muted)}",
   ".meta{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin:30px 0 0}.meta div{padding:14px 18px 15px 0}.meta div+div{padding-left:18px;border-left:1px solid var(--line)}",
@@ -683,13 +858,18 @@ export function renderDossierHtml(file: ReportFile, options?: DossierOptions): s
     `<title>${escHtml(TITLE)}</title>`,
     `<style>${CSS}</style></head><body><main class="wrap"><header>`,
     `<div class="topline"><strong>${escHtml(TITLE)}</strong><span>${escHtml(d.date)} · ${escHtml(d.version)}</span></div>`,
-    `<div class="hero"><div><h1>${escHtml(clean(d.meta[0]![1]))}</h1><p>${d.limited ? "Gekürzte Fassung ohne Lizenz: Kopf, Score und Urteil je Szenario. Der Lauf und sein Urteil sind echt." : "Dieses Dossier fasst zusammen, wie der Agent beim Schreiben in das Zielsystem vorgegangen ist, wie gut die Schnittstellen des Servers gegen Doppelausführung abgesichert sind und was zu tun ist."}</p></div>`,
-    `<aside class="verdict"><span class="caption">Gesamturteil</span><strong><span class="badge ${d.tone}">${escHtml(d.verdictLabel)}</span></strong><p>${escHtml(d.explanation)}</p><p>Resilience Score: <strong>${escHtml(d.scoreText)}</strong></p></aside></div>`,
-    `<dl class="meta">${d.meta.map(([l, v]) => `<div><dt>${escHtml(l)}</dt><dd>${escHtml(v)}</dd></div>`).join("")}</dl>`,
+    `<div class="hero"><div><h1>${escHtml(clean(d.meta[0]![1]))}</h1><p>${d.limited ? "Gekürzte Fassung ohne Lizenz: Kopf, Score und Urteil je Szenario. Der Lauf und sein Urteil sind echt." : "Dieses Dossier fasst zusammen, wie der Agent beim Schreiben in das Zielsystem vorgegangen ist, was das Schema der Tools für die Absicherung gegen Doppelausführung hergibt und was zu tun ist."}</p></div>`,
+    `<aside class="verdict"><span class="caption">Gesamturteil</span><strong>${htmlVerdictBadge(d.tone, d.verdictLabel)}</strong><p>${escHtml(d.explanation)}</p><p>${htmlScoreLine(d.scoreText)}</p></aside></div>`,
+    d.warning || d.notes.length > 0
+      ? `<div class="verdict-notes">${d.warning ? `<p class="alert">${escHtml(d.warning)}</p>` : ""}${d.notes.length > 0 ? `<ul>${d.notes.map((n) => `<li>${escHtml(n)}</li>`).join("")}</ul>` : ""}</div>`
+      : "",
+    `<dl class="meta">${d.meta.map(([l, v]) => htmlMetaCell(l, v)).join("")}</dl>`,
     "</header>",
     sections,
     `<footer class="foot"><span>${escHtml(d.version)}</span><button class="print" type="button" onclick="window.print()">Dossier drucken / als PDF speichern</button></footer>`,
-    "</main></body></html>",
+    "</main>",
+    sealToComment(d.seal),
+    "</body></html>",
     "",
   ].join("\n");
 }

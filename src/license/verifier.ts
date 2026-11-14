@@ -5,6 +5,13 @@ function b64url(buf: Buffer | string): string {
   return Buffer.from(buf).toString("base64url");
 }
 
+/** Entfernt Leerraum (auch Zeilenumbrüche, geschützte Leerzeichen, Nullbreiten-Zeichen) und umschliessende Anführungszeichen. */
+export function normalizeLicenseKey(token: string): string {
+  return token
+    .replace(/[\s\p{Z}\p{Cf}]+/gu, "")
+    .replace(/^["'`<(\[]+|["'`>)\]]+$/g, "");
+}
+
 export function signLicense(
   claims: LicenseClaims,
   seed: string,
@@ -27,7 +34,10 @@ export function verifyLicense(
     };
   }
 
-  const clean = token.trim();
+  // Ein Code, der per E-Mail oder aus einem Terminal kopiert wurde, trägt oft Zeilenumbrüche oder Leerzeichen mitten
+  // im Text (Umbruch nach 76 bis 80 Zeichen) und manchmal Anführungszeichen. Der Code selbst enthält keinen Leerraum:
+  // Entfernen ist verlustfrei.
+  const clean = normalizeLicenseKey(token);
   // Nur CAUDIT-Codes mit ihrer eigenen Signaturdomäne. Schlüssel anderer Produkte (zum Beispiel CPCG-)
   // berechtigen nicht zum Pro-Umfang und werden hier nicht akzeptiert.
   const prefix = "CAUDIT-";

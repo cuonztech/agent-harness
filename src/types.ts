@@ -33,6 +33,9 @@ export interface ToolSchemaAuditEntry {
   canVerifyWithoutId: boolean;
   riskLevel: SchemaRiskLevel;
   findingsDe: string[];
+  // Seit 0.11.1: Zweifel an der Einordnung (Beschreibung widerspricht dem Namen, Annotation widerspricht dem Namen).
+  // Das Tool erscheint dann auch im Detail des Gutachtens, wenn es als lesend gilt.
+  classificationNoteDe?: string;
   // Kopierfertige Schema-Definition für das Feld `idempotency_key`
   // (unter `inputSchema.properties.idempotency_key` einzutragen).
   recommendedSchemaPatch: Record<string, unknown> | null;
@@ -79,6 +82,10 @@ export interface CallForensicEntry {
   // Unmittelbar vorangegangener Aufruf desselben Schreib-Tools, sonst null.
   previousWriteCallNumber: number | null;
   argumentDiff: ArgumentDiffEntry[] | null;
+  // Nur bei einer ausgeführten Wiederholung eines Schreib-Tools: Antwort des Zielsystems verglichen mit der
+  // Antwort auf den vorangegangenen Aufruf. "identical" = gleicher Text (ohne Leerraum-Unterschiede),
+  // "dedup-marker" = die Antwort nennt die Wiederholung (z. B. deduplicated, already exists).
+  answerComparedToPrevious?: "identical" | "dedup-marker" | "different" | null;
   summaryDe: string;
 }
 
@@ -112,8 +119,14 @@ export interface ClaimCheckResult {
 
 export interface ReportIntegrityProof {
   algorithm: "sha256";
-  // SHA-256 über die kanonische JSON-Fassung von harnessVersion, report, schema_audit und call_forensics.
+  // Format 2 (ab 0.11.1): die ganze Datei ausser integrity und claim_check. Fehlt das Feld, ist es Format 1
+  // (bis 0.11.0: nur report, schema_audit, call_forensics, Harness-Version) und nicht mehr prüfbar.
+  formatVersion?: number;
+  scope?: string;
+  // SHA-256 über die kanonische JSON-Fassung der gedeckten Felder (siehe README, «Prüfsumme und verify»).
   payloadSha256: string;
+  // SHA-256 je Feld oberster Ebene: damit `verify` bei einer Abweichung sagen kann, welches Feld sich geändert hat.
+  fieldSha256?: Record<string, string>;
   // Kopf der Hash-Kette über call_forensics.entries; null ohne Einträge.
   callChainHeadSha256: string | null;
   callChainLength: number;

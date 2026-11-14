@@ -96,8 +96,8 @@ export function lockedNotice(feature: ProFeature, verdict: LicenseVerdict): stri
 export function shortenedNotice(feature: ProFeature, verdict: LicenseVerdict): string {
   const f = PRO_FEATURES[feature];
   return (
-    `Keine gültige Lizenz: ${f.name} gehört zum Pro-Umfang. ${reasonSentence(verdict)} ` +
-    `Die Ausgabe ist gekürzt; der Lauf, das Urteil und der Exit-Code sind echt. ` +
+    `WARNUNG: Die Ausgabe ist gekürzt. Keine gültige Lizenz: ${f.name} gehört zum Pro-Umfang. ${reasonSentence(verdict)} ` +
+    `Der Lauf, das Urteil und der Score sind echt. Der Befehl endet trotzdem mit Exit-Code 0, denn die gekürzte Fassung ist frei: Eine Pipeline erkennt die fehlende oder abgelaufene Lizenz daran nicht. ` +
     `Frei bleiben: ${FREE_SCOPE_DE}. Lizenz: ${PURCHASE_URL}`
   );
 }

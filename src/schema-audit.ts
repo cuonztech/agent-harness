@@ -4,6 +4,7 @@
 // beschreibt das Schema, nicht das Verhalten eines Agenten.
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { classifyUpstreamTool } from "./proxy/interceptor.js";
+import { DEFAULT_KEY_FIELDS, isKeyField } from "./engine/state-machine.js";
 import type {
   SchemaAuditReport,
   SchemaRiskLevel,
@@ -16,22 +17,22 @@ export interface SchemaAuditOptions {
   // Wie bei --write-tools / --read-tools: ersetzt die Namensmuster.
   writeToolPatterns?: string[];
   readToolPatterns?: string[];
+  // Wie bei --key-fields: Feldnamen, die einen Schlüssel tragen. Standard: dieselbe Liste wie im Lauf (DEFAULT_KEY_FIELDS).
+  keyFields?: string[];
 }
 
-// Felder, die auf einen Idempotenz-Schlüssel hindeuten (verglichen ohne
-// Gross-/Kleinschreibung und ohne Trennzeichen: idempotency_key = idempotencyKey).
-const IDEMPOTENCY_FIELDS = new Set([
-  "idempotencykey",
-  "requestid",
-  "clientreferenceid",
-  "dedupkey",
-  "transactionid",
-]);
+// Felder, die das Gutachten zusätzlich als Schlüssel gelten lässt, obwohl der Proxy sie im Lauf nicht von sich aus
+// kennt (zu oft ein fachliches Datum): ohne Trennzeichen und Gross-/Kleinschreibung verglichen. Für diese steht der
+// Hinweis, --key-fields anzugeben.
+const SCHEMA_ONLY_KEY_FIELDS = new Set(["transactionid", "clientreferenceid"]);
 
-const IDEMPOTENCY_PATCH: Record<string, unknown> = {
-  type: "string",
-  description: "Eindeutiger Schlüssel zur Vermeidung von Doppelausführungen bei Wiederholungsversuchen",
-};
+// Allgemeiner Mustervorschlag; die Beschreibung nennt das Tool, die Logik ist für jedes Tool dieselbe.
+function idempotencyPatch(toolName: string): Record<string, unknown> {
+  return {
+    type: "string",
+    description: `Eindeutiger Schlüssel für diesen Aufruf von ${shown(toolName)}: Bei einer Wiederholung nach einem Timeout denselben Wert noch einmal senden, damit der Server den Vorgang nur einmal ausführt.`,
+  };
+}
 
 // Verben am Anfang eines Tool-Namens; sie sagen nichts über das Objekt, auf das
 // das Tool wirkt ("create_booking" und "list_bookings" betreffen "booking").
@@ -79,6 +80,23 @@ function isGenericLookup(name: string): boolean {
 
 function normalizedFieldName(name: string): string {
   return name.replace(/[^A-Za-z0-9]/g, "").toLowerCase();
+}
+
+// Das erste Schlüsselfeld des Tools: oberste Ebene zuerst, dann eine Ebene tiefer ("meta.request_id").
+function findKeyField(tool: ToolInput, keyFields: string[]): { name: string; nested: boolean } | null {
+  const properties = tool.inputSchema?.properties;
+  if (properties === null || typeof properties !== "object") return null;
+  for (const name of Object.keys(properties)) {
+    if (isKeyField(name, keyFields) || SCHEMA_ONLY_KEY_FIELDS.has(normalizedFieldName(name))) return { name, nested: false };
+  }
+  for (const [name, def] of Object.entries(properties)) {
+    const inner = def !== null && typeof def === "object" ? (def as { properties?: unknown }).properties : undefined;
+    if (inner === null || typeof inner !== "object" || inner === undefined) continue;
+    for (const child of Object.keys(inner as Record<string, unknown>)) {
+      if (isKeyField(child, keyFields)) return { name: `${name}.${child}`, nested: true };
+    }
+  }
+  return null;
 }
 
 function isIdField(field: string): boolean {
@@ -158,16 +176,45 @@ export function auditToolSchemas(tools: ToolInput[], options: SchemaAuditOptions
     writeToolPatterns: options.writeToolPatterns ?? [],
     readToolPatterns: options.readToolPatterns ?? [],
   };
-  const classOf = (tool: ToolInput): SchemaToolClassification => {
-    const c = classifyUpstreamTool(tool as unknown as Tool, config).class;
-    return c === "unclassified" ? "ambiguous" : c;
+  const keyFields = options.keyFields && options.keyFields.length > 0 ? options.keyFields : DEFAULT_KEY_FIELDS;
+  // Einordnung samt Zweifel (0.11.1): Widerspricht die Beschreibung dem Namen oder die Annotation dem Namen, steht das
+  // im Gutachten, statt dass ein Tool stillschweigend als Schreib-Tool mit Risiko HOCH oder als «Lesend, NIEDRIG» geführt wird.
+  interface Placed {
+    classification: SchemaToolClassification;
+    note?: string;
+    // Die Beschreibung widerspricht einem Schreib-Tool nach dem Namen: kein Risiko HOCH daraus.
+    readLooking?: boolean;
+  }
+  const place = (tool: ToolInput): Placed => {
+    const result = classifyUpstreamTool(tool as unknown as Tool, config);
+    const base: SchemaToolClassification = result.class === "unclassified" ? "ambiguous" : result.class;
+    if (result.doubtDe) {
+      return {
+        classification: "ambiguous",
+        note: `Zweifel an der Einordnung: Das Tool wurde ${result.doubtDe}.`,
+        readLooking: result.class === "write",
+      };
+    }
+    if (result.source.startsWith("annotation") && (base === "read" || base === "write")) {
+      const byName = classifyUpstreamTool({ ...(tool as unknown as Tool), annotations: undefined }, config);
+      if ((byName.class === "write" || byName.class === "read") && byName.class !== base) {
+        const nameSays = byName.class === "write" ? "schreibend" : "lesend";
+        const annotationSays = base === "read" ? "lesend (readOnlyHint=true)" : "schreibend";
+        return {
+          classification: base,
+          note: `Widerspruch zwischen Name und Annotation: Der Name ${shown(tool.name)} sieht ${nameSays} aus, die Annotation sagt ${annotationSays}. Das Gutachten folgt der Annotation; stimmt sie nicht, bleiben Doppelausführungen über dieses Tool unsichtbar.`,
+        };
+      }
+    }
+    return { classification: base };
   };
-  const classified = tools.map((tool) => ({ tool, classification: classOf(tool) }));
+  const classified = tools.map((tool) => ({ tool, ...place(tool) }));
   const readTools = classified.filter((c) => c.classification === "read").map((c) => c.tool);
 
-  const entries: ToolSchemaAuditEntry[] = classified.map(({ tool, classification }) => {
+  const entries: ToolSchemaAuditEntry[] = classified.map(({ tool, classification, note, readLooking }) => {
     const isWrite = classification !== "read";
-    const keyField = propertyNames(tool).find((p) => IDEMPOTENCY_FIELDS.has(normalizedFieldName(p))) ?? null;
+    const keyMatch = findKeyField(tool, keyFields);
+    const keyField = keyMatch?.name ?? null;
     const hasKey = keyField !== null;
     const annotated = hasAnnotations(tool);
 
@@ -184,11 +231,17 @@ export function auditToolSchemas(tools: ToolInput[], options: SchemaAuditOptions
     if (isWrite) {
       if (!hasKey && !canVerify) risk = "HIGH";
       else if (!hasKey || !canVerify) risk = "MEDIUM";
+      // Beschreibt nur Lesen, heisst nur dem Namen nach «update_*»: Das ist kein Befund HOCH, sondern eine offene Einordnung.
+      if (readLooking && risk === "HIGH") risk = "MEDIUM";
+    } else if (note) {
+      // Annotation und Name widersprechen sich: nicht «NIEDRIG», solange das ungeklärt ist.
+      risk = "MEDIUM";
     }
 
     const findings: string[] = [];
+    if (note) findings.push(note);
     if (isWrite) {
-      if (classification === "ambiguous") {
+      if (classification === "ambiguous" && !note) {
         findings.push(
           "Das Tool lässt sich weder über Annotationen noch über den Namen eindeutig als lesend oder schreibend einordnen und wird hier vorsichtshalber wie ein Schreib-Tool beurteilt.",
         );
@@ -197,10 +250,14 @@ export function auditToolSchemas(tools: ToolInput[], options: SchemaAuditOptions
         findings.push(
           "Kein Idempotenz-Schlüssel (z. B. idempotency_key) im Schema definiert — das Zielsystem kann wiederholte Schreibbefehle nach einem Timeout nicht anhand eines Schlüssels als Duplikat erkennen.",
         );
-      } else if (keyField !== "idempotency_key") {
-        // Der Proxy liest im Lauf nur idempotency_key, andere Feldnamen erst mit --key-fields.
+      } else if (keyMatch?.nested) {
         findings.push(
-          `Hinweis: Das Schlüsselfeld heisst '${shown(keyField)}' statt 'idempotency_key' — beim Proxy-Start --key-fields ${shown(keyField)} angeben, damit der Harness den Schlüssel im Lauf auswertet.`,
+          `Hinweis: Das Schlüsselfeld liegt verschachtelt ('${shown(keyField)}'). Der Harness wertet im Lauf nur Felder der obersten Ebene aus; dieser Schlüssel wird dort nicht erkannt, eine Wiederholung unter neuem Wert sähe wie ein anderer Vorgang aus.`,
+        );
+      } else if (!isKeyField(keyField, keyFields)) {
+        // Der Proxy kennt im Lauf nur seine Standardliste; andere Feldnamen erst mit --key-fields.
+        findings.push(
+          `Hinweis: Das Schlüsselfeld heisst '${shown(keyField)}' und steht nicht in der Standardliste — beim Proxy-Start --key-fields ${shown(keyField)} angeben, damit der Harness den Schlüssel im Lauf auswertet.`,
         );
       }
       if (!canVerify) {
@@ -225,7 +282,8 @@ export function auditToolSchemas(tools: ToolInput[], options: SchemaAuditOptions
       canVerifyWithoutId: canVerify,
       riskLevel: risk,
       findingsDe: findings,
-      recommendedSchemaPatch: isWrite && !hasKey ? { ...IDEMPOTENCY_PATCH } : null,
+      ...(note ? { classificationNoteDe: note } : {}),
+      recommendedSchemaPatch: isWrite && !hasKey ? idempotencyPatch(tool.name) : null,
     };
   });
 
@@ -244,14 +302,18 @@ export function auditToolSchemas(tools: ToolInput[], options: SchemaAuditOptions
     writeToolsWithoutLookupTool,
     highRiskToolsCount,
     tools: entries,
-    summaryDe: summarize(
-      entries.length,
-      count("write"),
-      count("read"),
-      count("ambiguous"),
-      writeToolsWithoutIdempotencyKey,
-      writeToolsWithoutLookupTool,
-      highRiskToolsCount,
-    ),
+    summaryDe:
+      summarize(
+        entries.length,
+        count("write"),
+        count("read"),
+        count("ambiguous"),
+        writeToolsWithoutIdempotencyKey,
+        writeToolsWithoutLookupTool,
+        highRiskToolsCount,
+      ) +
+      (entries.some((e) => e.classificationNoteDe)
+        ? ` ${entries.filter((e) => e.classificationNoteDe).length} ${entries.filter((e) => e.classificationNoteDe).length === 1 ? "Tool hat" : "Tools haben"} einen Zweifel an der Einordnung (Widerspruch zwischen Name, Beschreibung oder Annotation; siehe Befunde).`
+        : ""),
   };
 }

@@ -88,6 +88,8 @@ export interface SessionState {
   // description contradicts, by tool name (see proxy/classification-doubt.ts).
   // Shown as a note when such a tool was called; never changes a class.
   classificationDoubts?: Map<string, string>;
+  // The same doubts in German (for the readable reports).
+  classificationDoubtsDe?: Map<string, string>;
   // Proxy mode: tools classified from a verb inside their name only (a guess). Named in the report
   // when called, because a wrong guess is invisible otherwise.
   verbWordGuesses?: Set<string>;
@@ -203,6 +205,15 @@ export const DEFAULT_KEY_FIELDS: string[] = [
   "dedupe_key",
   "dedup_key",
   "nonce",
+  // 0.11.1: further names that are unambiguous per-attempt identifiers (not a business datum): the caller's own reference
+  // for one call, request tokens and the HTTP-header style names. NOT in the list: uuid, token, key, reference, external_id,
+  // transaction_id, correlation_id, operation_id, txn_id, order_ref (each can be a business datum); use --key-fields for those.
+  "client_ref",
+  "client_reference",
+  "request_token",
+  "idempotency_id",
+  "x_request_id",
+  "x_idempotency_key",
 ];
 
 export const DEFAULT_RETRY_AFTER_SEC = 60;

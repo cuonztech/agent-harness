@@ -131,22 +131,84 @@ function firstSentence(description: string): string {
   return (end === -1 ? text : text.slice(0, end + 1)).toLowerCase();
 }
 
-export function classificationDoubt(tool: Tool, cls: ToolClass, source: string): string | undefined {
+// 0.11.1 (hint only, the classification rules above and in verb-words.ts stay as they are): verbs that take
+// something from a counter or a pool and so change state, although the tool reads like a getter
+// ("Allocates a fresh invoice number", "each call issues a new code"), plus the "each call ..." phrasing
+// that puts the verb behind a subject.
+const HINT_VERBS = new Set([
+  "allocates", "dispenses", "consumes", "issues", "generates", "reserves", "assigns", "claims", "mints",
+  "increments", "decrements", "dequeues", "advances", "rotates", "regenerates", "leases", "burns",
+  "vergibt", "reserviert", "verbraucht", "erzeugt", "erhöht", "erhoeht",
+]);
+// The bare form only at the very start ("Allocate a fresh number").
+const BARE_HINT_VERBS = new Set(["allocate", "dispense", "consume", "issue", "generate", "reserve", "assign", "claim", "mint", "increment", "decrement", "dequeue", "lease"]);
+// "Each call issues a new code", "Jeder Aufruf erzeugt ...": the subject names the call, the verb changes state.
+const PER_CALL_WORDS = new Set(["call", "time", "invocation", "request", "use", "run", "aufruf", "mal", "abruf"]);
+const EACH_WORDS = new Set(["each", "every", "jeder", "jeden", "jedes", "bei"]);
+
+// describesWriting plus the hint-only verbs, for classificationDoubt only. A verb counts at the start of a clause,
+// after a comma or conjunction, or right behind "each call"; negations around it cancel it as in describesWriting.
+export function describesWritingHint(description: string): string | null {
+  const base = describesWriting(description);
+  if (base !== null) return base;
+  const text = description.slice(0, MAX_DESCRIPTION).replace(/\s+/g, " ");
+  for (const clause of text.split(/[.;!?]+/)) {
+    const tokens = tokenize(clause);
+    for (let i = 0; i < tokens.length; i++) {
+      const word = tokens[i];
+      if (!HINT_VERBS.has(word) && !(i === 0 && BARE_HINT_VERBS.has(word))) continue;
+      const prev = i > 0 ? tokens[i - 1] : null;
+      const afterEachCall = i >= 2 && PER_CALL_WORDS.has(tokens[i - 1]) && EACH_WORDS.has(tokens[i - 2]);
+      const inVerbPosition = prev === null || prev === "," || CONJUNCTIONS.has(prev) || afterEachCall;
+      if (!inVerbPosition) continue;
+      const negated =
+        tokens.slice(0, i).some((t) => NEGATIONS.has(t)) ||
+        tokens.slice(i + 1, i + 1 + NEGATION_AFTER).some((t) => NEGATIONS.has(t));
+      if (!negated) return word;
+    }
+  }
+  return null;
+}
+
+export interface ClassificationDoubtText {
+  en: string;
+  de: string;
+}
+
+export function classificationDoubtText(tool: Tool, cls: ToolClass, source: string): ClassificationDoubtText | undefined {
   const description = tool.description;
   if (!description) return undefined;
   const nameBased = source === "default write pattern" || source === "read prefix" || source === "verb word in name";
   if (!nameBased) return undefined;
   if (cls === "read") {
-    const verb = describesWriting(description);
+    const verb = describesWritingHint(description);
     return verb
-      ? `taken for a read by its name, but its description says it "${verb}" — if it writes, duplicates through it stay invisible (set --write-tools or the readOnlyHint annotation)`
+      ? {
+          en: `taken for a read by its name, but its description says it "${verb}" — if it writes, duplicates through it stay invisible (set --write-tools or the readOnlyHint annotation)`,
+          de: `nach dem Namen als Lese-Tool eingeordnet, die Beschreibung sagt aber, dass es «${verb}»: Schreibt es, bleiben Doppelausführungen darüber unsichtbar (mit --write-tools oder der Annotation readOnlyHint festlegen)`,
+        }
       : undefined;
   }
   if (cls === "write") {
     const first = firstSentence(description);
     if (READ_ONLY_PHRASES.some((p) => first.includes(p))) {
-      return "taken for a write by its name, but its description says it only reads — calls to it may be treated as writes (set --read-tools or the readOnlyHint annotation)";
+      return {
+        en: "taken for a write by its name, but its description says it only reads — calls to it may be treated as writes (set --read-tools or the readOnlyHint annotation)",
+        de: "nach dem Namen als Schreib-Tool eingeordnet, die Beschreibung sagt aber, dass es nur liest: Aufrufe können als Schreibvorgang gewertet werden (mit --read-tools oder der Annotation readOnlyHint festlegen)",
+      };
+    }
+    // 0.11.1: "update_status_view": "Shows the current status view." The description opens with a read verb and names
+    // no write verb anywhere.
+    if (descriptionOpensWithReadVerb(description) && describesWritingHint(description) === null) {
+      return {
+        en: "taken for a write by its name, but its description opens with a read verb and names nothing that is written — calls to it may be treated as writes (set --read-tools or the readOnlyHint annotation)",
+        de: "nach dem Namen als Schreib-Tool eingeordnet, die Beschreibung beginnt aber mit einem Lese-Verb und nennt nichts, was geschrieben wird: Aufrufe können als Schreibvorgang gewertet werden (mit --read-tools oder der Annotation readOnlyHint festlegen)",
+      };
     }
   }
   return undefined;
+}
+
+export function classificationDoubt(tool: Tool, cls: ToolClass, source: string): string | undefined {
+  return classificationDoubtText(tool, cls, source)?.en;
 }

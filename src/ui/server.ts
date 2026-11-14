@@ -19,7 +19,10 @@ import { runBenchmark, defaultConfig, type ReferenceRun } from "../benchmark/run
 import { VERSION } from "../version.js";
 import { PAGE_HTML } from "./page.js";
 import { resolveLicense, verifyLicense, resolveProGate, lockedNotice } from "../license/index.js";
+import { expandEqualsForm, optionName, redactSecrets } from "../cli-args.js";
 
+// Platzhalter statt Lizenzcode in erzeugten Befehlen und Konfigurationen.
+const LICENSE_PLACEHOLDER = "<DEIN-LIZENZCODE>";
 const MAX_BODY = 64 * 1024;
 const MAX_NAME = 200;
 const MAX_AGENT_RESPONSE = 10_000;
@@ -168,9 +171,6 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
   };
 
   let currentLicenseVerdict = resolveLicense(options.licenseKey);
-  // Nur ein ausdrücklich übergebener, gültiger Schlüssel wird in die erzeugte Agenten-Konfiguration übernommen
-  // (damit der Proxy des Agenten die Pro-Teile in den Report schreibt); aus der Umgebung stammende nie.
-  let explicitLicenseKey: string | undefined = options.licenseKey;
 
   const dossierOptions = (): {
     customerName?: string;
@@ -236,7 +236,6 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
       const body = await readJson(req);
       const key = typeof body.key === "string" ? body.key.trim() : "";
       currentLicenseVerdict = verifyLicense(key);
-      explicitLicenseKey = key;
       return sendJson(res, 200, {
         valid: currentLicenseVerdict.valid,
         tier: currentLicenseVerdict.tier ?? "evaluation",
@@ -287,11 +286,24 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
         "--allow-writes",
         "--audit-tools", "off",
         "--report-file", reportFile,
-        ...(currentLicenseVerdict.valid && explicitLicenseKey ? ["--license", explicitLicenseKey] : []),
       ];
-      const claudeCode = ["claude mcp add --scope user agent-harness --", process.execPath, ...proxyArgs].map((p, i) => (i === 0 ? p : quoteArg(p))).join(" ");
-      const claudeDesktop = JSON.stringify({ mcpServers: { "agent-harness": { command: process.execPath, args: proxyArgs } } }, null, 2);
-      return sendJson(res, 200, { claudeCode, claudeDesktop, reportFile, scenario });
+      // Der Lizenzcode steht nie in dem, was die Oberfläche ausgibt (Befehl, Konfigurationsdatei, Prozessliste): Mit
+      // gültiger Lizenz kommt ein Platzhalter für die Umgebungsvariable des Proxys hinein, den der Nutzer ersetzt.
+      const withLicense = currentLicenseVerdict.valid;
+      const claudeCode = [
+        withLicense ? `claude mcp add --scope user -e AGENT_AUDIT_LICENSE=${LICENSE_PLACEHOLDER} agent-harness --` : "claude mcp add --scope user agent-harness --",
+        process.execPath,
+        ...proxyArgs,
+      ].map((p, i) => (i === 0 ? p : quoteArg(p))).join(" ");
+      const claudeDesktop = JSON.stringify(
+        { mcpServers: { "agent-harness": { command: process.execPath, args: proxyArgs, ...(withLicense ? { env: { AGENT_AUDIT_LICENSE: LICENSE_PLACEHOLDER } } : {}) } } },
+        null,
+        2,
+      );
+      const licenseHint = withLicense
+        ? `Ersetze ${LICENSE_PLACEHOLDER} durch deinen Lizenzcode (aus der E-Mail), damit der Proxy deines Agenten Textbausteine und Schema-Befunde in den Bericht schreibt. Der Code steht aus Sicherheitsgründen nicht in diesem Befehl. Ohne ihn läuft der Test vollständig, der Bericht enthält die Pro-Teile aber nicht, und das Dossier sagt das ausdrücklich.`
+        : "";
+      return sendJson(res, 200, { claudeCode, claudeDesktop, reportFile, scenario, licenseHint });
     }
     if (req.method === "POST" && url.pathname === "/api/dossier-meta") {
       const body = await readJson(req);
@@ -391,6 +403,8 @@ export async function runUiMode(argv: string[]): Promise<number> {
     );
     return 0;
   }
+  // --flag=wert gilt wie --flag wert, auch für --license.
+  argv = expandEqualsForm(argv, new Set(["--license", "--port"]));
   let port: number | undefined;
   let open = true;
   let licenseKey: string | undefined;
@@ -399,6 +413,10 @@ export async function runUiMode(argv: string[]): Promise<number> {
     if (token === "--no-open") open = false;
     else if (token === "--license") {
       licenseKey = argv[++i] ?? "";
+      if (licenseKey.trim() === "" || licenseKey.startsWith("--")) {
+        process.stderr.write("Error: --license needs a key.\nUsage: ui [--port <n>] [--no-open] [--license <key>]\n");
+        return 1;
+      }
     } else if (token === "--port") {
       if (port !== undefined) {
         process.stderr.write("Error: option --port was given more than once.\n");
@@ -406,12 +424,12 @@ export async function runUiMode(argv: string[]): Promise<number> {
       }
       const raw = argv[++i] ?? "";
       if (!/^\d+$/.test(raw) || Number(raw) > 65535) {
-        process.stderr.write(`Error: --port must be a number between 0 and 65535, got "${raw}".\n`);
+        process.stderr.write(`Error: --port must be a number between 0 and 65535, got "${redactSecrets(raw)}".\n`);
         return 1;
       }
       port = Number(raw);
     } else {
-      process.stderr.write(`Error: unknown option ${token}\nUsage: ui [--port <n>] [--no-open]\n`);
+      process.stderr.write(`Error: unknown option ${optionName(token)}\nUsage: ui [--port <n>] [--no-open] [--license <key>]\n`);
       return 1;
     }
   }

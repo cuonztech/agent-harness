@@ -183,7 +183,12 @@ describe("Ganzer Weg: Konfiguration der Oberfläche → Agent → Bericht", () =
     expect(before.json.state).toBe("waiting");
 
     const { json: cfg } = await api("/api/config", { command: "node", args: [BUNDLED], confirmedTestsystem: true });
-    expect(cfg.claudeCode).toContain("claude mcp add --scope user agent-harness --");
+    // Mit gültiger Lizenz (Test-Suite): Platzhalter für den Lizenzcode, nie der Code selbst.
+    expect(cfg.claudeCode).toContain("claude mcp add --scope user -e AGENT_AUDIT_LICENSE=<DEIN-LIZENZCODE> agent-harness --");
+    expect(cfg.claudeCode).not.toContain("CAUDIT-");
+    expect(cfg.claudeDesktop).not.toContain("CAUDIT-");
+    expect(cfg.claudeDesktop).toContain("<DEIN-LIZENZCODE>");
+    expect(cfg.licenseHint).toContain("Lizenzcode");
     expect(cfg.claudeCode).toContain("--scenario F1");
     expect(cfg.claudeCode).toContain("--allow-writes");
     expect(cfg.reportFile.startsWith(workDir)).toBe(true);

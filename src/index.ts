@@ -10,17 +10,20 @@ import { auditToolSchemas } from "./schema-audit.js";
 import { generateReport } from "./core/report-generator.js";
 import type { EffectProbeConfig } from "./core/effect-probe.js";
 import { buildCallForensics } from "./core/call-forensics.js";
-import { computeReportIntegrity } from "./core/artifact-integrity.js";
+import { sealReportFile } from "./core/artifact-integrity.js";
 import { ProxyInterceptor } from "./proxy/interceptor.js";
 import { runDoctor } from "./doctor.js";
 import { runReportMode } from "./plain-report.js";
+import { runVerifyMode } from "./verify.js";
 import { archivePreviousReportSync, isReplaceableReportFile, isReservedFileName, notReplaceableMessage, type ArchivedReportInfo } from "./report-file-guard.js";
 import { runUiMode } from "./ui/server.js";
 import { runCampaignMode } from "./campaign/runner.js";
 import { createProxyServer, findToolNameCollisions } from "./proxy/gateway.js";
 import { resolveProGate, reduceSchemaAudit, reasonSentence, FREE_SCOPE_DE, PURCHASE_URL } from "./license/index.js";
 import { getScenarioById, ALL_SCENARIOS } from "./scenarios/f1-f5.js";
+import { DEFAULT_KEY_FIELDS } from "./engine/state-machine.js";
 import { VERSION } from "./version.js";
+import { optionName, redactSecrets } from "./cli-args.js";
 import { writeFile, mkdir, rename, stat, realpath, unlink } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { writeFileSync, mkdirSync, statSync, lstatSync, existsSync } from "node:fs";
@@ -33,7 +36,10 @@ function printHelp(): void {
     `cuonztech-agent-harness — chaos/idempotency test harness for MCP agents\n\n` +
       `Usage:\n` +
       `  cuonztech-agent-harness                   Start as an MCP server (stdio, demo/self-test sessions)\n` +
-      `  cuonztech-agent-harness --version         Print the version (also: -v)\n` +
+      `  cuonztech-agent-harness --version         Print the version (also: -v, version)\n` +
+      `  cuonztech-agent-harness verify <dossier|report-file> [--report <file>] [--expect <sha256>]\n` +
+      `                                             Recompute the checksum of a report file or dossier and\n` +
+      `                                             print OK or MISMATCH with the reason (exit 0 / 1).\n` +
       `  cuonztech-agent-harness --help            Print this help (also: -h, help)\n` +
       `  cuonztech-agent-harness benchmark [opts]   Run the harness self-test (two fixed reference agents;\n` +
       `                                             "evaluate" is an alias)\n` +
@@ -48,9 +54,10 @@ function printHelp(): void {
       `                                             Turn the proxy's --report-file into a plain-language\n` +
       `                                             page (German): result, what the agent did, limits.\n` +
       `  cuonztech-agent-harness campaign [--runs <n>] [--format md|html] [--out <file>]    (Pro)\n` +
-      `                                             Before/after comparison of three fixed reference\n` +
-      `                                             profiles incl. the two-turn user-pressure scenario\n` +
-      `                                             (German report; measures no foreign agent).\n` +
+      `                                             SIMULATION of three fixed reference profiles (scripts,\n` +
+      `                                             no model, no prompt) incl. the two-turn user-pressure\n` +
+      `                                             scenario; measures neither your upstream nor your agent.\n` +
+      `                                             (German report; runs are deterministic.)\n` +
       `  cuonztech-agent-harness proxy --upstream-command <cmd> [opts]\n` +
       `                                             Run as a transparent chaos proxy\n` +
       `                                             in front of a real upstream MCP server\n\n` +
@@ -70,7 +77,7 @@ function printHelp(): void {
       `  --upstream-env-var KEY=VALUE   One env var for the upstream process; repeatable.\n` +
       `                                  The value may contain commas.\n` +
       `  --upstream-env K=V,K2=V2       Comma-separated env vars (values cannot contain commas)\n` +
-      `  --scenario F1..F5              Activate one deterministic scenario\n` +
+      `  --scenario F1..F5              Activate one deterministic scenario (lower case f1 works too)\n` +
       `  --allow-writes                 Required with --scenario and with --mode chaos (error\n` +
       `                                  rate > 0): confirms that --upstream-command points at a\n` +
       `                                  disposable test/staging system. The agent's writes are\n` +
@@ -151,7 +158,7 @@ function parseFlags(
       return { help: true };
     }
     if (!token.startsWith("--")) {
-      return { error: `unexpected argument "${token}".` };
+      return { error: `unexpected argument "${optionName(token)}".` };
     }
     // "--flag=value" form
     let inlineValue: string | undefined;
@@ -162,7 +169,7 @@ function parseFlags(
     }
     const kind = spec[token];
     if (!kind) {
-      return { error: `unknown option "${token}".` };
+      return { error: `unknown option "${optionName(token)}".` };
     }
     // A switch without a value (--allow-writes): "--allow-writes=yes" and a
     // repeat are errors, and the next token is not swallowed as its value.
@@ -327,6 +334,8 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
 }
 
 function fail(message: string): never {
+  // Ein Lizenzcode, der in eine Meldung geraten ist (falsch gesetzte Option), bleibt draussen.
+  message = redactSecrets(message);
   writeStartupFailureSync(message);
   process.stderr.write(`Error: ${message}\nRun with --help for usage.\n`);
   process.exit(1);
@@ -365,7 +374,7 @@ async function main(): Promise<void> {
 
   if (mode === "--help" || mode === "-h" || mode === "help") {
     printHelp();
-  } else if (mode === "--version" || mode === "-v") {
+  } else if (mode === "--version" || mode === "-v" || mode === "version") {
     process.stdout.write(`${VERSION}\n`);
   } else if (mode === "benchmark" || mode === "evaluate") {
     await runBenchmarkMode(args.slice(1));
@@ -375,6 +384,8 @@ async function main(): Promise<void> {
     process.exitCode = await runDoctor(args.slice(1));
   } else if (mode === "report") {
     process.exitCode = await runReportMode(args.slice(1));
+  } else if (mode === "verify") {
+    process.exitCode = await runVerifyMode(args.slice(1));
   } else if (mode === "campaign") {
     process.exitCode = await runCampaignMode(args.slice(1));
   } else if (mode === "ui") {
@@ -386,7 +397,7 @@ async function main(): Promise<void> {
     server.server.onclose = () => process.exit(0);
     await startStdio(server);
   } else {
-    fail(`unknown command "${mode}". Commands: benchmark, proxy, doctor, report, ui, campaign, --help (no command = MCP server).`);
+    fail(`unknown command "${mode}". Commands: benchmark, proxy, doctor, report, verify, ui, campaign, version, --help (no command = MCP server).`);
   }
 }
 
@@ -486,7 +497,8 @@ async function runProxyMode(argv: string[]): Promise<void> {
     parseEnvPair(pair, "--upstream-env-var", upstreamEnv);
   }
 
-  const scenarioId = one("--scenario");
+  // f1 gilt wie F1 (die Szenario-Kennungen sind F1 bis F5).
+  const scenarioId = one("--scenario")?.trim().toUpperCase();
   if (scenarioId !== undefined && !getScenarioById(scenarioId)) {
     fail(
       `unknown scenario "${scenarioId}". Valid: ${ALL_SCENARIOS.map((s) => s.id).join(", ")}`,
@@ -782,7 +794,7 @@ async function runProxyMode(argv: string[]): Promise<void> {
 
   const upstreamTools = interceptor.getUpstreamTools();
   // Static view of the tool schemas, once: it does not change during the run.
-  const schemaAudit = auditToolSchemas(upstreamTools, { writeToolPatterns, readToolPatterns });
+  const schemaAudit = auditToolSchemas(upstreamTools, { writeToolPatterns, readToolPatterns, keyFields });
 
   const collisions = findToolNameCollisions(upstreamTools);
   if (auditTools && collisions.length > 0) {
@@ -841,13 +853,20 @@ async function runProxyMode(argv: string[]): Promise<void> {
       ? `Idempotency-key argument recognized on: ${keyCapable.map(shown).join(", ")}`
       : "NOTE: no upstream tool has an argument recognized as an idempotency key " +
           "(looked for: " +
-          (keyFields ?? ["idempotency_key"]).join(", ") +
+          (keyFields ?? DEFAULT_KEY_FIELDS).join(", ") +
           "). " +
           (keyFields
             ? "Check the names given to --key-fields against the tools' input schemas."
-            : "If your tools use another name (request_id, client_token, ...), pass " +
+            : "If your tools use another name (uuid, reference, correlation_id, txn_id, ...), pass " +
               "--key-fields — otherwise a retry under a new such value looks like a different operation."),
   );
+  const writesWithoutKey = classification.filter((c) => c.class === "write" && !keyCapable.includes(c.name));
+  if (keyCapable.length > 0 && writesWithoutKey.length > 0) {
+    log(
+      `NOTE: no idempotency-key argument was recognized on the write tool(s) ${writesWithoutKey.map((c) => shown(c.name)).join(", ")}. ` +
+        "A retry of these under a new key value stays invisible as the same operation; if one of their arguments is such a key, pass --key-fields.",
+    );
+  }
   log(
     "Only tools are proxied. The upstream's resources, prompts and notifications are not forwarded.",
   );
@@ -898,8 +917,8 @@ async function runProxyMode(argv: string[]): Promise<void> {
       const callForensics = buildCallForensics(interceptor.getSession());
       // Ohne Lizenz: Schema-Gutachten nur mit Zusammenfassung und Risikostufe, ohne Textbausteine.
       const reportedSchemaAudit = gate.pro ? schemaAudit : reduceSchemaAudit(schemaAudit);
-      const body = JSON.stringify(
-        {
+      // Die Prüfsumme deckt die ganze Datei ausser integrity und claim_check (siehe core/artifact-integrity.ts).
+      const content = {
           harnessVersion: VERSION,
           // Constant: a self-test, never a certificate.
           certification: "UNVERIFIED_FOR_PRODUCTION",
@@ -907,6 +926,8 @@ async function runProxyMode(argv: string[]): Promise<void> {
           verdict: report.verdict,
           report,
           score,
+          // Lizenzstatus beim Aufzeichnen: Textbausteine und Schema-Befunde entstehen nur mit gültiger Lizenz.
+          recordedWithLicense: gate.pro,
           ...(gate.pro
             ? { patches }
             : {
@@ -937,18 +958,10 @@ async function runProxyMode(argv: string[]): Promise<void> {
             : {}),
           schema_audit: reportedSchemaAudit,
           call_forensics: callForensics,
-          integrity: computeReportIntegrity({
-            harnessVersion: VERSION,
-            report,
-            schema_audit: reportedSchemaAudit,
-            call_forensics: callForensics,
-          }),
           toolClassification: classification,
           generatedAt: new Date().toISOString(),
-        },
-        null,
-        2,
-      );
+        };
+      const body = JSON.stringify(sealReportFile(content), null, 2);
       ensureDirSync(dirname(reportTarget));
       // A fresh, unpredictable temp name, created exclusively: a fixed
       // "<file>.tmp" was followed if someone had put a symlink there, and
@@ -1102,7 +1115,7 @@ async function runBenchmarkMode(argv: string[]): Promise<void> {
   }
   const scenariosRaw = one("--scenarios");
   if (scenariosRaw !== undefined) {
-    config.scenarios = [...new Set(scenariosRaw.split(",").map((s) => s.trim()))];
+    config.scenarios = [...new Set(scenariosRaw.split(",").map((s) => s.trim().toUpperCase()))];
   }
 
   const unknown = config.scenarios.filter((id) => !getScenarioById(id));

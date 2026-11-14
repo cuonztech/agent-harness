@@ -121,6 +121,9 @@ function checkUpstreamScript(command: string, args: string[], cwd: string): Chec
 
 async function checkReportFile(path: string): Promise<Check> {
   const target = resolve(path);
+  if (existsSync(target) && (await stat(target)).isDirectory()) {
+    return { ok: false, label: `Report-Datei: ${target}`, detail: "Das Ziel ist ein Ordner, keine Datei.", fix: "Einen Dateinamen für --report-file angeben, zum Beispiel harness-report.json." };
+  }
   if (isReservedFileName(path)) {
     return { ok: false, label: `Report-Datei: ${path}`, detail: "Der Name enthält einen reservierten Gerätenamen oder ein \":\" und ist keine nutzbare Datei.", fix: "Anderen Dateinamen für --report-file wählen." };
   }

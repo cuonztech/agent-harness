@@ -3,7 +3,8 @@
 // prüft tests/license-gate.test.ts und baut seine Umgebung selbst.
 //
 // Die Test-Lizenz wird mit einem frisch erzeugten Schlüsselpaar signiert und über den Test-Schlüssel-Override
-// geprüft (AGENT_AUDIT_LICENSE_PUBLIC_KEY, in CI zusätzlich AGENT_AUDIT_ALLOW_TEST_KEY=1). Der Signierschlüssel
+// geprüft (AGENT_AUDIT_LICENSE_PUBLIC_KEY, in CI zusätzlich AGENT_AUDIT_ALLOW_TEST_KEY=1). Seit 0.11.1 wirkt der Override
+// nur im Source-Checkout (tests/support/license-test-key.cjs, nicht im npm-Paket). Der Signierschlüssel
 // des Lizenzdienstes kommt nirgends vor. Kindprozesse erben diese Umgebung.
 import { generateLicenseKeyPair, signLicense } from "../../src/license/index.js";
 

@@ -21,7 +21,7 @@ import { computeScore } from "../src/benchmark/score.js";
 import { renderMarkdown, type ReportFile } from "../src/plain-report.js";
 import { buildCallForensics } from "../src/core/call-forensics.js";
 import { evaluateAgentClaim } from "../src/core/claim-check.js";
-import { computeReportIntegrity, verifyReportIntegrity } from "../src/core/artifact-integrity.js";
+import { computeReportIntegrity, sealReportFile, verifyReportIntegrity } from "../src/core/artifact-integrity.js";
 import type { CallForensicReport } from "../src/types.js";
 
 const ESZETT = String.fromCharCode(0xdf);
@@ -77,9 +77,20 @@ describe("AP 2", () => {
       inputSchema: { properties: field ? { [field]: { type: "string" }, guest: { type: "string" } } : { guest: { type: "string" } } },
     });
     const hint = (name: string) =>
-      `Hinweis: Das Schlüsselfeld heisst '${name}' statt 'idempotency_key' — beim Proxy-Start --key-fields ${name} angeben, damit der Harness den Schlüssel im Lauf auswertet.`;
+      `Hinweis: Das Schlüsselfeld heisst '${name}' und steht nicht in der Standardliste — beim Proxy-Start --key-fields ${name} angeben, damit der Harness den Schlüssel im Lauf auswertet.`;
 
-    it.each(["request_id", "idempotencyKey", "transactionId", "dedup_key", "client_reference_id"])(
+    // Ab 0.11.1 kennt der Proxy seine Standardliste auch im Gutachten: für diese Namen gibt es keinen Hinweis mehr.
+    it.each(["request_id", "idempotencyKey", "dedup_key", "client_ref", "x_request_id"])(
+      "Standardname %s: Schlüssel erkannt, kein --key-fields-Hinweis",
+      (field) => {
+        const entry = auditToolSchemas([tool("create_booking", field)]).tools[0]!;
+        expect(entry.hasIdempotencyKey).toBe(true);
+        expect(entry.idempotencyFieldName).toBe(field);
+        expect(entry.findingsDe.some((f) => f.startsWith("Hinweis: Das Schlüsselfeld"))).toBe(false);
+      },
+    );
+
+    it.each(["transactionId", "client_reference_id"])(
       "ergänzt bei dem Schlüsselfeld %s den --key-fields-Hinweis",
       (field) => {
         const entry = auditToolSchemas([tool("create_booking", field)]).tools[0]!;
@@ -97,11 +108,11 @@ describe("AP 2", () => {
     });
 
     it("gibt den Hinweis auch für unklar eingeordnete Tools aus, nicht für Lese-Tools", () => {
-      const report = auditToolSchemas([tool("frobnicate", "request_id"), tool("get_booking", "request_id")]);
+      const report = auditToolSchemas([tool("frobnicate", "transactionId"), tool("get_booking", "transactionId")]);
       const ambiguous = report.tools.find((t) => t.name === "frobnicate")!;
       const read = report.tools.find((t) => t.name === "get_booking")!;
       expect(ambiguous.classification).toBe("ambiguous");
-      expect(ambiguous.findingsDe).toContain(hint("request_id"));
+      expect(ambiguous.findingsDe).toContain(hint("transactionId"));
       expect(read.findingsDe).toEqual([]);
     });
 
@@ -605,9 +616,8 @@ describe("AP 2", () => {
         { name: "get_booking", inputSchema: { properties: { guest: { type: "string" } } } },
       ]);
       const call_forensics = buildCallForensics(session);
-      const integrity = computeReportIntegrity({ harnessVersion: "9.9.9", report, schema_audit, call_forensics });
-      // Wie in der Datei auf der Platte: einmal durch JSON.
-      return JSON.parse(JSON.stringify({ harnessVersion: "9.9.9", verdict: report.verdict, report, schema_audit, call_forensics, integrity })) as ReportFile;
+      // Wie in der Datei auf der Platte: einmal durch JSON, Prüfsumme über die ganze Datei (Format 2).
+      return JSON.parse(JSON.stringify(sealReportFile({ harnessVersion: "9.9.9", verdict: report.verdict, report, schema_audit, call_forensics }))) as ReportFile;
     }
 
     it("weist eine unveränderte Datei als gültig aus", () => {
@@ -624,7 +634,8 @@ describe("AP 2", () => {
 
     it("ist deterministisch und unabhängig von der Schlüsselreihenfolge", () => {
       const file = makeFile();
-      const a = computeReportIntegrity({ harnessVersion: "9.9.9", report: file.report!, schema_audit: file.schema_audit, call_forensics: file.call_forensics });
+      const { integrity: _own, ...content } = file;
+      const a = computeReportIntegrity({ ...content, report: file.report! });
       const reverseKeys = (v: unknown): unknown =>
         Array.isArray(v)
           ? v.map(reverseKeys)
@@ -633,7 +644,7 @@ describe("AP 2", () => {
             : v;
       const reversed = reverseKeys(file.report) as AuditReport;
       expect(Object.keys(reversed)).toEqual(Object.keys(file.report!).reverse());
-      const b = computeReportIntegrity({ harnessVersion: "9.9.9", report: reversed, schema_audit: file.schema_audit, call_forensics: file.call_forensics });
+      const b = computeReportIntegrity({ ...content, report: reversed });
       expect(b).toEqual(a);
       expect(a).toEqual(file.integrity);
     });

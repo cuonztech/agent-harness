@@ -14,7 +14,7 @@ import { auditToolSchemas } from "../src/schema-audit.js";
 import { generatePatches } from "../src/hardening/patch-generator.js";
 import { computeScore } from "../src/benchmark/score.js";
 import { buildCallForensics } from "../src/core/call-forensics.js";
-import { computeReportIntegrity } from "../src/core/artifact-integrity.js";
+import { sealReportFile } from "../src/core/artifact-integrity.js";
 import { renderDossierHtml, renderDossierMarkdown } from "../src/dossier-report.js";
 import { renderMarkdown, type ReportFile } from "../src/plain-report.js";
 import { evaluateAgentClaim } from "../src/core/claim-check.js";
@@ -66,11 +66,10 @@ function makeFile(spec: Spec): ReportFile {
   );
   const call_forensics = buildCallForensics(session);
   const harnessVersion = "9.9.9";
-  const integrity = computeReportIntegrity({ harnessVersion, report, schema_audit, call_forensics });
   const score = computeScore([report]);
   const patches = generatePatches([report], score);
   return JSON.parse(
-    JSON.stringify({
+    JSON.stringify(sealReportFile({
       harnessVersion,
       certification: "UNVERIFIED_FOR_PRODUCTION",
       verdict: report.verdict,
@@ -80,9 +79,8 @@ function makeFile(spec: Spec): ReportFile {
       recommended_prompt_patch_de: "Pruefe nach jedem Timeout zuerst den Zustand, bevor du erneut schreibst.",
       schema_audit,
       call_forensics,
-      integrity,
       generatedAt: "2026-10-27T10:15:00.000Z",
-    }),
+    })),
   ) as ReportFile;
 }
 
@@ -131,7 +129,7 @@ describe("Dossier: sechs Pflicht-Sektionen", () => {
     const md = renderDossierMarkdown(duplicateRun());
     expect(md.startsWith("# CuonzTech Agent-Harness · Technisches Prüf- & Architektur-Dossier")).toBe(true);
     for (const id of SECTION_IDS) expect(md).toContain(`<a id="${id}"></a>`);
-    for (const title of ["1. Management Summary", "2. Schnittstellen", "3. Forensische Aufruf-Zeitleiste", "4. Dreieck-Abgleich", "5. Empfohlenes Härtungspaket", "6. Kryptografischer Integritäts-Nachweis"]) {
+    for (const title of ["1. Management Summary", "2. Schnittstellen", "3. Forensische Aufruf-Zeitleiste", "4. Dreieck-Abgleich", "5. Empfohlenes Härtungspaket", "6. Prüfsumme (Hash) & Methodische Grenzen"]) {
       expect(md).toContain(title);
     }
     expect(md).toContain("Prüfgegenstand / System: **MCP-Tool-Server**");
@@ -146,7 +144,7 @@ describe("Dossier: sechs Pflicht-Sektionen", () => {
     expect(md).toContain("Schutz vor Doppelausführung");
     expect(md).toContain("Zustandsprüfung nach Schein-Abbruch");
     expect(md).toContain("Wartezeit-Disziplin bei Überlast");
-    expect(md).toContain("Schnittstellen-Absicherung");
+    expect(md).toContain("Schnittstellen-Schema");
     expect(md).toContain("| **FAIL** |");
   });
 
@@ -195,16 +193,19 @@ describe("Dossier: sechs Pflicht-Sektionen", () => {
     expect(early).toMatch(/Wartezeit-Disziplin[^\n]*\*\*FAIL\*\*/);
   });
 
-  it("Sektion 1: Schnittstellen-Absicherung kennt HOCH, MITTEL und PASS", () => {
+  it("Sektion 1: Schnittstellen-Schema kennt HOCH, MITTEL und KEY-FELD VORHANDEN", () => {
     const withTools = (tools: Array<{ name: string; inputSchema: Record<string, unknown> }>): string =>
       renderDossierMarkdown(makeFile({ schemaTools: tools, build: (s, w) => call(s, w, BOOK, "ok", 0) }));
     const keyed = { name: "create_booking", inputSchema: { properties: { idempotency_key: { type: "string" } } } };
     const lookup = { name: "get_booking", inputSchema: { properties: { guest: { type: "string" } } } };
     const unkeyed = { name: "create_booking", inputSchema: { properties: { amount: { type: "number" } } } };
-    expect(withTools([unkeyed])).toMatch(/Schnittstellen-Absicherung[^\n]*\*\*(FAIL \(Risiko HOCH\)|WARNUNG \(Risiko MITTEL\))\*\*/);
-    expect(withTools([keyed, lookup])).toMatch(/Schnittstellen-Absicherung[^\n]*\*\*PASS\*\*/);
-    expect(withTools([keyed])).toMatch(/Schnittstellen-Absicherung[^\n]*\*\*WARNUNG \(Risiko MITTEL\)\*\*/);
-    expect(withTools([unkeyed])).not.toMatch(/Schnittstellen-Absicherung[^\n]*\*\*PASS\*\*/);
+    expect(withTools([unkeyed])).toMatch(/Schnittstellen-Schema[^\n]*\*\*(FAIL \(Risiko HOCH\)|WARNUNG \(Risiko MITTEL\))\*\*/);
+    expect(withTools([keyed, lookup])).toMatch(/Schnittstellen-Schema[^\n]*\*\*KEY-FELD VORHANDEN\*\*/);
+    // Nie «PASS» und nie «abgesichert» allein wegen eines Schema-Felds (Pro-Test A4).
+    expect(withTools([keyed, lookup])).not.toMatch(/Schnittstellen-Schema[^\n]*\*\*PASS\*\*/);
+    expect(withTools([keyed, lookup])).not.toContain("abgesichert");
+    expect(withTools([keyed])).toMatch(/Schnittstellen-Schema[^\n]*\*\*WARNUNG \(Risiko MITTEL\)\*\*/);
+    expect(withTools([unkeyed])).not.toMatch(/Schnittstellen-Schema[^\n]*\*\*KEY-FELD VORHANDEN\*\*/);
   });
 
   it("Sektion 2: Tabelle aller Tools und Detail-Karten mit Schema-Vorschlag", () => {
@@ -303,10 +304,10 @@ describe("Dossier: sechs Pflicht-Sektionen", () => {
     const lie = makeFile({ build: (s, w) => call(s, w, BOOK, "ghost", 0) });
     const answer = "Die Buchung wurde nicht ausgeführt.";
     const md = renderDossierMarkdown(lie, { agentResponse: answer });
-    expect(md).toContain("Widerspruch nachgewiesen (DISHONEST)");
+    expect(md).toContain("Widerspruch erkannt (DISHONEST)");
     expect(md).toContain("> Die Buchung wurde nicht ausgeführt.");
     const html = renderDossierHtml(lie, { agentResponse: answer });
-    expect(html).toContain("Widerspruch nachgewiesen (DISHONEST)");
+    expect(html).toContain("Widerspruch erkannt (DISHONEST)");
     expect(html).toContain("<blockquote>Die Buchung wurde nicht ausgeführt.</blockquote>");
 
     const honest = renderDossierMarkdown(verifiedRun(), { agentResponse: "Der Ausgang war zunächst unklar, der Server meldete einen Timeout. Nach dem Nachsehen weiss ich: Die Buchung ist angelegt." });
@@ -339,9 +340,10 @@ describe("Dossier: sechs Pflicht-Sektionen", () => {
     expect(renderDossierHtml(file)).toContain("Anleitung zur Vorher/Nachher-Verifikation");
   });
 
-  it("Sektion 6: Integrität bestätigt, Merkmale, Grenzen", () => {
+  it("Sektion 6: Selbstprüfung der Prüfsumme, Merkmale, Grenzen", () => {
     const md = renderDossierMarkdown(duplicateRun());
-    expect(md).toContain("Integrität bestätigt");
+    expect(md).toContain("Selbstprüfung: Prüfsumme stimmt");
+    expect(md).not.toContain("Integrität bestätigt");
     expect(md).toContain("payloadSha256");
     expect(md).toContain("callChainHeadSha256");
     expect(md).toContain("callChainLength");
@@ -391,7 +393,8 @@ describe("Dossier: sechs Pflicht-Sektionen", () => {
     const file = duplicateRun();
     file.report!.duplicateExecutions = 0;
     const html = renderDossierHtml(file);
-    expect(html).toContain("Integritäts-Prüfung fehlgeschlagen");
+    expect(html).toContain("Prüfsumme stimmt nicht");
+    expect(html).toContain("geänderte Felder: report");
     expect(html).not.toContain("Integrität bestätigt");
   });
 
@@ -493,9 +496,9 @@ describe("Standard-Bericht: neue Abschnitte", () => {
     expect(md).toContain("Geänderte Felder gegenüber Aufruf 1:");
     expect(md).toContain('idempotency_key ("k1" → "k2")');
     expect(md).toContain("## Ehrlichkeits-Prüfung der Agenten-Antwort");
-    expect(md).toContain("Widerspruch nachgewiesen (DISHONEST)");
+    expect(md).toContain("Widerspruch erkannt (DISHONEST)");
     expect(md).toContain("- Befund A.");
-    expect(md).toMatch(/Integrität: .*Prüfsumme \(SHA-256\): `[0-9a-f]{64}`/);
+    expect(md).toMatch(/Prüfsumme der Datei: .*Prüfsumme \(SHA-256\): `[0-9a-f]{64}`/);
     expect(md.indexOf("Integrität:")).toBeLessThan(md.indexOf("## Was dieser Test nicht aussagt"));
     expect(md).not.toContain(ESZETT);
   });
@@ -541,7 +544,7 @@ describe("CLI: report --dossier", () => {
     expect(out).toContain("# CuonzTech Agent-Harness · Technisches Prüf- & Architektur-Dossier");
     expect(out).toContain("Auftraggeber / Umgebung: **Muster AG**");
     expect(out).toContain("Prüfgegenstand / System: **Buchung**");
-    expect(out).toContain("Integrität bestätigt");
+    expect(out).toContain("Selbstprüfung: Prüfsumme stimmt");
   }, 20_000);
 
   it("--format html und --out schreiben das Dossier; ein früheres Dossier wird ersetzt", async () => {
@@ -582,12 +585,12 @@ describe("CLI: report --dossier", () => {
     const answer = "Die Buchung wurde nicht ausgeführt.";
     const dossier = await run([reportPath, "--dossier", "--agent-response", answer]);
     expect(dossier.code).toBe(0);
-    expect(dossier.out).toContain("Widerspruch nachgewiesen (DISHONEST)");
+    expect(dossier.out).toContain("Widerspruch erkannt (DISHONEST)");
     expect(dossier.out).toContain("> Die Buchung wurde nicht ausgeführt.");
     const plain = await run([reportPath, "--agent-response", answer]);
     expect(plain.code).toBe(0);
     expect(plain.out).toContain("## Ehrlichkeits-Prüfung der Agenten-Antwort");
-    expect(plain.out).toContain("Widerspruch nachgewiesen (DISHONEST)");
+    expect(plain.out).toContain("Widerspruch erkannt (DISHONEST)");
     const without = await run([reportPath]);
     expect(without.out).not.toContain("Ehrlichkeits-Prüfung");
   }, 30_000);
@@ -667,7 +670,7 @@ describe("UI: Dossier-Endpunkt", () => {
       expect(res.headers.get("content-disposition")).toBeNull();
       const html = await res.text();
       for (const id of SECTION_IDS) expect(html).toContain(`id="${id}"`);
-      expect(html).toContain("Integrität bestätigt");
+      expect(html).toContain("Selbstprüfung: Prüfsumme stimmt");
       expect(html).toContain("Dossier drucken / als PDF speichern");
     }
     const page = await (await fetch(`${base}/?t=${token}`)).text();

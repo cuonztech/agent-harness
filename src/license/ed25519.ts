@@ -1,4 +1,8 @@
 import crypto from "node:crypto";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { LICENSE_PUBLIC_KEY } from "./publicKey.js";
 
 export type SignDomain = "caudit-license-v1" | "caudit-grant-v1" | "cpcg-license-v1" | "cpcg-grant-v1";
@@ -29,24 +33,24 @@ export function signEd25519(domain: SignDomain, payload: string, seedB64: string
   return crypto.sign(null, Buffer.from(`${domain}.${payload}`), key).toString("base64url");
 }
 
-function isCiEnvironment(env: NodeJS.ProcessEnv): boolean {
-  const on = (v: string | undefined): boolean => v !== undefined && v !== "" && !/^(0|false|no)$/i.test(v);
-  return on(env.CI) || on(env.GITHUB_ACTIONS);
+// Test-Schlüssel-Override: nur in einem Source-Checkout. Die Datei liegt in tests/support/ und gehört nicht zum
+// veröffentlichten Paket (siehe "files" in package.json); im installierten Paket gibt es sie nicht, und eine
+// Umgebungsvariable allein (AGENT_AUDIT_LICENSE_PUBLIC_KEY) ändert den Schlüssel nicht mehr. Bis 0.11.0 konnte sich
+// jeder mit dieser Variable und dem mitgelieferten signLicense() einen Pro-Code selbst signieren.
+function testKeyOverride(env: NodeJS.ProcessEnv): string | null {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url)); // dist/license oder src/license
+    const candidate = join(here, "..", "..", "tests", "support", "license-test-key.cjs");
+    if (!existsSync(candidate)) return null;
+    const hook = createRequire(import.meta.url)(candidate) as (e: NodeJS.ProcessEnv) => string | null;
+    return typeof hook === "function" ? hook(env) : null;
+  } catch {
+    return null;
+  }
 }
 
-let warnedKeyOverride = false;
-
 export function defaultPublicKey(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.AGENT_AUDIT_LICENSE_PUBLIC_KEY;
-  if (!override) return LICENSE_PUBLIC_KEY;
-  if (isCiEnvironment(env) && env.AGENT_AUDIT_ALLOW_TEST_KEY !== "1") {
-    if (!warnedKeyOverride) {
-      warnedKeyOverride = true;
-      console.warn("⚠ Lizenz-Schlüssel-Override wird in CI ignoriert (eingebetteter Schlüssel gilt).");
-    }
-    return LICENSE_PUBLIC_KEY;
-  }
-  return override;
+  return testKeyOverride(env) ?? LICENSE_PUBLIC_KEY;
 }
 
 export function verifyEd25519(

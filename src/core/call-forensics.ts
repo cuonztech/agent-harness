@@ -79,6 +79,23 @@ function describeRejection(record: CallRecord): string {
   return "Mit einem eingespielten Fehler beantwortet";
 }
 
+// Antwort des Zielsystems (bei Schein-Abbruch die echte, nicht die dem Agenten gezeigte).
+function answerText(record: CallRecord): string {
+  return (record.upstreamResponse ?? record.response ?? "").replace(/\s+/g, " ").trim();
+}
+
+// Nennt die Antwort selbst eine Wiederholung ("deduplicated": true, "already exists", "created": false ...)?
+const DEDUP_MARKER = /(dedup(licat)?ed?|idempotent(_| |-)?replay|replayed|already[ _-]?(exists|processed|created|booked|submitted)|"created"\s*:\s*false|"duplicate"\s*:\s*true)/i;
+
+function compareAnswers(record: CallRecord, previous: CallRecord): CallForensicEntry["answerComparedToPrevious"] {
+  if (record.tookEffect !== true || previous.tookEffect !== true) return null;
+  const now = answerText(record);
+  const before = answerText(previous);
+  if (now === "" || before === "") return null;
+  if (DEDUP_MARKER.test(now) && !DEDUP_MARKER.test(before)) return "dedup-marker";
+  return now === before ? "identical" : "different";
+}
+
 function summarize(
   record: CallRecord,
   toolClass: CallForensicEntry["toolClass"],
@@ -182,6 +199,7 @@ export function buildCallForensics(session: SessionState): CallForensicReport {
       outcome: record.outcome,
       previousWriteCallNumber: previous ? previous.callNumber : null,
       argumentDiff,
+      ...(previous ? { answerComparedToPrevious: compareAnswers(record, previous) } : {}),
       summaryDe: summarize(record, toolClass, previous, differentOperation, changedNonKey.length > 0),
     });
 

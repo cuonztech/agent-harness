@@ -7,7 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { VERSION } from "../version.js";
-import { classificationDoubt } from "./classification-doubt.js";
+import { classificationDoubtText } from "./classification-doubt.js";
 import {
   classifyByDescriptionOpener,
   compoundWriteGuess,
@@ -80,6 +80,8 @@ export interface ToolClassification {
   // The tool's own description contradicts a name-based classification
   // (see classification-doubt.ts). Informational: the class is not changed.
   doubt?: string;
+  // The same in German, for the readable reports.
+  doubtDe?: string;
   // Taken from a verb inside the name: a guess, named as such at startup and in the report.
   guess?: boolean;
 }
@@ -101,8 +103,8 @@ export function classifyUpstreamTool(
   config: Pick<ProxyConfig, "writeToolPatterns" | "readToolPatterns">,
 ): ToolClassification {
   const result = classifyByRules(tool, config);
-  const doubt = classificationDoubt(tool, result.class, result.source);
-  return doubt ? { ...result, doubt } : result;
+  const doubt = classificationDoubtText(tool, result.class, result.source);
+  return doubt ? { ...result, doubt: doubt.en, doubtDe: doubt.de } : result;
 }
 
 function classifyByRules(
@@ -352,6 +354,7 @@ export class ProxyInterceptor {
       this.session.toolClassOverrides.set(entry.name, entry.class);
       if (entry.doubt) {
         (this.session.classificationDoubts ??= new Map()).set(entry.name, entry.doubt);
+        if (entry.doubtDe) (this.session.classificationDoubtsDe ??= new Map()).set(entry.name, entry.doubtDe);
       }
       if (entry.guess) (this.session.verbWordGuesses ??= new Set()).add(entry.name);
     }

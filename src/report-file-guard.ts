@@ -42,6 +42,8 @@ export function isReservedFileName(path: string): boolean {
   // "\\?\C:\dir\file" is an ordinary long-path spelling.
   const withoutDrive = path.replace(/^\\\\\?\\/, "").replace(/^[a-zA-Z]:/, "");
   if (withoutDrive.includes(":")) return true;
+  // "." and ".." (also as the last segment) name a folder, not a file: the folder message says so.
+  if (/(^|[\\/])\.{1,2}[\\/]*$/.test(withoutDrive)) return false;
   // Windows drops a trailing dot or space from a name; the file would not
   // be the one that was asked for.
   if (/[. ]$/.test(withoutDrive)) return true;

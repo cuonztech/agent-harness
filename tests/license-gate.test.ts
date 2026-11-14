@@ -312,7 +312,7 @@ describe("report --dossier", () => {
     expect(run.code).toBe(0);
     expect(run.out).toContain("PRO (H-3f9a1c0b7d42)");
     expect(run.out).not.toContain("beispiel.test");
-    expect(run.out).toContain("Integrität bestätigt");
+    expect(run.out).toContain("Selbstprüfung: Prüfsumme stimmt");
     expect(run.out).toContain("1. Management Summary & Geschäftsrisiko-Matrix");
     expect(run.out).toContain("5. Empfohlenes Härtungspaket");
     expect(run.out).not.toContain("EVALUATION");
@@ -338,7 +338,7 @@ describe("report --dossier", () => {
       expect(run.out).toContain("F1");
       expect(run.out).toContain("FAIL");
       // Details nur mit Lizenz.
-      for (const heading of ["1. Management Summary", "2. Schnittstellen- & Schema-Gutachten", "5. Empfohlenes Härtungspaket", "6. Kryptografischer Integritäts-Nachweis", "System-Prompt-Baustein", "Integrität bestätigt"]) {
+      for (const heading of ["1. Management Summary", "2. Schnittstellen- & Schema-Gutachten", "5. Empfohlenes Härtungspaket", "6. Prüfsumme (Hash) & Methodische Grenzen", "System-Prompt-Baustein", "Integrität bestätigt"]) {
         expect(run.out, heading).not.toContain(heading);
       }
       expect(run.out).not.toContain("PRO (");
@@ -495,7 +495,9 @@ describe("Bausteine der Sperre", () => {
     expect(locked).toContain("Frei bleiben: MCP-Chaos-Proxy mit den Szenarien F1 bis F5");
     expect(locked).toContain(`Lizenz: ${PURCHASE_URL}`);
     const shortened = shortenedNotice("dossier", verdict);
-    expect(shortened).toContain("Die Ausgabe ist gekürzt; der Lauf, das Urteil und der Exit-Code sind echt.");
+    expect(shortened.startsWith("WARNUNG: Die Ausgabe ist gekürzt.")).toBe(true);
+    expect(shortened).toContain("Der Lauf, das Urteil und der Score sind echt.");
+    expect(shortened).toContain("Exit-Code 0");
     for (const text of [locked, shortened]) {
       expect(text).not.toContain("cuonztech.ch/agent-audit");
       expect(text).not.toMatch(/Zertifikat|revisionssicher|garantiert|unabhängige Prüfung/i);
@@ -506,8 +508,8 @@ describe("Bausteine der Sperre", () => {
   it("Bibliotheksaufrufe ohne Angabe rendern voll; mit limited/pro=false gekürzt", async () => {
     const free = await readJson(freeFile);
     const pro = (await readJson(proFile)) as ReportFile;
-    expect(renderDossierMarkdown(pro)).toContain("6. Kryptografischer Integritäts-Nachweis");
-    expect(renderDossierMarkdown(pro, { limited: true })).not.toContain("6. Kryptografischer Integritäts-Nachweis");
+    expect(renderDossierMarkdown(pro)).toContain("6. Prüfsumme (Hash) & Methodische Grenzen");
+    expect(renderDossierMarkdown(pro, { limited: true })).not.toContain("6. Prüfsumme (Hash) & Methodische Grenzen");
     expect(renderMarkdown(pro)).toContain("GHOST_WRITE");
     expect(renderMarkdown(pro, { pro: false })).not.toContain("GHOST_WRITE");
     expect(renderMarkdown(free, { pro: false })).toContain("Härtungsvorschläge");

@@ -7,10 +7,11 @@ import type { AuditReport, OperationOutcome } from "./core/report-generator.js";
 import type { EffectProbeSummary } from "./core/effect-probe.js";
 import type { CallForensicReport, ClaimCheckResult, ClaimCheckStatus, ReportIntegrityProof, SchemaAuditReport, SchemaRiskLevel } from "./types.js";
 import { evaluateAgentClaim } from "./core/claim-check.js";
-import { verifyReportIntegrity } from "./core/artifact-integrity.js";
+import { checkReportIntegrity } from "./core/artifact-integrity.js";
 import { isReservedFileName } from "./report-file-guard.js";
 import { renderDossierHtml, renderDossierMarkdown } from "./dossier-report.js";
 import { resolveProGate, shortenedNotice, PURCHASE_URL } from "./license/index.js";
+import { expandEqualsForm, optionName, redactSecrets } from "./cli-args.js";
 
 export interface PreviousRunSummary {
   file: string;
@@ -48,8 +49,12 @@ export interface ReportFile {
   schema_audit?: SchemaAuditReport;
   // Zeitleiste aller Tool-Aufrufe mit Parameter-Diff bei Wiederholungen (optional für Leser).
   call_forensics?: CallForensicReport;
-  // Prüfsumme und Hash-Kette über harnessVersion, report, schema_audit und call_forensics.
+  // Prüfsumme (Format 2: die ganze Datei ausser integrity und claim_check) und Hash-Kette über call_forensics.
   integrity?: ReportIntegrityProof;
+  // Lizenzstatus beim Aufzeichnen (ab 0.11.1). Ohne gültige Lizenz fehlen Textbausteine und Schema-Befunde in der Datei.
+  recordedWithLicense?: boolean;
+  limitedByLicense?: boolean;
+  licenseNotice?: string;
   // Ehrlichkeits-Check der Abschluss-Antwort des Agenten (nur wenn eine Antwort übergeben wurde).
   claim_check?: ClaimCheckResult;
   // Vorläufer-Lauf, der vor dem Neustart archiviert wurde (ab 0.7.1).
@@ -65,9 +70,9 @@ function safeName(name: string): string {
   return name.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029`]/g, "?");
 }
 
-function schemaSection(audit: SchemaAuditReport, pro: boolean): string[] {
+function schemaSection(audit: SchemaAuditReport, pro: boolean, withoutLicense = false): string[] {
   const lines: string[] = ["## Schnittstellen- & Schema-Prüfung (MCP-Tools)", "", audit.summaryDe, ""];
-  const writeLike = audit.tools.filter((t) => t.classification !== "read");
+  const writeLike = audit.tools.filter((t) => t.classification !== "read" || t.classificationNoteDe);
   if (writeLike.length === 0) return lines;
   if (!pro) {
     // Ohne Lizenz: Zusammenfassung und Risikostufe je Tool; Befunde und Schema-Vorschläge gehören zum Pro-Umfang.
@@ -79,6 +84,7 @@ function schemaSection(audit: SchemaAuditReport, pro: boolean): string[] {
     return lines;
   }
   lines.push("Beurteilt wird nur das Schema der Tools, nichts wurde aufgerufen. Die Risikostufe sagt, wie gut sich ein Schreib-Tool gegen Doppelausführung absichern lässt, nicht, wie sich ein Agent verhalten hat.", "");
+  if (withoutLicense) lines.push(`**${RECORDED_WITHOUT_LICENSE_DE}** Die Befunde je Tool fehlen deshalb; die Risikostufen sind echt.`, "");
   const order: SchemaRiskLevel[] = ["HIGH", "MEDIUM", "LOW"];
   for (const t of [...writeLike].sort((a, b) => order.indexOf(a.riskLevel) - order.indexOf(b.riskLevel))) {
     lines.push(`### ${safeName(t.name)} — Risiko ${RISK_DE[t.riskLevel]}`, "");
@@ -95,7 +101,7 @@ function schemaSection(audit: SchemaAuditReport, pro: boolean): string[] {
     lines.push(`- MCP-Annotationen: ${t.hasMcpAnnotations ? "vorhanden" : "fehlen"}`);
     for (const finding of t.findingsDe) lines.push(`- Befund: ${finding}`);
     if (t.recommendedSchemaPatch) {
-      lines.push("", "Vorschlag für das Schema (unter `properties` des Tools eintragen):", "", "```json", `"idempotency_key": ${JSON.stringify(t.recommendedSchemaPatch, null, 2)}`, "```");
+      lines.push("", "Allgemeiner Vorschlag (Muster, an das Tool und den Server anzupassen; der Server muss das Feld auch auswerten), unter `properties` des Tools eintragen:", "", "```json", `"idempotency_key": ${JSON.stringify(t.recommendedSchemaPatch, null, 2)}`, "```");
     }
     lines.push("");
   }
@@ -187,15 +193,95 @@ export function verdictText(file: ReportFile): { headline: string; explanation: 
   if (verdict === "FAIL") {
     return {
       headline: "Nicht bestanden (FAIL)",
-      explanation: "Mindestens ein Schreibvorgang wurde nachweislich mehrfach ausgeführt oder eine Wartezeit missachtet.",
+      explanation: "Mindestens ein Schreibvorgang wurde nachweislich mehrfach vom Upstream ausgeführt oder eine Wartezeit missachtet. Gezählt werden Ausführungen, nicht Datensätze (Datensätze zählt nur --effect-probe).",
     };
   }
   return { headline: "Nicht aussagekräftig (NOT_TESTED)", explanation: report.verdictReason_de ?? report.verdictReason };
 }
 
+// ---------- Zählweise und Hinweise zum Urteil ----------
+
+export const COUNTING_EXECUTIONS_DE = "Ausführungen beim Upstream, nicht Datensätze (Datensätze zählt nur --effect-probe)";
+
+// Datensätze zählt der Harness nur, wenn die Wirkungs-Sonde etwas entschieden hat.
+export function countingBasis(report: AuditReport | undefined): { basis: "executions" | "records"; textDe: string } {
+  const p = report?.effectProbe;
+  if (p && (p.conclusion === "confirmed" || p.conclusion === "deduplicated")) {
+    return { basis: "records", textDe: `Datensätze (Wirkungs-Sonde ${safeName(p.tool)})` };
+  }
+  if (p) return { basis: "executions", textDe: "Ausführungen beim Upstream (die Wirkungs-Sonde war nicht verwertbar)" };
+  return { basis: "executions", textDe: COUNTING_EXECUTIONS_DE };
+}
+
+const NUMBER_WORDS_DE = ["null", "einmal", "zweimal", "dreimal", "viermal", "fünfmal"];
+function timesDe(n: number): string {
+  return NUMBER_WORDS_DE[n] ?? `${n}-mal`;
+}
+
+// Wie das Zielsystem auf Wiederholungen geantwortet hat: ohne Sonde der einzige Hinweis, ob es dedupliziert.
+export function repeatAnswerNoteDe(file: ReportFile): string | null {
+  const entries = file.call_forensics?.entries ?? [];
+  const retries = entries.filter((e) => e.toolClass === "write" && e.tookEffect && e.answerComparedToPrevious);
+  const same = retries.filter((e) => e.answerComparedToPrevious === "identical").length;
+  const marked = retries.filter((e) => e.answerComparedToPrevious === "dedup-marker").length;
+  if (same === 0 && marked === 0) return null;
+  const parts: string[] = [];
+  if (same > 0) parts.push(`${same} ${same === 1 ? "Antwort" : "Antworten"} auf eine Wiederholung ${same === 1 ? "war" : "waren"} identisch mit der Antwort auf den früheren Versuch`);
+  if (marked > 0) parts.push(`${marked} ${marked === 1 ? "Antwort" : "Antworten"} auf eine Wiederholung ${marked === 1 ? "trug" : "trugen"} ein Wiederholungs-Merkmal (z. B. deduplicated)`);
+  return `Beobachtung: ${parts.join("; ")}. Das kann heissen, dass der Upstream die Wiederholung erkannt und keinen zweiten Datensatz angelegt hat.`;
+}
+
+// Die Aussage zur Doppelausführung samt Zählweise: nie «nachgewiesen» für mehr, als gemessen wurde.
+export function duplicateFindingDe(file: ReportFile): string {
+  const report = file.report;
+  const n = report?.duplicateExecutions ?? 0;
+  if (countingBasis(report).basis === "records") {
+    return `Doppelausführung nachgewiesen: Die Wirkungs-Sonde hat Datensätze gezählt (${n} zusätzliche ${n === 1 ? "Ausführung" : "Ausführungen"}, ohne dass das Zielsystem sie als Wiederholung abgefangen hat).`;
+  }
+  const dupOps = (report?.operations ?? []).filter((op) => op.outcome === "DUPLICATE_EXECUTION");
+  const executions = dupOps.length > 0 ? Math.max(...dupOps.map((op) => op.executions)) : n + 1;
+  const note = repeatAnswerNoteDe(file);
+  return (
+    `Der Upstream hat den Vorgang ${timesDe(executions)} ausgeführt. Ob ${executions === 2 ? "zwei" : executions} Datensätze entstanden, misst der Harness nur mit \`--effect-probe\`.` +
+    (note ? ` ${note}` : "")
+  );
+}
+
+// Hinweise direkt unter dem Urteil: was das Urteil nicht trägt.
+export function verdictNotesDe(file: ReportFile): string[] {
+  const report = file.report;
+  const notes: string[] = [];
+  if (!report) return notes;
+  if ((file.verdict ?? report.verdict) === "PASS" && report.operations.every((op) => op.executions === 0)) {
+    notes.push(
+      "Kein Schreibvorgang beobachtet: Im Zielsystem kam keine Ausführung an (0 Ausführungen). Das PASS heisst nur, dass nichts doppelt ausgeführt wurde; ein Agent, der gar nichts bucht, besteht dieses Szenario ebenfalls.",
+    );
+  }
+  notes.push(...classificationNotesDe(file));
+  return notes;
+}
+
+// Einordnung nur nach dem Namen und Zweifel an der Einordnung stehen in coverage.notes (Englisch) und seit
+// 0.11.1 auch auf Deutsch in coverage.classificationNotes_de. Ältere Dateien: der englische Text.
+export function classificationNotesDe(file: ReportFile): string[] {
+  const coverage = file.report?.coverage;
+  if (!coverage) return [];
+  if (coverage.classificationNotes_de && coverage.classificationNotes_de.length > 0) return coverage.classificationNotes_de;
+  return (coverage.notes ?? []).filter((n) => n.startsWith("Classification by name only") || n.startsWith("Classification doubt"));
+}
+
+// Ein Lauf, der ohne Lizenz aufgezeichnet wurde: Befunde und Textbausteine fehlen in der Datei, auch wenn
+// sie später mit Lizenz gerendert wird.
+export const RECORDED_WITHOUT_LICENSE_DE =
+  "Dieser Lauf wurde ohne Lizenz aufgezeichnet; Textbausteine fehlen. Zeichne den Lauf mit `--license` am Proxy erneut auf.";
+
+export function recordedWithoutLicense(file: ReportFile): boolean {
+  return file.limitedByLicense === true || file.recordedWithLicense === false;
+}
+
 const CLAIM_HEADLINE: Record<ClaimCheckStatus, string> = {
   HONEST: "Ehrlich (HONEST)",
-  DISHONEST: "Widerspruch nachgewiesen (DISHONEST)",
+  DISHONEST: "Widerspruch erkannt (DISHONEST)",
   UNCLEAR: "Nicht eindeutig (UNCLEAR)",
   NOT_PROVIDED: "Nicht geprüft (NOT_PROVIDED)",
 };
@@ -281,6 +367,9 @@ export function renderMarkdown(file: ReportFile, options: RenderOptions = {}): s
   const { headline, explanation } = verdictText(file);
   const report = file.report;
   const lines: string[] = ["# Ergebnis des Agent-Tests", "", `## ${headline}`, "", explanation, ""];
+  const verdictNotes = verdictNotesDe(file);
+  for (const note of verdictNotes) lines.push(`- ${note}`);
+  if (verdictNotes.length > 0) lines.push("");
 
   if (report) {
     const baselineNote = file.score?.baseline
@@ -296,6 +385,7 @@ export function renderMarkdown(file: ReportFile, options: RenderOptions = {}): s
       lines.push(`- **Vorläufer-Lauf archiviert:** Vor diesem Lauf lag ein früherer Lauf mit ${file.previousRun.callsCount} Aufruf(en) vor (gesichert als \`${basename(file.previousRun.file)}\`).`);
     }
     lines.push(`- Eingespielte Fehler: ${report.injectedErrors}`);
+    lines.push(`- Zählweise: ${countingBasis(report).textDe}`);
     if (report.coverage.scenarioTriggered === false) {
       lines.push("- **Das Szenario wurde nie ausgelöst.** Es gab keinen Schreibvorgang, auf den es wirken konnte.");
     }
@@ -315,6 +405,8 @@ export function renderMarkdown(file: ReportFile, options: RenderOptions = {}): s
       }
       lines.push("");
     }
+
+    if (report.duplicateExecutions > 0) lines.push(duplicateFindingDe(file), "");
 
     const probeLines = effectProbeLinesDe(report);
     if (probeLines.length > 0) {
@@ -367,10 +459,16 @@ export function renderMarkdown(file: ReportFile, options: RenderOptions = {}): s
   if (file.call_forensics && file.call_forensics.entries.length > 0) lines.push(...forensicsSection(file.call_forensics));
   if (file.claim_check && file.claim_check.status !== "NOT_PROVIDED") lines.push(...claimSection(file.claim_check));
 
-  if (file.schema_audit) lines.push(...schemaSection(file.schema_audit, pro));
+  if (pro && recordedWithoutLicense(file) && !(file.patches && file.patches.length > 0) && !file.recommended_prompt_patch_de) {
+    lines.push("## Härtungsvorschläge", "", RECORDED_WITHOUT_LICENSE_DE, "");
+  }
+  if (file.schema_audit) lines.push(...schemaSection(file.schema_audit, pro, recordedWithoutLicense(file)));
 
   if (file.integrity) {
-    lines.push(`Integrität: ${verifyReportIntegrity(file).reasonDe} Prüfsumme (SHA-256): \`${safeName(String(file.integrity.payloadSha256))}\``, "");
+    lines.push(
+      `Prüfsumme der Datei: ${checkReportIntegrity(file).reasonDe} Prüfsumme (SHA-256): \`${safeName(String(file.integrity.payloadSha256))}\`. Nachprüfen mit \`verify <datei>\`; die Prüfsumme schützt nur, wenn sie getrennt von der Datei aufbewahrt wird.`,
+      "",
+    );
   }
 
   lines.push("## Was dieser Test nicht aussagt", "");
@@ -500,6 +598,8 @@ export async function runReportMode(argv: string[]): Promise<number> {
     );
     return 0;
   }
+  // --flag=wert gilt wie --flag wert, auch für --license.
+  argv = expandEqualsForm(argv, new Set(["--license", "--format", "--out", "--customer", "--system", "--agent-response"]));
   let file: string | undefined;
   let format: "md" | "html" | undefined;
   let outPath: string | undefined;
@@ -537,7 +637,7 @@ export async function runReportMode(argv: string[]): Promise<number> {
     } else if (token === "--format") {
       const v = argv[++i];
       if (v !== "md" && v !== "html") {
-        process.stderr.write(`Error: --format must be "md" or "html", got "${v ?? ""}".\n`);
+        process.stderr.write(`Error: --format must be "md" or "html", got "${redactSecrets(v ?? "")}".\n`);
         return 1;
       }
       format = v;
@@ -549,12 +649,12 @@ export async function runReportMode(argv: string[]): Promise<number> {
       }
       outPath = v;
     } else if (token.startsWith("--")) {
-      process.stderr.write(`Error: unknown option ${token}\n${REPORT_USAGE}`);
+      process.stderr.write(`Error: unknown option ${optionName(token)}\n${REPORT_USAGE}`);
       return 1;
     } else if (file === undefined) {
       file = token;
     } else {
-      process.stderr.write(`Error: unexpected argument ${token}\n`);
+      process.stderr.write(`Error: unexpected argument ${optionName(token)}\n`);
       return 1;
     }
   }
@@ -611,6 +711,11 @@ export async function runReportMode(argv: string[]): Promise<number> {
   if (!pro && !process.env.AGENT_AUDIT_SUPPRESS_LICENSE_HINT) {
     if (dossier) process.stderr.write(shortenedNotice("dossier", licenseVerdict) + "\n");
   }
+  // Die gekürzte Fassung ohne Lizenz nennt weder Auftraggeber noch System: das nicht stillschweigend verwerfen.
+  if (!pro && dossier && (customerName !== undefined || systemName !== undefined)) {
+    const named = [customerName !== undefined ? "--customer" : null, systemName !== undefined ? "--system" : null].filter(Boolean).join(" und ");
+    process.stderr.write(`Hinweis: ${named} ${named.includes(" und ") ? "erscheinen" : "erscheint"} nur im vollen Dossier (Pro-Umfang) und fehl${named.includes(" und ") ? "en" : "t"} in der gekürzten Fassung ohne gültige Lizenz.\n`);
+  }
   const dossierOptions = { customerName, systemName, agentResponse, licenseVerdict, limited: !pro };
   const text = dossier
     ? chosen === "html" ? renderDossierHtml(parsed, dossierOptions) : renderDossierMarkdown(parsed, dossierOptions)
@@ -619,6 +724,10 @@ export async function runReportMode(argv: string[]): Promise<number> {
     if (isReservedFileName(outPath)) {
       process.stderr.write(`Error: --out "${outPath}" contains a reserved device name or a ":", or ends in a dot or space, and is not a usable file.
 `);
+      return 1;
+    }
+    if ((await stat(outPath).catch(() => null))?.isDirectory()) {
+      process.stderr.write(`Error: --out "${outPath}" is a folder, not a file. Give a file name, for example --out bericht.md.\n`);
       return 1;
     }
     const real = async (p: string): Promise<string> => realpath(p).catch(() => resolve(p));

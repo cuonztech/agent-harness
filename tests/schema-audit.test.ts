@@ -52,9 +52,10 @@ describe("Idempotenz-Schlüssel", () => {
     expect(e.hasIdempotencyKey).toBe(false);
     expect(e.idempotencyFieldName).toBeNull();
     expect(e.findingsDe[0]).toContain("Kein Idempotenz-Schlüssel (z. B. idempotency_key)");
+    // Ab 0.11.1 nennt die Beschreibung das Tool; der Vorschlag ist ein allgemeines Muster.
     expect(e.recommendedSchemaPatch).toEqual({
       type: "string",
-      description: "Eindeutiger Schlüssel zur Vermeidung von Doppelausführungen bei Wiederholungsversuchen",
+      description: "Eindeutiger Schlüssel für diesen Aufruf von create_booking: Bei einer Wiederholung nach einem Timeout denselben Wert noch einmal senden, damit der Server den Vorgang nur einmal ausführt.",
     });
   });
 

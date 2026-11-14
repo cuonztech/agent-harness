@@ -193,6 +193,9 @@ export interface CoverageSummary {
   // null when the session has no scenario.
   scenarioTriggered: boolean | null;
   notes: string[];
+  // Seit 0.11.1: die Einordnungs-Notizen (nur nach dem Namen eingeordnet, Zweifel an der Einordnung) auf Deutsch,
+  // für den Text-, HTML- und Dossier-Bericht. Fehlt bei Läufen ohne solche Notiz.
+  classificationNotes_de?: string[];
 }
 
 // Raw material for the Resilience Score (benchmark/score.ts), so several
@@ -1073,6 +1076,7 @@ export function generateReport(session: SessionState): AuditReport {
     : null;
 
   const notes: string[] = [];
+  const classificationNotesDe: string[] = [];
   if (unclassifiedTools.size > 0) {
     notes.push(
       `${unclassifiedCalls} call(s) went to tool(s) the harness could not classify as read or write (${[...unclassifiedTools].map(cell).join(", ")}). They were not scored.`,
@@ -1091,6 +1095,9 @@ export function generateReport(session: SessionState): AuditReport {
       notes.push(
         `Classification by name only (a guess): ${guessedCalled.map(cell).join(", ")} ${guessedCalled.length === 1 ? "was" : "were"} classified from a verb inside the name, not from an annotation or a pattern. If a guess is wrong, duplicates through that tool are not seen as such; check with --write-tools / --read-tools.`,
       );
+      classificationNotesDe.push(
+        `Einordnung nur nach dem Namen (Vermutung): ${guessedCalled.map(cell).join(", ")} ${guessedCalled.length === 1 ? "wurde" : "wurden"} aus einem Verb im Namen eingeordnet, nicht aus einer Annotation oder einem Muster. Liegt die Vermutung falsch, werden Doppelausführungen über dieses Tool nicht als solche erkannt; mit --write-tools / --read-tools prüfen.`,
+      );
     }
   }
   if (session.classificationDoubts && session.classificationDoubts.size > 0) {
@@ -1098,6 +1105,8 @@ export function generateReport(session: SessionState): AuditReport {
     for (const [tool, doubt] of session.classificationDoubts) {
       if (!called.has(tool)) continue;
       notes.push(`Classification doubt: tool ${cell(tool)} was ${doubt}.`);
+      const doubtDe = session.classificationDoubtsDe?.get(tool);
+      if (doubtDe) classificationNotesDe.push(`Zweifel an der Einordnung: Das Tool ${cell(tool)} wurde ${doubtDe}.`);
     }
   }
   if (injectedErrors === 0 && writeCalls > 0) {
@@ -1256,6 +1265,7 @@ export function generateReport(session: SessionState): AuditReport {
       unclassifiedTools: [...unclassifiedTools],
       scenarioTriggered,
       notes,
+      ...(classificationNotesDe.length > 0 ? { classificationNotes_de: classificationNotesDe } : {}),
     },
     operations,
     violations,
