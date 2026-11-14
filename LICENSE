@@ -42,7 +42,7 @@ DEUTSCH
 1.3 Ohne gültigen Lizenzcode (keiner hinterlegt, ungültig, abgelaufen, erloschen) wird nur die
     Ausgabe der Funktionen nach Ziffer 2 gekürzt oder der Befehl nicht ausgeführt: das Dossier
     enthält nur Kopf, Score und das Urteil je Szenario, das Schema-Gutachten nur Zusammenfassung
-    und Risikostufe, die Textbausteine (Härtungsvorschläge) entfallen; ui und campaign werden
+    und Risikostufe, die Textbausteine (Härtungsvorschläge) entfallen; ui, campaign und bench werden
     nicht ausgeführt.
 
 2. Was einen gültigen Lizenzcode von CuonzTech erfordert (Pro-Umfang); Systeme
@@ -52,7 +52,8 @@ DEUTSCH
     b) die geführte Web-Oberfläche (ui),
     c) das Schema-Gutachten mit den Befunden je Tool und den Schema-Vorschlägen,
     d) den Textbaustein- und Prompt-Patch-Generator (Härtungsvorschläge),
-    e) den Kampagnen-Runner für Mehrfach-Läufe (campaign).
+    e) den Kampagnen-Runner für Mehrfach-Läufe (campaign),
+    f) die Mehrlauf-Messung mit dem eigenen Agenten oder Modell (bench).
     Die Freischaltung erfolgt mit dem Lizenzcode (Option --license oder Umgebungsvariable
     AGENT_AUDIT_LICENSE). Die Prüfung des Codes erfolgt offline.
 2.2 Lizenzen gibt es als «Harness Pro · 90 Tage» (Einmalkauf, 90 Tage ab Kauf) und «Harness Pro ·
@@ -202,8 +203,8 @@ and exit code are the same with and without a code. Without a valid code the out
 scope is shortened or the command is not run.
 
 A valid license code is required for the Pro scope: the full audit dossier, the guided web
-interface (ui), the schema assessment with findings and suggestions, the prompt text blocks and
-the campaign runner. Licenses ("Harness Pro 90 days", "Harness Pro monthly") cover one system
+interface (ui), the schema assessment with findings and suggestions, the prompt text blocks, the
+campaign runner and the multi-run measurement (bench). Licenses ("Harness Pro 90 days", "Harness Pro monthly") cover one system
 (an MCP server you test). The code is verified offline and cannot be revoked technically; your
 right ends on expiry, termination, refund or chargeback, and you stop using the code. Reports
 you created may be kept and passed on unchanged.
