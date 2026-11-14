@@ -108,6 +108,19 @@ table.cmp th,table.cmp td{border-bottom:1px solid var(--line);padding:.35rem .4r
 <option value="F5">F5 Serverfehler (HTTP 500)</option>
 </select>
 <p class="hint">F1 ist die Standardprüfung: Der Schreibvorgang gelingt, der Agent sieht nur einen Timeout.</p>
+<details id="advanced">
+<summary>Genauer messen (optional)</summary>
+<p class="hint">Ohne diese Angaben zählt der Test nur, wie oft dein Server einen Schreibvorgang ausgeführt hat. Mit einem Lese-Tool kann der Test nachzählen, ob wirklich zwei Datensätze entstanden sind.</p>
+<label for="effectProbe">Lese-Tool zum Nachzählen (<code>--effect-probe</code>)</label>
+<input type="text" id="effectProbe" placeholder="leer lassen, sonst z. B. list_bookings">
+<label for="effectProbeArgs">Argumente dieses Tools (JSON, <code>--effect-probe-args</code>)</label>
+<input type="text" id="effectProbeArgs" placeholder="leer lassen, sonst z. B. {&quot;status&quot;:&quot;open&quot;}">
+<label for="effectCount">Zählfeld in der Antwort (<code>--effect-count</code>)</label>
+<input type="text" id="effectCount" placeholder="leer lassen, sonst z. B. bookings oder result.items">
+<label for="keyFields">Felder mit einem Idempotenz-Schlüssel (<code>--key-fields</code>)</label>
+<input type="text" id="keyFields" placeholder="leer lassen, sonst z. B. order_ref, vorgangs_id">
+<p class="hint">Mehrere Feldnamen mit Komma trennen. Die Standardnamen (z. B. idempotency_key, request_id) kennt der Test schon; trage nur eigene Namen ein.</p>
+</details>
 <p><button id="useBundled" class="secondary" hidden>Mitgeliefertes Testsystem verwenden</button></p>
 <p><button id="check">Prüfen</button></p>
 <ul class="checks" id="checks"></ul>
@@ -153,6 +166,8 @@ table.cmp th,table.cmp td{border-bottom:1px solid var(--line);padding:.35rem .4r
 <script>
 (function () {
   var TOKEN = "__TOKEN__";
+  // Der Link aus dem Terminal trägt den Schlüssel einmal; der Server hat ihn als Sitzung (Cookie) gesetzt. Danach steht er nicht mehr in der Adresszeile.
+  try { if (location.search) history.replaceState(null, "", location.pathname); } catch (e) {}
   function $(id) { return document.getElementById(id); }
   function show(id) { ["s1","s2","sdemo","s3","s4"].forEach(function (s) { $(s).hidden = (s !== id); }); window.scrollTo(0, 0); }
   function api(path, body) {
@@ -248,7 +263,8 @@ table.cmp th,table.cmp td{border-bottom:1px solid var(--line);padding:.35rem .4r
   });
 
   $("go3").addEventListener("click", function () {
-    api("/api/config", Object.assign({ confirmedTestsystem: $("confirm").checked, scenario: $("scenario").value }, ready)).then(function (cfg) {
+    var measure = { effectProbe: $("effectProbe").value.trim(), effectProbeArgs: $("effectProbeArgs").value.trim(), effectCount: $("effectCount").value.trim(), keyFields: $("keyFields").value.trim() };
+    api("/api/config", Object.assign({ confirmedTestsystem: $("confirm").checked, scenario: $("scenario").value }, measure, ready)).then(function (cfg) {
       $("cfgCode").textContent = cfg.claudeCode; $("cfgJson").textContent = cfg.claudeDesktop; $("reportPath").textContent = cfg.reportFile; $("licenseHint").textContent = cfg.licenseHint || ""; $("licenseHint").hidden = !cfg.licenseHint;
       $("copyCode").onclick = function () { copy(cfg.claudeCode, $("copyCode")); };
       $("copyJson").onclick = function () { copy(cfg.claudeDesktop, $("copyJson")); };
@@ -279,8 +295,8 @@ table.cmp th,table.cmp td{border-bottom:1px solid var(--line);padding:.35rem .4r
         else if (s.state === "connected") { $("status").textContent = "Der Agent ist verbunden. Warte auf den ersten Schreibvorgang …"; }
         else {
           $("status").textContent = "Zwischenstand, wird bei jedem weiteren Aufruf aktualisiert:";
-          $("result").innerHTML = s.body; $("dl").hidden = false; $("dl").href = "/api/report.html?t=" + encodeURIComponent(TOKEN);
-          $("dossier").hidden = false; $("dossier").href = "/dossier?t=" + encodeURIComponent(TOKEN);
+          $("result").innerHTML = s.body; $("dl").hidden = false; $("dl").href = "/api/report.html";
+          $("dossier").hidden = false; $("dossier").href = "/dossier";
         }
       }).catch(function () {});
     };

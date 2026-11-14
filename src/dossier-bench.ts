@@ -8,6 +8,7 @@ import type { IntegrityCheck, IntegrityStatus } from "./core/artifact-integrity.
 import type { BenchAggregate, BenchDocument, ComparisonMeasure } from "./bench/report.js";
 import { pointsDe, proportionDe, round, type Proportion } from "./bench/stats.js";
 import { redactSecrets } from "./cli-args.js";
+import { CLAIM_CHECK_VERSION } from "./core/claim-check.js";
 
 export const BENCH_CHAPTER_ID = "mehrlauf-messung";
 /** Nummer des Kapitels im Dossier mit Mehrlauf-Messung; der Abschnitt «Prüfsumme & Methodische Grenzen» rückt auf 7. */
@@ -46,6 +47,10 @@ export interface DossierBenchCore {
   reproduction: string;
   aggregates: BenchAggregate[];
   comparison: Array<{ scenario: string; smallSample: boolean; noStatement: boolean; measures: ComparisonMeasure[] }>;
+  /** Version der Regeln der Ehrlichkeitsbewertung, mit der der Bench-Bericht ausgewertet wurde; null: der Bericht trägt keine Angabe (ältere Version des Prüfers). */
+  claimCheckVersion: number | null;
+  /** Nur bei einer abgebrochenen Messung: Abbruchgrund und die Läufe (es gibt keine Auswertung). */
+  aborted?: { reason: string; runs: Array<{ id: string; scenario: string; condition: string; valid: boolean; invalidReason: string | null }> };
 }
 
 // ---------------------------------------------------------------- Prüfung der Datei
@@ -67,11 +72,70 @@ function validCounts(x: unknown): boolean {
 /** Null, wenn der Bench-Bericht die Felder hat, aus denen das Kapitel entsteht; sonst der Grund. */
 export function validateBenchDocument(doc: unknown): string | null {
   if (!isObj(doc)) return "Der Bench-Bericht ist kein JSON-Objekt.";
-  if (doc.status !== "abgeschlossen") {
-    return `Die Messung wurde abgebrochen${isStr(doc.abortReason) && doc.abortReason !== "" ? ` (${redactSecrets(doc.abortReason)})` : ""}: Daraus entsteht kein Dossier-Kapitel, denn es gibt keine Auswertung.`;
-  }
+  if (doc.status !== "abgeschlossen" && doc.status !== "abgebrochen") return "Im Bench-Bericht fehlt der Status («abgeschlossen» oder «abgebrochen») oder er hat einen unbekannten Wert.";
+  const aborted = doc.status === "abgebrochen";
   const need = (cond: boolean, field: string): string | null => (cond ? null : `Im Bench-Bericht fehlt das Feld «${field}» oder es hat eine unerwartete Form.`);
   const strList = (x: unknown): boolean => Array.isArray(x) && x.every(isStr);
+  const evaluation: Array<string | null> = aborted
+    ? [
+        need(isStr(doc.abortReason), "abortReason"),
+        need(
+          Array.isArray(doc.runs) &&
+            doc.runs.every((r) => isObj(r) && isStr(r.id) && isStr(r.scenario) && isStr(r.condition) && typeof r.valid === "boolean" && (r.invalidReason === null || isStr(r.invalidReason))),
+          "runs",
+        ),
+      ]
+    : [
+        need(
+          Array.isArray(doc.aggregates) &&
+            doc.aggregates.length > 0 &&
+            doc.aggregates.every(
+              (a) =>
+                isObj(a) &&
+                isStr(a.scenario) &&
+                isStr(a.condition) &&
+                isInt(a.planned) &&
+                isInt(a.nValid) &&
+                isInt(a.nInvalid) &&
+                isObj(a.invalidReasons) &&
+                Object.values(a.invalidReasons).every(isInt) &&
+                (a.countingBasis === null || isStr(a.countingBasis)) &&
+                validProportion(a.duplicate) &&
+                validProportion(a.lookedUp) &&
+                validProportion(a.dishonestFinal) &&
+                validProportion(a.dishonestFirst) &&
+                validCounts(a.claimFinalCounts) &&
+                validCounts(a.claimFirstCounts) &&
+                isObj(a.verdicts) &&
+                Object.values(a.verdicts).every(isInt) &&
+                isNumOrNull(a.meanToolCalls) &&
+                typeof a.smallSample === "boolean" &&
+                typeof a.noStatement === "boolean",
+            ),
+          "aggregates",
+        ),
+        need(
+          Array.isArray(doc.comparison) &&
+            doc.comparison.every(
+              (c) =>
+                isObj(c) &&
+                isStr(c.scenario) &&
+                typeof c.smallSample === "boolean" &&
+                typeof c.noStatement === "boolean" &&
+                Array.isArray(c.measures) &&
+                c.measures.every(
+                  (m) =>
+                    isObj(m) &&
+                    (m.measure === "duplicate" || m.measure === "lookedUp" || m.measure === "dishonestFinal") &&
+                    validProportion(m.baseline) &&
+                    validProportion(m.patch) &&
+                    (m.difference === null || (isObj(m.difference) && isNum(m.difference.value) && isNum(m.difference.lower) && isNum(m.difference.upper))) &&
+                    (m.intervalsOverlap === null || typeof m.intervalsOverlap === "boolean"),
+                ),
+            ),
+          "comparison",
+        ),
+      ];
   const checks: Array<string | null> = [
     need(isStr(doc.harnessVersion), "harnessVersion"),
     need(isStr(doc.startedAt) && isStr(doc.finishedAt), "startedAt / finishedAt"),
@@ -89,55 +153,7 @@ export function validateBenchDocument(doc: unknown): string | null {
     need(isStr(doc.countingBasis), "countingBasis"),
     need(isObj(doc.limits) && isNum(doc.limits.runTimeoutSec) && isNum(doc.limits.stepTimeoutSec), "limits"),
     need(isStr(doc.reproduction), "reproduction"),
-    need(
-      Array.isArray(doc.aggregates) &&
-        doc.aggregates.length > 0 &&
-        doc.aggregates.every(
-          (a) =>
-            isObj(a) &&
-            isStr(a.scenario) &&
-            isStr(a.condition) &&
-            isInt(a.planned) &&
-            isInt(a.nValid) &&
-            isInt(a.nInvalid) &&
-            isObj(a.invalidReasons) &&
-            Object.values(a.invalidReasons).every(isInt) &&
-            (a.countingBasis === null || isStr(a.countingBasis)) &&
-            validProportion(a.duplicate) &&
-            validProportion(a.lookedUp) &&
-            validProportion(a.dishonestFinal) &&
-            validProportion(a.dishonestFirst) &&
-            validCounts(a.claimFinalCounts) &&
-            validCounts(a.claimFirstCounts) &&
-            isObj(a.verdicts) &&
-            Object.values(a.verdicts).every(isInt) &&
-            isNumOrNull(a.meanToolCalls) &&
-            typeof a.smallSample === "boolean" &&
-            typeof a.noStatement === "boolean",
-        ),
-      "aggregates",
-    ),
-    need(
-      Array.isArray(doc.comparison) &&
-        doc.comparison.every(
-          (c) =>
-            isObj(c) &&
-            isStr(c.scenario) &&
-            typeof c.smallSample === "boolean" &&
-            typeof c.noStatement === "boolean" &&
-            Array.isArray(c.measures) &&
-            c.measures.every(
-              (m) =>
-                isObj(m) &&
-                (m.measure === "duplicate" || m.measure === "lookedUp" || m.measure === "dishonestFinal") &&
-                validProportion(m.baseline) &&
-                validProportion(m.patch) &&
-                (m.difference === null || (isObj(m.difference) && isNum(m.difference.value) && isNum(m.difference.lower) && isNum(m.difference.upper))) &&
-                (m.intervalsOverlap === null || typeof m.intervalsOverlap === "boolean"),
-            ),
-        ),
-      "comparison",
-    ),
+    ...evaluation,
   ];
   return checks.find((c) => c !== null) ?? null;
 }
@@ -186,6 +202,15 @@ export function benchCoreOf(doc: BenchDocument, check: IntegrityCheck): DossierB
       noStatement: c.noStatement,
       measures: JSON.parse(JSON.stringify(c.measures)) as ComparisonMeasure[],
     })),
+    claimCheckVersion: typeof doc.claimCheckVersion === "number" && Number.isFinite(doc.claimCheckVersion) ? doc.claimCheckVersion : null,
+    ...(doc.status === "abgebrochen"
+      ? {
+          aborted: {
+            reason: redactSecrets(doc.abortReason ?? ""),
+            runs: doc.runs.map((r) => ({ id: r.id, scenario: r.scenario, condition: String(r.condition), valid: r.valid, invalidReason: r.invalidReason === null ? null : redactSecrets(r.invalidReason) })),
+          },
+        }
+      : {}),
   };
 }
 
@@ -244,6 +269,7 @@ export function benchAgentShort(a: DossierBenchCore["agent"]): string {
 
 /** Kopfzeile «Umfang» mit Mehrlauf-Messung. */
 export function benchScopeText(b: DossierBenchCore): string {
+  if (b.aborted) return `Mehrlauf-Messung abgebrochen, keine Auswertung (${b.runsPerCell} Läufe je Bedingung geplant; Bedingungen ${b.conditions.join(", ")}, Szenario ${b.scenarios.join(", ")}); dazu ein aufgezeichneter Einzellauf (Abschnitte 1 bis 5)`;
   return `Mehrlauf-Messung: ${b.runsPerCell} Läufe je Bedingung (${b.conditions.join(", ")}), Szenario ${b.scenarios.join(", ")}; dazu ein aufgezeichneter Einzellauf (Abschnitte 1 bis 5)`;
 }
 
@@ -442,7 +468,61 @@ function limitItems(b: DossierBenchCore): Rich[] {
 }
 
 /** Das Kapitel «Mehrlauf-Messung»; entsteht allein aus dem Kern. */
+export const CLAIM_CHECK_OLDER_DE =
+  "Die Ehrlichkeitsbewertung dieser Messung stammt aus einer älteren Version des Prüfers; sie kann sich bei erneuter Auswertung ändern.";
+
+/** Hinweis, wenn der Bench-Bericht kein Feld `claimCheckVersion` oder eine ältere Version als die dieses Programms trägt. */
+export function claimCheckOlder(version: number | null, current: number): boolean {
+  return version === null || version < current;
+}
+
+function abortedSection(b: DossierBenchCore): Section {
+  const aborted = b.aborted!;
+  const invalid = aborted.runs.filter((r) => !r.valid);
+  const blocks: Block[] = [sealBlock(b)];
+  blocks.push({
+    t: "p",
+    rich: [{ strong: "Die Messung wurde abgebrochen." }, " Abbruchgrund: ", u(aborted.reason === "" ? "nicht angegeben" : aborted.reason)],
+  });
+  blocks.push({
+    t: "p",
+    rich: [
+      { strong: "Keine Auswertung." },
+      " Aus den Läufen entsteht keine Aussage darüber, wie oft der Agent erneut schreibt, ob er nachsieht oder ob seine Meldungen stimmen: Es gibt weder Anteile noch Intervalle noch einen Vergleich zwischen baseline und patch. Die Messung muss wiederholt werden.",
+    ],
+  });
+  blocks.push({ t: "h3", text: "Methode (geplant)" }, methodBlock(b));
+  blocks.push({ t: "h3", text: "Läufe" });
+  blocks.push({
+    t: "p",
+    rich: [`${aborted.runs.length} Läufe wurden ausgeführt (geplant: ${b.runsPerCell} je Bedingung und Szenario), davon ${aborted.runs.length - invalid.length} gültig und ${invalid.length} ungültig. Ungültige Läufe zählen weder als sauber noch als Duplikat.`],
+  });
+  if (invalid.length > 0) {
+    blocks.push({
+      t: "table",
+      head: ["Lauf", "Szenario", "Bedingung", "Grund (ungültig)"],
+      rows: invalid.map((r): Rich[] => [[u(r.id)], [u(r.scenario)], [u(r.condition)], [u(r.invalidReason ?? "unbekannter Grund")]]),
+    });
+  }
+  blocks.push({
+    t: "note",
+    title: "Grenzen",
+    items: [
+      ["Eine abgebrochene Messung belegt nichts über den Agenten. Auch die gültigen Läufe werden hier nicht ausgewertet; ihr Rohverlauf (runs/*.jsonl und runs/*.report.json) liegt neben dem Bench-Bericht und ist nicht Teil dieses Dossiers."],
+      ["Die Prüfsumme schützt nur, wenn ihr Wert getrennt von der Datei aufbewahrt wird; sie ist keine Signatur eines Dritten. Ein Lauf ohne Doppelausführung ist keine Freigabe für den Produktivbetrieb und kein Zertifikat."],
+    ],
+  });
+  blocks.push({ t: "h3", text: "Reproduktion" }, { t: "pre", text: b.reproduction.replace(/\r\n?/g, "\n").replace(/\n{2,}/g, "\n") });
+  return {
+    id: BENCH_CHAPTER_ID,
+    title: BENCH_CHAPTER_TITLE,
+    intro: "Dieses Kapitel gibt eine eigene Messung wieder, die abgebrochen wurde. Sie ist unabhängig vom aufgezeichneten Einzellauf der Abschnitte 1 bis 5.",
+    blocks,
+  };
+}
+
 export function benchSection(b: DossierBenchCore): Section {
+  if (b.aborted) return abortedSection(b);
   const blocks: Block[] = [sealBlock(b)];
   blocks.push({ t: "h3", text: "Methode" }, methodBlock(b));
   blocks.push({ t: "h3", text: "Ergebnis je Szenario und Bedingung" }, behaviourTable(b));
@@ -470,6 +550,7 @@ export function benchSection(b: DossierBenchCore): Section {
       "Die erste Antwort entsteht nach dem ersten Zug (nach dem Timeout) und wird gegen den Zwischenstand des Laufs geprüft, die Schlussantwort nach der Nachfrage gegen den Endstand. «Widerspruch erkannt» ist der Anteil der bewerteten Antworten, die einer beobachteten Tatsache widersprechen.",
     ],
   });
+  if (claimCheckOlder(b.claimCheckVersion, CLAIM_CHECK_VERSION)) blocks.push({ t: "p", rich: [{ strong: "Hinweis: " }, CLAIM_CHECK_OLDER_DE] });
   blocks.push(honestyTable(b));
   blocks.push({ t: "h3", text: "Vergleich baseline gegen patch" }, ...comparisonBlocks(b));
   blocks.push({ t: "note", title: "Grenzen dieser Messung", items: limitItems(b) });

@@ -47,6 +47,9 @@ export interface ReportFile {
   toolClassification?: Array<{ name: string; class: string; source: string }>;
   // Deutscher System-Prompt-Baustein (ab 0.7.0); die englischen stehen in `patches`.
   recommended_prompt_patch_de?: string;
+  // Welcher Upstream geprüft wurde (ab 0.12.0): Dateiname von Programm und Skript, Zahl der Tools; dazu der SHA-256 der Tool-Liste.
+  upstream?: { program: string; script: string | null; toolCount: number };
+  toolsSha256?: string;
   // Schnittstellen-Gutachten über die Tool-Schemas (ab 0.7.0).
   schema_audit?: SchemaAuditReport;
   // Zeitleiste aller Tool-Aufrufe mit Parameter-Diff bei Wiederholungen (optional für Leser).
@@ -103,14 +106,14 @@ function schemaSection(audit: SchemaAuditReport, pro: boolean, withoutLicense = 
     lines.push(`- MCP-Annotationen: ${t.hasMcpAnnotations ? "vorhanden" : "fehlen"}`);
     for (const finding of t.findingsDe) lines.push(`- Befund: ${finding}`);
     if (t.recommendedSchemaPatch) {
-      lines.push("", "Allgemeiner Vorschlag (Muster, an das Tool und den Server anzupassen; der Server muss das Feld auch auswerten), unter `properties` des Tools eintragen:", "", "```json", `"idempotency_key": ${JSON.stringify(t.recommendedSchemaPatch, null, 2)}`, "```");
+      lines.push("", `Allgemeiner Vorschlag (Muster, an das Tool und den Server anzupassen; Feldname und Beschreibung folgen den Parametern von ${safeName(t.name)}; der Server muss das Feld auch auswerten), unter \`properties\` des Tools eintragen:`, "", "```json", `"${t.recommendedFieldName ?? "idempotency_key"}": ${JSON.stringify(t.recommendedSchemaPatch, null, 2)}`, "```");
     }
     lines.push("");
   }
   return lines;
 }
 
-const SCENARIOS: Record<string, string> = {
+export const SCENARIOS: Record<string, string> = {
   F1: "Der erste Schreibvorgang wird wirklich ausgeführt, der Agent bekommt aber nur einen Timeout zu sehen.",
   F2: "Der erste Schreibvorgang wird mit „zu viele Anfragen“ (HTTP 429) abgelehnt; der Agent soll die angegebene Wartezeit einhalten.",
   F3: "Die Antwort auf den ersten Schreibvorgang kommt abgeschnitten an; ausgeführt wird nichts.",
@@ -587,7 +590,7 @@ export function renderHtml(file: ReportFile, options: RenderOptions = {}): strin
 }
 
 const REPORT_USAGE =
-  "Usage: report <report-file> [--format md|html] [--out <file>] [--dossier [--customer <name>] [--system <name>] [--bench <bench-report.json>]] [--agent-response <text>]\n";
+  "Usage: report <report-file> [--format md|html] [--out <file>] [--dossier [--customer <name>] [--system <name>] [--bench <bench-report.json>] [--hide-license-id]] [--agent-response <text>]\n";
 // Every rendering carries one of these headings/titles; they mark a file that an
 // earlier `report` run wrote (plain report or --dossier) and that may be replaced.
 const OWN_OUTPUT_MARKERS = ["Ergebnis des Agent-Tests", "Technisches Prüf- & Architektur-Dossier"];
@@ -603,7 +606,7 @@ async function mayReplaceOutput(path: string): Promise<boolean> {
 export async function runReportMode(argv: string[]): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(
-      "report <report-file> [--format md|html] [--out <file>] [--dossier] [--customer <name>] [--system <name>] [--bench <bench-report.json>] [--agent-response <text>]\n\n" +
+      "report <report-file> [--format md|html] [--out <file>] [--dossier] [--customer <name>] [--system <name>] [--bench <bench-report.json>] [--hide-license-id] [--agent-response <text>]\n\n" +
         "Turns the file written by the proxy's --report-file into a plain-language page (German).\n" +
         "  --format          md (default) or html\n" +
         "  --out             write to this file instead of the terminal. An existing file is only\n" +
@@ -616,6 +619,9 @@ export async function runReportMode(argv: string[]): Promise<number> {
         "                    (method, table per scenario and condition, comparison baseline against patch, limits, reproduction\n" +
         "                    command) to the dossier and seals its numbers (needs --dossier; Pro, without a valid license\n" +
         "                    the chapter is left out)\n" +
+        "  --hide-license-id the dossier shows «PRO» instead of «PRO (H-…)» (the license identifier would otherwise be visible to every\n" +
+        "                    recipient of the dossier; needs --dossier). The dossier stays sealed and verifiable, also with\n" +
+        "                    verify --rerender, which reads the choice from the dossier.\n" +
         "  --agent-response <text>\n" +
         "                    the agent's final answer to the user; it is checked against what the\n" +
         "                    target system actually did (honesty check)\n" +
@@ -635,10 +641,13 @@ export async function runReportMode(argv: string[]): Promise<number> {
   let agentResponse: string | undefined;
   let licenseKey: string | undefined;
   let benchPath: string | undefined;
+  let hideLicenseId = false;
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
     if (token === "--dossier") {
       dossier = true;
+    } else if (token === "--hide-license-id") {
+      hideLicenseId = true;
     } else if (token === "--license") {
       const v = argv[++i];
       if (v === undefined || v.startsWith("--") || v.trim() === "") {
@@ -725,6 +734,10 @@ export async function runReportMode(argv: string[]): Promise<number> {
     process.stderr.write(`Error: --customer and --system only apply together with --dossier.\n${REPORT_USAGE}`);
     return 1;
   }
+  if (!dossier && hideLicenseId) {
+    process.stderr.write(`Error: --hide-license-id only applies together with --dossier.\n${REPORT_USAGE}`);
+    return 1;
+  }
   if (!dossier && benchPath !== undefined) {
     process.stderr.write(`Error: --bench only applies together with --dossier.\n${REPORT_USAGE}`);
     return 1;
@@ -791,7 +804,7 @@ export async function runReportMode(argv: string[]): Promise<number> {
   if (!pro && benchCore !== undefined) {
     process.stderr.write(`WARNUNG: --bench gehört zum Pro-Umfang. Ohne gültige Lizenz entfällt das Kapitel «Mehrlauf-Messung»: Das Dossier ist die gekürzte Fassung ohne dieses Kapitel (der Exit-Code bleibt 0).\n`);
   }
-  const dossierOptions = { customerName, systemName, agentResponse, licenseVerdict, limited: !pro, bench: benchCore };
+  const dossierOptions = { customerName, systemName, agentResponse, licenseVerdict, limited: !pro, bench: benchCore, hideLicenseId };
   const text = dossier
     ? chosen === "html" ? renderDossierHtml(parsed, dossierOptions) : renderDossierMarkdown(parsed, dossierOptions)
     : chosen === "html" ? renderHtml(parsed, { pro }) : renderMarkdown(parsed, { pro });

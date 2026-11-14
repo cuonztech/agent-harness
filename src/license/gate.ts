@@ -91,7 +91,7 @@ export function lockedNotice(feature: ProFeature, verdict: LicenseVerdict): stri
     `Keine gültige Lizenz: ${f.name} gehört zum Pro-Umfang. ${reasonSentence(verdict)}\n` +
     `Frei bleiben: ${FREE_SCOPE_DE}.\n` +
     `Der Befehl wurde nicht ausgeführt. Lizenz: ${PURCHASE_URL}\n` +
-    `Aktivierung: --license <KEY> oder Umgebungsvariable AGENT_AUDIT_LICENSE.\n`
+    `Aktivierung: --license <KEY> oder Umgebungsvariable AGENT_AUDIT_LICENSE (auch CUONZTECH_LICENSE_KEY). ${LICENSE_TERMS_DE}\n`
   );
 }
 
@@ -108,10 +108,20 @@ export function shortenedNotice(feature: ProFeature, verdict: LicenseVerdict): s
   );
 }
 
+/** Was der Code vertraglich und technisch ist (README, «Lizenz und Umfang»). */
+export const LICENSE_TERMS_DE =
+  "Der Code gilt pro System laut AGB Teil D; technisch ist er nicht an ein System gebunden und nicht widerrufbar. Die Laufzeit wird mit der lokalen Uhr geprüft.";
+
+/** Steht im JSON-Report ohne Lizenz, wo `findingsDe` leer ist: Das ist «nicht berechnet», nicht «keine Befunde». */
+export const FINDINGS_NOTE_DE = "Befunde sind Teil von Pro";
+
 /** Schlankere Fassung des Schema-Gutachtens ohne Lizenz: Zusammenfassung und Risikostufe, keine Befunde, kein Schema-Vorschlag. */
 export function reduceSchemaAudit(audit: SchemaAuditReport): SchemaAuditReport {
   return {
     ...audit,
-    tools: audit.tools.map((t) => ({ ...t, findingsDe: [], recommendedSchemaPatch: null })),
+    // `findingsDe: []` allein liesse sich als «keine Befunde» lesen: Das Feld sagt, dass sie nicht berechnet wurden.
+    findingsAvailable: false,
+    findingsNoteDe: FINDINGS_NOTE_DE,
+    tools: audit.tools.map((t) => ({ ...t, findingsDe: [], recommendedSchemaPatch: null, findingsAvailable: false, findingsNoteDe: FINDINGS_NOTE_DE })),
   };
 }

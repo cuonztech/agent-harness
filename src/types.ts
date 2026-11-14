@@ -33,12 +33,18 @@ export interface ToolSchemaAuditEntry {
   canVerifyWithoutId: boolean;
   riskLevel: SchemaRiskLevel;
   findingsDe: string[];
+  // Ab 0.12.0: false, wenn der Lauf ohne Lizenz aufgezeichnet wurde. Dann ist `findingsDe: []` «nicht berechnet», nicht «keine Befunde»
+  // (und `recommendedSchemaPatch: null` «nicht berechnet»). Fehlt das Feld, gilt es als vorhanden (Berichte vor 0.12.0 und mit Lizenz).
+  findingsAvailable?: boolean;
+  findingsNoteDe?: string;
   // Seit 0.11.1: Zweifel an der Einordnung (Beschreibung widerspricht dem Namen, Annotation widerspricht dem Namen).
   // Das Tool erscheint dann auch im Detail des Gutachtens, wenn es als lesend gilt.
   classificationNoteDe?: string;
   // Kopierfertige Schema-Definition für das Feld `idempotency_key`
   // (unter `inputSchema.properties.idempotency_key` einzutragen).
   recommendedSchemaPatch: Record<string, unknown> | null;
+  // Ab 0.12.0: Feldname des Vorschlags im Stil der Parameter des Tools (idempotency_key, idempotencyKey oder idempotency-key). Fehlt: idempotency_key.
+  recommendedFieldName?: string;
 }
 
 export interface SchemaAuditReport {
@@ -51,6 +57,9 @@ export interface SchemaAuditReport {
   highRiskToolsCount: number;
   tools: ToolSchemaAuditEntry[];
   summaryDe: string;
+  // Ab 0.12.0, wie bei den Tools: false ohne Lizenz (Befunde und Vorschläge nicht berechnet).
+  findingsAvailable?: boolean;
+  findingsNoteDe?: string;
 }
 
 // --- Call-by-Call-Forensik ---

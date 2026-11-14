@@ -7,8 +7,9 @@ import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/p
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { createHash } from "node:crypto";
-import { evaluateAgentClaim } from "../core/claim-check.js";
-import { canonicalJson, sha256Hex } from "../core/artifact-integrity.js";
+import { CLAIM_CHECK_VERSION, evaluateAgentClaim } from "../core/claim-check.js";
+import { scriptNameOf, toolListSha256 } from "../core/upstream-identity.js";
+import { sha256Hex } from "../core/artifact-integrity.js";
 import type { AuditReport } from "../core/report-generator.js";
 import { benchPromptPatch } from "../hardening/patch-generator.js";
 import { redactSecrets } from "../cli-args.js";
@@ -456,16 +457,6 @@ async function preflight(input: BenchRunInput, backend: ChatBackend | null, scru
 
 // ---------------------------------------------------------------- Messung
 
-function scriptNameOf(args: string[]): string | null {
-  const script = args.find((a) => !a.startsWith("-"));
-  return script === undefined ? null : basename(script);
-}
-
-function toolsHash(tools: ToolDef[]): string {
-  const sorted = [...tools].sort((a, b) => a.name.localeCompare(b.name)).map((t) => ({ name: t.name, description: t.description ?? null, inputSchema: t.inputSchema ?? null }));
-  return sha256Hex(canonicalJson(sorted));
-}
-
 async function archivePrevious(outDir: string): Promise<string | null> {
   const names = [BENCH_REPORT_NAME, "bench-report.md", "runs"];
   const present: string[] = [];
@@ -566,6 +557,7 @@ export async function runBench(input: BenchRunInput): Promise<BenchOutcome> {
     format: BENCH_FORMAT,
     formatVersion: BENCH_FORMAT_VERSION,
     harnessVersion: VERSION,
+    claimCheckVersion: CLAIM_CHECK_VERSION,
     status: aborted ? "abgebrochen" : "abgeschlossen",
     abortReason,
     generatedAt: new Date(finished).toISOString(),
@@ -595,9 +587,9 @@ export async function runBench(input: BenchRunInput): Promise<BenchOutcome> {
     patchLang: options.patchLang,
     prompts: options.scenarios.flatMap((scenario) => options.conditions.map((condition) => ({ scenario, condition, sha256: sha256Hex(promptOf(scenario, condition)) }))),
     patchTexts: options.scenarios.map((scenario) => ({ scenario, sha256: sha256Hex(patchTexts.get(scenario)!), text: patchTexts.get(scenario)! })),
-    upstream: { program: basename(options.upstream.command), script: scriptNameOf(options.upstream.args) },
+    upstream: { program: basename(options.upstream.command), script: scriptNameOf(options.upstream.command, options.upstream.args) },
     tools: pre.classification,
-    toolsSha256: toolsHash(pre.tools),
+    toolsSha256: toolListSha256(pre.tools),
     effectProbe: { used: options.probe !== null, tool: options.probe?.tool ?? null, countPath: options.probe?.countPath ?? null, effectTools: options.probe?.tools ?? [] },
     countingBasis: options.probe ? COUNTING_DE.records : COUNTING_DE.executions,
     limits: { runTimeoutSec: options.runTimeoutSec, stepTimeoutSec: options.stepTimeoutSec },

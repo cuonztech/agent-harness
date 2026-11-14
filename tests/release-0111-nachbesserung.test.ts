@@ -114,12 +114,14 @@ describe("W1: das Siegel deckt den ganzen sichtbaren Kopf, nicht den Fliesstext"
       "Harness-Version (Lauf)",
       "Modell / Agent",
       "Zählweise",
+      "Upstream (Programm und Skript)",
+      "Tool-Liste (SHA-256)",
       "Einordnung",
       "Lizenzstatus",
     ]);
   });
 
-  it("jede Kopfzeile im Text zu ändern ist ein MISMATCH (Markdown und HTML); vorher stand nur für 5 von 11 Zeilen ein Abgleich da", () => {
+  it("jede Kopfzeile im Text zu ändern ist ein MISMATCH (Markdown und HTML); vorher stand nur für 5 von 11 Zeilen ein Abgleich da (ab 0.12.0 sind es 13 Zeilen)", () => {
     const file = verifiedRun();
     const { md, html, rows } = meta(file);
     expect(verifyDossierContent(md, { report: file }).status).toBe("OK");

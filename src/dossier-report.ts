@@ -13,6 +13,7 @@ import {
   duplicateFindingDe,
   duplicateRecordsProven,
   effectProbeLinesDe,
+  SCENARIOS,
   recordedWithoutLicense,
   verdictNotesDe,
   verdictText,
@@ -46,6 +47,12 @@ export interface DossierOptions {
   // Kern der Mehrlauf-Messung (Bench-Bericht, Befehl `report --bench`). Das Kapitel erscheint nur in der vollen Fassung;
   // in der gekürzten Fassung steht nur ein Satz, dass es Pro ist.
   bench?: DossierBenchCore;
+  // Der Lizenzcode (Kennung `sub`) steht nicht im Dossier: «PRO» statt «PRO (H-…)». Der Rest bleibt gesiegelt und prüfbar.
+  hideLicenseId?: boolean;
+  // Es wurde ein Bench-Bericht angegeben, auch wenn das Kapitel in der gekürzten Fassung entfällt (nur für den Hinweis dort).
+  benchRequested?: boolean;
+  // Nur für `verify --rerender`: Der Lizenzstatus wird aus dem Dossier gelesen, das geprüft wird, nicht aus der Lizenz des Prüfers.
+  rerender?: { licenseStatus: string };
 }
 
 export type Tone = "pass" | "fail" | "warn" | "muted";
@@ -252,7 +259,7 @@ function businessMatrix(file: ReportFile): MatrixRow[] {
   const audit = file.schema_audit;
   if (!audit) rows.push(notTested(d4, "Die Datei enthält kein Schnittstellen-Gutachten."));
   else if (audit.highRiskToolsCount > 0) {
-    rows.push({ dimension: d4, label: "FAIL (Risiko HOCH)", tone: "fail", basis: `${audit.highRiskToolsCount} Schreib-Tool(s) mit hohem Risiko für Doppelausführung.` });
+    rows.push({ dimension: d4, label: "FAIL (Risiko HOCH)", tone: "fail", basis: `${audit.highRiskToolsCount} Tool(s) mit hohem Risiko für Doppelausführung (Schreib-Tools ohne wirksamen Schlüssel und ohne Nachsehen, oder ein Widerspruch zwischen Name und Annotation).` });
   } else if (audit.writeToolsCount === 0) {
     rows.push(notTested(d4, "Der Server stellt keine als schreibend erkannten Tools bereit."));
   } else if (
@@ -341,8 +348,8 @@ function schemaSection(file: ReportFile): Section {
     else if (noFindingsBecauseUnlicensed) body.push({ t: "p", rich: ["Befunde fehlen: Der Lauf wurde ohne Lizenz aufgezeichnet (siehe oben)."] });
     else body.push({ t: "p", rich: ["Keine Befunde."] });
     if (tool.recommendedSchemaPatch) {
-      body.push({ t: "p", rich: ["Allgemeiner Vorschlag (Muster, an das Tool und den Server anzupassen; der Server muss das Feld auch auswerten), unter ", { code: "properties" }, " des Tools eintragen:"] });
-      body.push({ t: "pre", text: `"idempotency_key": ${JSON.stringify(tool.recommendedSchemaPatch, null, 2)}` });
+      body.push({ t: "p", rich: [`Allgemeiner Vorschlag (Muster, an das Tool und den Server anzupassen; Feldname und Beschreibung folgen den Parametern von ${clean(tool.name)}; der Server muss das Feld auch auswerten), unter `, { code: "properties" }, " des Tools eintragen:"] });
+      body.push({ t: "pre", text: `"${tool.recommendedFieldName ?? "idempotency_key"}": ${JSON.stringify(tool.recommendedSchemaPatch, null, 2)}` });
     }
     blocks.push({
       t: "finding",
@@ -580,8 +587,21 @@ function integritySection(file: ReportFile, options: DossierOptions, check: Inte
             [`Gesiegelt ist ausserdem das ganze Kapitel «Mehrlauf-Messung» (Abschnitt ${BENCH_CHAPTER_NO}): Methode, alle Zahlen, Vergleich, Grenzen und Reproduktionsbefehl. verify baut es aus dem Siegel nach und prüft, dass es unverändert und genau einmal im Text steht; jede geänderte Zahl ist ein MISMATCH. Mit verify <dossier> --bench bench-report.json wird zusätzlich geprüft, dass die Zahlen zum (selbst gesiegelten) Bench-Bericht passen.`],
           ]
         : []),
-      [`Nicht gesiegelt ist der Fliesstext der Abschnitte ${benchOn ? `1 bis 5 und ${BENCH_CHAPTER_NO + 1}` : "1 bis 6"} (Management-Matrix, Schema-Gutachten, Zeitleiste und Argumente, Abgleich mit der Antwort des Agenten, Prompt-Baustein, dieser Abschnitt). Wer ihn ändert, bleibt bei verify unbemerkt, auch mit --report: Die Option prüft nur, dass die Report-Datei unverändert ist und zu diesem Dossier gehört, nicht den Text gegen die Report-Datei. Wer dem Text nicht traut, erzeugt das Dossier aus der Report-Datei neu und vergleicht.`],
+      [`Nicht gesiegelt ist der Fliesstext der Abschnitte ${benchOn ? `1 bis 5 und ${BENCH_CHAPTER_NO + 1}` : "1 bis 6"} (Management-Matrix, Schema-Gutachten, Zeitleiste und Argumente, Abgleich mit der Antwort des Agenten, Prompt-Baustein, dieser Abschnitt). Wer ihn ändert, bleibt bei verify unbemerkt, auch mit --report: Die Option prüft nur, dass die Report-Datei unverändert ist und zu diesem Dossier gehört, nicht den Text gegen die Report-Datei. Wer dem Text nicht traut, prüft ihn mit verify dossier.md --report harness-report.json --rerender (Dateinamen anpassen): Der Befehl erzeugt das Dossier aus der Report-Datei neu und vergleicht es Abschnitt für Abschnitt (nur bei Dossiers ab Harness 0.12.0). Das zeigt, dass der Fliesstext aus dieser Report-Datei folgt; es zeigt nicht, dass die Report-Datei echt ist, und kein Dritter bestätigt es: Wer Report-Datei und Dossier zusammen ändert, kann fälschen.`],
       [benchOn ? "Zur Kopfzeile «Modell / Agent»: Der Harness erfasst das Modell und den Agenten des aufgezeichneten Einzellaufs nicht; dafür steht fest «nicht erfasst». Das Modell der Mehrlauf-Messung stammt aus dem Bench-Bericht. Die Zeile ist gesiegelt; ein anderer Eintrag fällt bei verify auf. Dieses Dossier belegt nicht, mit welchem Modell der Einzellauf entstand." : "Zur Kopfzeile «Modell / Agent»: Der Harness erfasst das Modell und den Agenten nicht. Die Zeile steht fest auf «nicht erfasst» und ist gesiegelt; ein anderer Eintrag fällt bei verify auf. Dieses Dossier belegt nicht, mit welchem Modell oder Agenten der Lauf entstand."],
+    ],
+  });
+  // Methode: was das gemessene Szenario bedeutet (im Kopf steht nur «F1»).
+  const scenarioId = file.report?.scenarioId;
+  blocks.push({
+    t: "note",
+    title: "Methode: das gemessene Szenario",
+    items: [
+      scenarioId
+        ? [{ strong: `Dieser Lauf: ${clean(scenarioId)}.` }, ` ${SCENARIOS[scenarioId] ?? "Ein benutzerdefiniertes Szenario ohne Beschreibung in diesem Dossier."}`]
+        : [{ strong: "Dieser Lauf: kein Szenario." }, " Der Harness reicht die Aufrufe durch und zählt; es wird keine Störung eingespielt."],
+      ["Der Harness sitzt als Proxy zwischen Agent und MCP-Server und spielt die Störung ein; was der Upstream wirklich ausführt, zählt er selbst (Ausführungen; mit --effect-probe zählt er Datensätze). Die fünf Szenarien:"],
+      ...Object.entries(SCENARIOS).map(([id, text]): Rich => [{ code: id }, `: ${text}`]),
     ],
   });
   // Dieselbe Quelle wie Sektion 4: eine bereits in der Datei stehende Prüfung oder die übergebene Antwort.
@@ -657,8 +677,14 @@ function limitedSection(file: ReportFile, seal: DossierSeal, check: IntegrityChe
   };
 }
 
+function proValid(options: DossierOptions): boolean {
+  return options.rerender ? /^PRO(?:\s|$)/.test(options.rerender.licenseStatus) : options.licenseVerdict?.valid === true;
+}
+
 function licenseStatusText(options: DossierOptions, limited: boolean): string {
+  if (options.rerender) return options.rerender.licenseStatus;
   if (options.licenseVerdict?.valid) {
+    if (options.hideLicenseId) return "PRO";
     return `PRO (${options.licenseVerdict.claims?.sub ?? options.licenseVerdict.claims?.customer ?? "Aktiviert"})`;
   }
   if (limited) {
@@ -671,6 +697,15 @@ function licenseStatusText(options: DossierOptions, limited: boolean): string {
 // Der Hinweis zur Basislinie steht wörtlich so im Klartext-Bericht (plain-report.ts).
 const SCHEMA_VS_RUN_DE =
   "Das Urteil gilt für den aufgezeichneten Lauf; das Schnittstellen-Schema-Gutachten ist eine eigene Aussage über die Beschreibung der Tools und kann trotz bestandenem Lauf ein hohes Risiko ausweisen. Beides sind verschiedene Dinge.";
+
+const NOT_RECORDED_UPSTREAM_DE = "nicht erfasst (Report aus Harness < 0.12.0)";
+
+function upstreamText(file: ReportFile): string {
+  const u = file.upstream;
+  if (!u || typeof u.program !== "string") return NOT_RECORDED_UPSTREAM_DE;
+  const tools = typeof u.toolCount === "number" ? `; ${u.toolCount} ${u.toolCount === 1 ? "Tool" : "Tools"}` : "";
+  return clean(`${u.program}${u.script ? ` ${u.script}` : ""}${tools}`);
+}
 
 function build(file: ReportFile, options: DossierOptions = {}): Dossier {
   const { headline, explanation } = verdictText(file);
@@ -688,7 +723,7 @@ function build(file: ReportFile, options: DossierOptions = {}): Dossier {
   const date = formatDate(file.generatedAt ?? file.report?.generatedAt);
   const version = file.harnessVersion ? `Harness ${clean(file.harnessVersion)}` : "Harness-Version nicht angegeben";
   const notes = [...verdictNotesDe(file)];
-  if (recordedWithoutLicense(file) && options.licenseVerdict?.valid) notes.push(RECORDED_WITHOUT_LICENSE_DE);
+  if (recordedWithoutLicense(file) && proValid(options)) notes.push(RECORDED_WITHOUT_LICENSE_DE);
   // Ohne eingespielte Störung ist ein PASS nur eine Basislinie (wie im Klartext-Bericht): direkt beim Urteil, nicht erst in der Grenzen-Liste.
   if (file.report && file.score?.baseline) {
     notes.push(BASELINE_NOTE_DE);
@@ -708,6 +743,8 @@ function build(file: ReportFile, options: DossierOptions = {}): Dossier {
     ["Harness-Version (Lauf)", file.harnessVersion ? clean(file.harnessVersion) : "nicht angegeben"],
     ["Modell / Agent", bench ? `Einzellauf: nicht erfasst; Mehrlauf-Messung: ${benchAgentShort(bench.agent)}` : "nicht erfasst"],
     ["Zählweise", clean(basis.textDe)],
+    ["Upstream (Programm und Skript)", upstreamText(file)],
+    ["Tool-Liste (SHA-256)", file.toolsSha256 ? clean(file.toolsSha256) : NOT_RECORDED_UPSTREAM_DE],
     ["Einordnung", "Selbsttest: keine Produktionsfreigabe, kein Zertifikat"],
     ["Lizenzstatus", licenseStatus],
   ];
@@ -737,11 +774,16 @@ function build(file: ReportFile, options: DossierOptions = {}): Dossier {
       callChainHeadSha256: file.integrity?.callChainHeadSha256 ?? null,
       callChainLength: typeof file.integrity?.callChainLength === "number" ? file.integrity.callChainLength : null,
     },
+    // Was `verify --rerender` braucht, um das Dossier aus der Report-Datei neu aufzubauen (ab 0.12.0; fehlt es: nicht neu aufbaubar).
+    render: {
+      agentResponse: typeof options.agentResponse === "string" && options.agentResponse.trim() !== "" ? options.agentResponse : null,
+      benchRequested: options.bench !== undefined || options.benchRequested === true,
+    },
     ...(bench ? { bench } : {}),
   };
   const seal = sealDossierCore(core);
   const sections = limited
-    ? [limitedSection(file, seal, check, options.bench !== undefined)]
+    ? [limitedSection(file, seal, check, options.bench !== undefined || options.benchRequested === true)]
     : [
         summarySection(file),
         schemaSection(file),
@@ -945,8 +987,8 @@ const CSS = [
   ".hero h1{font-size:clamp(2rem,5vw,3.6rem);line-height:1.05;letter-spacing:-.035em;margin:0;max-width:760px}.hero p{max-width:70ch;color:#3f4a44;margin:18px 0 0}",
   ".verdict-notes{margin:18px 0 0;font-size:.9rem}.verdict-notes ul{margin:8px 0 0;padding-left:20px;color:#3f4a44}.verdict-notes .alert{background:var(--red-soft);color:#78352a;padding:10px 14px;font-weight:700;margin:0}",
   ".verdict{padding:18px;background:var(--sheet);border:1px solid var(--line)}.verdict .caption{display:block;color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.1em}.verdict strong{display:block;font-size:1.2rem;margin:7px 0}.verdict p{font-size:.88rem;margin:6px 0 0;color:var(--muted)}",
-  ".badge{display:inline-block;border-radius:3px;padding:3px 8px;font-size:.76rem;font-weight:700;line-height:1.45}.pass{background:var(--green-soft);color:var(--green)}.fail{background:var(--red-soft);color:#78352a}.warn{background:var(--amber-soft);color:#70460b}.muted{background:#e9eae4;color:var(--muted)}",
-  ".meta{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin:30px 0 0}.meta div{padding:14px 18px 15px 0}.meta div+div{padding-left:18px;border-left:1px solid var(--line)}",
+  ".badge{display:inline-block;border-radius:3px;padding:3px 8px;font-size:.76rem;font-weight:700;line-height:1.45;overflow-wrap:normal;word-break:keep-all;hyphens:none}.pass{background:var(--green-soft);color:var(--green)}.fail{background:var(--red-soft);color:#78352a}.warn{background:var(--amber-soft);color:#70460b}.muted{background:#e9eae4;color:var(--muted)}",
+  ".meta{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:0 28px;border-top:1px solid var(--line);margin:30px 0 0}.meta div{padding:14px 0 15px;border-bottom:1px solid var(--line)}",
   "dt{font-size:.75rem;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}dd{margin:4px 0 0;font-weight:600;overflow-wrap:anywhere}",
   ".section{padding:34px 0;border-bottom:1px solid var(--line)}h2{font-size:1.7rem;letter-spacing:-.02em;line-height:1.2;margin:0 0 14px}h3{font-size:1rem;margin:20px 0 8px}.section-intro{max-width:72ch;color:#46534c;margin:0 0 18px}",
   ".table-scroll{overflow-x:auto;border-top:2px solid var(--ink);border-bottom:1px solid var(--line);padding:6px 10px;margin:12px 0}table{border-collapse:collapse;width:100%;min-width:620px;font-variant-numeric:tabular-nums}",
@@ -957,7 +999,7 @@ const CSS = [
   "mark{background:#f6d98a;color:#3b2a06;padding:.05rem .25rem;font-weight:700}blockquote{margin:12px 0;padding:10px 16px;border-left:4px solid var(--green);background:var(--sheet);white-space:pre-wrap;overflow-wrap:anywhere}",
   ".limits{padding:16px 20px;background:var(--amber-soft);margin-top:18px;color:#533b17}.limits h3{margin-top:0}.limits ul{margin:0;padding-left:20px}",
   ".foot{display:flex;justify-content:space-between;align-items:center;gap:20px;padding-top:20px;color:var(--muted);font-size:.78rem}.print{border:1px solid var(--line);background:transparent;color:var(--ink);padding:8px 12px;font:600 .8rem var(--sans);cursor:pointer}.print:hover{background:var(--sheet)}",
-  "@media(max-width:760px){.wrap{padding:20px 22px 54px}.hero{grid-template-columns:1fr;gap:24px}.meta{grid-template-columns:1fr 1fr}.meta div,.meta div+div{padding:11px 12px;border:0;border-bottom:1px solid var(--line)}}",
+  "@media(max-width:760px){.wrap{padding:20px 22px 54px}.hero{grid-template-columns:1fr;gap:24px}.meta{grid-template-columns:1fr 1fr;gap:0 16px}.meta div{padding:11px 0}}",
   "@media print{body{background:#fff}.wrap{max-width:none;padding:0 10mm}.section{break-inside:avoid-page}.finding,tr{break-inside:avoid}.print{display:none}a{color:inherit;text-decoration:none}.table-scroll{overflow:visible}table{min-width:0}}",
 ].join("\n");
 

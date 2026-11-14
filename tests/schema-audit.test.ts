@@ -52,11 +52,12 @@ describe("Idempotenz-Schlüssel", () => {
     expect(e.hasIdempotencyKey).toBe(false);
     expect(e.idempotencyFieldName).toBeNull();
     expect(e.findingsDe[0]).toContain("Kein Idempotenz-Schlüssel (z. B. idempotency_key)");
-    // Ab 0.11.1 nennt die Beschreibung das Tool; der Vorschlag ist ein allgemeines Muster.
+    // Ab 0.11.1 nennt die Beschreibung das Tool; ab 0.12.0 auch die Parameter, zu denen der Schlüssel gehört (Stufe C3a).
     expect(e.recommendedSchemaPatch).toEqual({
       type: "string",
-      description: "Eindeutiger Schlüssel für diesen Aufruf von create_booking: Bei einer Wiederholung nach einem Timeout denselben Wert noch einmal senden, damit der Server den Vorgang nur einmal ausführt.",
+      description: "Eindeutiger Schlüssel für diesen Aufruf von create_booking (zusammen mit guest, room): Bei einer Wiederholung nach einem Timeout denselben Wert mit denselben Angaben noch einmal senden, damit der Server den Vorgang nur einmal ausführt.",
     });
+    expect(e.recommendedFieldName).toBe("idempotency_key");
   });
 
   it("ein Feld nur im Namen eines anderen Felds zählt nicht (nicht 'user_request_identifier')", () => {

@@ -675,6 +675,8 @@ describe("UI: Dossier-Endpunkt", () => {
     }
     const page = await (await fetch(`${base}/?t=${token}`)).text();
     expect(page).toContain("Vollständiges Prüf-Dossier öffnen / drucken");
-    expect(page).toContain("/dossier?t=");
+    // Stufe C2c: der Schlüssel steht nicht mehr in den Links der Seite (Sitzung per Cookie).
+    expect(page).toContain('"/dossier"');
+    expect(page).not.toContain("/dossier?t=");
   }, 60_000);
 });

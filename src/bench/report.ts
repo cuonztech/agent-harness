@@ -109,6 +109,8 @@ export interface BenchDocument {
   format: typeof BENCH_FORMAT;
   formatVersion: number;
   harnessVersion: string;
+  /** Version der Regeln der Ehrlichkeitsbewertung (CLAIM_CHECK_VERSION); fehlt in Berichten bis 0.12.0-Vorabfassungen (dann Version 1 oder älter). */
+  claimCheckVersion?: number;
   status: "abgeschlossen" | "abgebrochen";
   abortReason: string | null;
   generatedAt: string;
@@ -393,6 +395,7 @@ export function renderBenchMarkdown(doc: BenchDocument): string {
   for (const p of doc.prompts) lines.push(`- System-Prompt ${p.scenario} ${p.condition}: SHA-256 ${p.sha256}`);
   lines.push(`- Zeitlimits: ${doc.limits.runTimeoutSec} s je Lauf, ${doc.limits.stepTimeoutSec} s je Schritt`);
   lines.push(`- Lizenz: ${doc.license.status}`);
+  lines.push(`- Version der Ehrlichkeitsbewertung: ${typeof doc.claimCheckVersion === "number" ? doc.claimCheckVersion : "nicht angegeben (ältere Version des Prüfers)"}`);
   lines.push("", "## Grenzen", "");
   for (const n of doc.notes) lines.push(`- ${n}`);
   lines.push("", "## Reproduktion", "", "```", doc.reproduction, "```", "");

@@ -358,11 +358,12 @@ describe("B1: Siegel und verify", () => {
 });
 
 describe("B1: Prüfung des Bench-Berichts vor dem Kapitel", () => {
-  it("validateBenchDocument verlangt die Felder des Kapitels und lehnt abgebrochene Messungen ab", () => {
+  it("validateBenchDocument verlangt die Felder des Kapitels; eine abgebrochene Messung ist gültig (Kapitel ohne Auswertung, Stufe C7)", () => {
     expect(validateBenchDocument(null)).toContain("kein JSON-Objekt");
-    const aborted = { ...JSON.parse(JSON.stringify(realBench)), status: "abgebrochen", abortReason: "weniger als die Hälfte gültig" } as Json;
-    expect(validateBenchDocument(aborted)).toContain("abgebrochen");
-    expect(validateBenchDocument(aborted)).toContain("weniger als die Hälfte gültig");
+    const aborted = { ...JSON.parse(JSON.stringify(realBench)), status: "abgebrochen", abortReason: "weniger als die Hälfte gültig", aggregates: [], comparison: [] } as Json;
+    expect(validateBenchDocument(aborted)).toBeNull();
+    expect(validateBenchDocument({ ...aborted, abortReason: 5 })).toContain("abortReason");
+    expect(validateBenchDocument({ ...aborted, status: "läuft" })).toContain("Status");
     for (const [field, mutate] of [
       ["aggregates", (d: Json) => { d.aggregates = []; }],
       ["aggregates", (d: Json) => { d.aggregates[0].duplicate = { k: 7, n: 5 }; }],
@@ -563,7 +564,7 @@ describe("B1: report --dossier --bench und verify --bench (Befehlszeile)", () =>
     expect(quiet.err).toContain("WARNUNG: --bench gehört zum Pro-Umfang");
   });
 
-  it("Fehler: --bench ohne --dossier, Datei fehlt, kein Bench-Bericht, abgebrochene Messung, kaputtes JSON (Exit 1, nichts geschrieben)", async () => {
+  it("Fehler: --bench ohne --dossier, Datei fehlt, kein Bench-Bericht, kaputtes JSON (Exit 1, nichts geschrieben; eine abgebrochene Messung ergibt ein Kapitel, siehe Stufe C7)", async () => {
     const out = join(dir, "never.md");
     const noDossier = await cli(["report", reportFile, "--bench", benchFile, "--out", out]);
     expect(noDossier.code).toBe(1);
@@ -576,12 +577,6 @@ describe("B1: report --dossier --bench und verify --bench (Befehlszeile)", () =>
     const notBench = await cli(["report", reportFile, "--dossier", "--bench", reportFile, "--out", out]);
     expect(notBench.code).toBe(1);
     expect(notBench.err).toContain("is not a bench report");
-
-    const abortedFile = join(dir, "bench-aborted.json");
-    await writeFile(abortedFile, JSON.stringify({ ...JSON.parse(JSON.stringify(realBench)), status: "abgebrochen", abortReason: "zu viele ungültige Läufe" }), "utf8");
-    const aborted = await cli(["report", reportFile, "--dossier", "--bench", abortedFile, "--out", out]);
-    expect(aborted.code).toBe(1);
-    expect(aborted.err).toContain("abgebrochen");
 
     const garbage = join(dir, "bench-garbage.json");
     await writeFile(garbage, "{ nicht json", "utf8");

@@ -44,6 +44,14 @@ export interface UiOptions {
   licenseKey?: string;
 }
 
+// Der gewünschte Port ist belegt: eine Meldung mit Lösung statt «Fatal: Error: listen EADDRINUSE …».
+export class UiPortInUseError extends Error {
+  constructor(readonly port: number) {
+    super(`Port ${port} ist belegt; starte mit --port <anderer> (oder ohne --port: dann wählt das Programm einen freien Port).`);
+    this.name = "UiPortInUseError";
+  }
+}
+
 export interface UiHandle {
   url: string;
   close(): Promise<void>;
@@ -62,6 +70,24 @@ function bundledTestsystem(): string | null {
 function quoteArg(arg: string): string {
   return /^[A-Za-z0-9_@%+=:,./\\-]+$/.test(arg) ? arg : `"${arg.replace(/"/g, '\\"')}"`;
 }
+
+// Ein Cookie-Wert aus dem Header «cookie» (nur der eigene Name; Werte sind hier hexadezimal).
+function cookieValue(header: string | undefined, name: string): string | undefined {
+  if (!header) return undefined;
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq !== -1 && part.slice(0, eq).trim() === name) return part.slice(eq + 1).trim();
+  }
+  return undefined;
+}
+
+// Wege, die eine Sitzung per Cookie dürfen (Seiten, die der Browser selbst öffnet): nur Lesen, nie eine Änderung.
+const COOKIE_PATHS = new Set(["/", "/dossier", "/api/report.html"]);
+
+// Optionale Felder der Oberfläche für die Wirkungs-Sonde und die Key-Felder: leer = nicht angegeben.
+const TOOL_NAME = /^[A-Za-z0-9_.:\-]{1,100}$/;
+const FIELD_NAME = /^[A-Za-z0-9_.\-]{1,100}$/;
+const COUNT_PATH = /^[A-Za-z0-9_.\[\]\-]{1,200}$/;
 
 function sameToken(a: string | undefined, b: string): boolean {
   if (!a || a.length !== b.length) return false;
@@ -151,6 +177,8 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
   const token = randomBytes(16).toString("hex");
   let port = 0;
   let session: UiSession | null = null;
+  // Cookies gelten je Rechner, nicht je Port: Der Name trägt den Port, damit zwei Oberflächen sich nicht überschreiben.
+  const cookieName = (): string => `harness_session_${port}`;
 
   const readSessionReport = async (): Promise<ReportFile | null> => {
     if (!session) return null;
@@ -212,12 +240,17 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
     const queryToken = url.searchParams.get("t") ?? undefined;
     const headerToken = req.headers["x-harness-token"];
     const given = typeof headerToken === "string" ? headerToken : queryToken;
-    if (!sameToken(given, token)) {
+    // Der Link aus dem Terminal trägt den Schlüssel einmal in der Adresse; die Seite setzt ihn danach als Sitzung (Cookie, nur für
+    // dieses Programm, HttpOnly und SameSite=Strict) und nimmt ihn aus der Adressleiste. Ein Cookie öffnet nur die Seiten, die der
+    // Browser selbst lädt (Seite, Dossier, Bericht), nie die Schnittstelle: Änderungen brauchen weiterhin den Schlüssel als Header.
+    const viaCookie = !sameToken(given, token) && req.method === "GET" && COOKIE_PATHS.has(url.pathname) && sameToken(cookieValue(req.headers.cookie, cookieName()), token);
+    if (!sameToken(given, token) && !viaCookie) {
       return sendJson(res, 403, { error: "Zugriff nur über den ausgegebenen Link möglich" });
     }
 
     if (req.method === "GET" && url.pathname === "/") {
-      return send(res, 200, PAGE_HTML.replace("__TOKEN__", token), "text/html; charset=utf-8");
+      const setCookie: Record<string, string> = sameToken(queryToken, token) ? { "set-cookie": `${cookieName()}=${token}; Path=/; HttpOnly; SameSite=Strict` } : {};
+      return send(res, 200, PAGE_HTML.replace("__TOKEN__", token), "text/html; charset=utf-8", setCookie);
     }
     if (req.method === "GET" && url.pathname === "/api/info") {
       return sendJson(res, 200, {
@@ -267,6 +300,25 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
       const args = absolutizeExisting(stringArray(body.args, "Argumente"));
       const writeTools = patternList(body.writeTools, "Schreib-Tools");
       const readTools = patternList(body.readTools, "Lese-Tools");
+      const keyFields = patternList(body.keyFields, "Key-Felder");
+      if (keyFields.some((f) => !FIELD_NAME.test(f))) throw new Error("Key-Felder: nur Feldnamen (Buchstaben, Ziffern, _ . -), mit Komma getrennt");
+      const effectProbe = optionalText(body.effectProbe, "Lese-Tool der Wirkungs-Sonde", 100);
+      const effectProbeArgs = optionalText(body.effectProbeArgs, "Argumente der Wirkungs-Sonde", 1000);
+      const effectCount = optionalText(body.effectCount, "Zählfeld", 200);
+      if (effectProbe !== undefined && !TOOL_NAME.test(effectProbe)) throw new Error("Lese-Tool der Wirkungs-Sonde: nur ein Tool-Name (Buchstaben, Ziffern, _ . : -)");
+      if (effectProbe === undefined && (effectProbeArgs !== undefined || effectCount !== undefined)) {
+        throw new Error("Argumente und Zählfeld der Wirkungs-Sonde gehören zu einem Lese-Tool: bitte das Lese-Tool angeben");
+      }
+      if (effectCount !== undefined && !COUNT_PATH.test(effectCount)) throw new Error("Zählfeld: nur ein Pfad wie bookings oder result.items");
+      if (effectProbeArgs !== undefined) {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(effectProbeArgs);
+        } catch {
+          throw new Error("Argumente der Wirkungs-Sonde: kein gültiges JSON");
+        }
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Argumente der Wirkungs-Sonde: ein JSON-Objekt wie {\"status\":\"open\"} erwartet");
+      }
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const baseDir = process.env.CUONZTECH_HARNESS_DIR ?? join(homedir(), "CuonzTech-Agent-Harness");
       const runDir = join(baseDir, stamp);
@@ -282,6 +334,10 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
         ...(args.includes(bundledTestsystem() ?? "\0") ? ["--upstream-env-var", `TESTSYSTEM_DATA=${join(runDir, "bookings.json")}`] : []),
         ...(writeTools.length > 0 ? ["--write-tools", writeTools.join(",")] : []),
         ...(readTools.length > 0 ? ["--read-tools", readTools.join(",")] : []),
+        ...(keyFields.length > 0 ? ["--key-fields", keyFields.join(",")] : []),
+        ...(effectProbe !== undefined ? ["--effect-probe", effectProbe] : []),
+        ...(effectProbe !== undefined && effectProbeArgs !== undefined ? ["--effect-probe-args", effectProbeArgs] : []),
+        ...(effectProbe !== undefined && effectCount !== undefined ? ["--effect-count", effectCount] : []),
         "--scenario", scenario,
         "--allow-writes",
         "--audit-tools", "off",
@@ -363,7 +419,13 @@ export async function startUi(options: UiOptions = {}): Promise<UiHandle> {
   }
 
   await new Promise<void>((ok, fail) => {
-    server.once("error", fail);
+    server.once("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        fail(new UiPortInUseError(options.port ?? 0));
+        return;
+      }
+      fail(err);
+    });
     server.listen(options.port ?? 0, "127.0.0.1", () => ok());
   });
   const address = server.address();
@@ -395,11 +457,15 @@ export async function runUiMode(argv: string[]): Promise<number> {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(
       "Nutzung: ui [--port <n>] [--no-open] [--license <key>]\n\n" +
-        "Startet die geführte Oberfläche im Browser (nur auf diesem Rechner, mit Zufalls-Schlüssel im Link).\n" +
+        "Startet die geführte Oberfläche im Browser (nur auf diesem Rechner, mit Zufalls-Schlüssel im Link; der Schlüssel steht\n" +
+        "nach dem ersten Aufruf nicht mehr in der Adressleiste).\n" +
         "Die Oberfläche gehört zum Pro-Umfang und braucht einen gültigen Lizenzschlüssel (oder AGENT_AUDIT_LICENSE).\n" +
-        "  --port <n>      feste Port-Nummer (Standard: ein freier Port)\n" +
+        "  --port <n>      feste Port-Nummer (Standard: ein freier Port). Ist sie belegt, endet der Befehl mit der Meldung\n" +
+        "                  «Port X ist belegt; starte mit --port <anderer>» (Exit 1).\n" +
         "  --no-open       den Browser nicht automatisch öffnen\n" +
-        "  --license <key> CuonzTech Agent Audit Pro Lizenzschlüssel (oder Umgebungsvariable AGENT_AUDIT_LICENSE)\n",
+        "  --license <key> CuonzTech Agent Audit Pro Lizenzschlüssel (oder Umgebungsvariable AGENT_AUDIT_LICENSE, auch CUONZTECH_LICENSE_KEY).\n" +
+        "                  Der Code gilt pro System laut AGB Teil D, ist technisch nicht an ein System gebunden und nicht widerrufbar;\n" +
+        "                  die Laufzeit wird mit der lokalen Uhr geprüft.\n",
     );
     return 0;
   }
@@ -440,7 +506,16 @@ export async function runUiMode(argv: string[]): Promise<number> {
     process.stderr.write(lockedNotice("ui", gate.verdict));
     return 1;
   }
-  const handle = await startUi({ port, open, licenseKey });
+  let handle: UiHandle;
+  try {
+    handle = await startUi({ port, open, licenseKey });
+  } catch (err) {
+    if (err instanceof UiPortInUseError) {
+      process.stderr.write(`Error: ${err.message}\n`);
+      return 1;
+    }
+    throw err;
+  }
   process.stdout.write(`Oberfläche: ${handle.url}\n`);
   process.stdout.write("Läuft nur auf diesem Rechner. Beenden mit Strg+C.\n");
   await new Promise<void>((ok) => {

@@ -219,6 +219,8 @@ export interface DossierCore {
     callChainHeadSha256: string | null;
     callChainLength: number | null;
   };
+  // Ab 0.12.0: was `verify --rerender` zum Neuaufbau braucht (die Antwort des Agenten im Wortlaut, ob ein Bench-Bericht angegeben war).
+  render?: { agentResponse: string | null; benchRequested: boolean };
   // Nur im Dossier mit Mehrlauf-Messung (report --bench, Pro): Methode und Zahlen des Kapitels. Fehlt das Feld, gibt es kein Kapitel.
   bench?: DossierBenchCore;
 }

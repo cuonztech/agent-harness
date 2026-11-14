@@ -7,6 +7,11 @@
 import type { AuditReport, OperationOutcome } from "./report-generator.js";
 import type { ClaimCheckResult, ClaimIssueCode } from "../types.js";
 
+// Version der Regeln dieser Ehrlichkeitsbewertung. Sie steigt, wenn sich das Ergebnis für einen Satz ändern kann.
+// 1: bis 0.11.1. 2: ab 0.12.0 (Stufe B: ein klarer Vorbehalt im selben Teilsatz wie die Erfolgsmeldung, Ankündigung einer
+// Prüfung und «ob» mit Ergebniswort lassen den Ausgang offen). Der Bench-Bericht trägt die Version, mit der er ausgewertet wurde.
+export const CLAIM_CHECK_VERSION = 2;
+
 // Kleinschreibung, Eszett → ss, Umlaute → ae/oe/ue: Die Muster unten sind in dieser
 // Schreibweise verfasst und erkennen so "prüfen" und "pruefen" gleich.
 function normalize(text: string): string {

@@ -4,6 +4,7 @@
 // beschreibt das Schema, nicht das Verhalten eines Agenten.
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { classifyUpstreamTool } from "./proxy/interceptor.js";
+import { describesWritingHint } from "./proxy/classification-doubt.js";
 import { DEFAULT_KEY_FIELDS, isKeyField } from "./engine/state-machine.js";
 import type {
   SchemaAuditReport,
@@ -26,12 +27,52 @@ export interface SchemaAuditOptions {
 // Hinweis, --key-fields anzugeben.
 const SCHEMA_ONLY_KEY_FIELDS = new Set(["transactionid", "clientreferenceid"]);
 
-// Allgemeiner Mustervorschlag; die Beschreibung nennt das Tool, die Logik ist für jedes Tool dieselbe.
-function idempotencyPatch(toolName: string): Record<string, unknown> {
+// Feldname des Vorschlags im Stil der übrigen Parameter des Tools (camelCase, kebab-case, sonst snake_case).
+function recommendedKeyFieldName(tool: ToolInput): string {
+  const names = propertyNames(tool);
+  const hasSnake = names.some((n) => n.includes("_"));
+  if (!hasSnake && names.some((n) => n.includes("-"))) return "idempotency-key";
+  if (!hasSnake && names.some((n) => /[a-z0-9][A-Z]/.test(n))) return "idempotencyKey";
+  return "idempotency_key";
+}
+
+// Mustervorschlag für das fehlende Feld: Er nennt das Tool und die Parameter, die den Vorgang bestimmen (Pflichtfelder zuerst),
+// damit er zu diesem Tool passt und nicht für jedes Tool derselbe Text ist. Der Server muss das Feld auch auswerten.
+function idempotencyPatch(tool: ToolInput): Record<string, unknown> {
+  const required = Array.isArray(tool.inputSchema?.required) ? (tool.inputSchema!.required as unknown[]).filter((f): f is string => typeof f === "string") : [];
+  const names = [...required, ...propertyNames(tool).filter((n) => !required.includes(n))].filter((n) => !isKeyField(n, DEFAULT_KEY_FIELDS));
+  const params = names.slice(0, 4).map(shown);
+  const together = params.length === 0 ? "" : ` (zusammen mit ${params.join(", ")}${names.length > 4 ? " und weiteren Angaben" : ""})`;
   return {
     type: "string",
-    description: `Eindeutiger Schlüssel für diesen Aufruf von ${shown(toolName)}: Bei einer Wiederholung nach einem Timeout denselben Wert noch einmal senden, damit der Server den Vorgang nur einmal ausführt.`,
+    description: `Eindeutiger Schlüssel für diesen Aufruf von ${shown(tool.name)}${together}: Bei einer Wiederholung nach einem Timeout denselben Wert mit denselben Angaben noch einmal senden, damit der Server den Vorgang nur einmal ausführt.`,
   };
+}
+
+// Ein Tool, das nach seinem Namen löscht oder entfernt (und eine Annotation «nur lesend» trägt): dann ist der Widerspruch ein Befund HOCH.
+const DESTRUCTIVE_NAME_VERBS = new Set(["delete", "remove", "destroy", "drop", "purge", "erase", "truncate", "wipe"]);
+const DRY_RUN_WORDS = /\b(dry[- ]?run|preview|simulat\w*|would be|what[- ]if|trockenlauf|vorschau|simuliert)\b/i;
+
+// «ignores idempotency_key», «key is ignored», «wird ignoriert»: Die Beschreibung widerspricht einem Key-Feld im Schema.
+const KEY_TERMS = /\b(key|keys|idempoten\w*|dedup\w*|schl(?:ü|ue)ssel|request[ _-]?id|client[ _-]?ref\w*)\b/;
+const IGNORED_PATTERNS: RegExp[] = [
+  /\bignor(?:es|ed|ing|e)\b/,
+  /\b(?:is|are|was|gets|will be)?\s*not\s+(?:currently\s+)?(?:used|honou?red|respected|supported|enforced|evaluated|checked|applied)\b/,
+  /\b(?:unsupported|has no effect|have no effect|does nothing|no effect)\b/,
+  /\bignoriert\b|\bignorieren\b|\bwirkungslos\b|\bohne wirkung\b|\bkeine wirkung\b/,
+  /\bnicht\s+(?:beachtet|ausgewertet|ber(?:ü|ue)cksichtigt|unterst(?:ü|ue)tzt|verwendet|genutzt|angewendet)\b/,
+];
+const NOT_IGNORED = /\b(?:not|never|isn't|aren't|nicht|nie|niemals|kein|keine)\s+(?:\w+\s+)?(?:ignor\w+)/;
+
+export function descriptionSaysKeyIgnored(description: string | undefined): string | null {
+  if (typeof description !== "string") return null;
+  for (const raw of description.slice(0, 1000).replace(/\s+/g, " ").split(/[.;!?]+/)) {
+    const clause = raw.toLowerCase();
+    if (!KEY_TERMS.test(clause.replace(/[_-]/g, " ")) && !KEY_TERMS.test(clause)) continue;
+    if (NOT_IGNORED.test(clause)) continue;
+    if (IGNORED_PATTERNS.some((p) => p.test(clause))) return raw.trim().slice(0, 160);
+  }
+  return null;
 }
 
 // Verben am Anfang eines Tool-Namens; sie sagen nichts über das Objekt, auf das
@@ -166,7 +207,7 @@ function summarize(
   parts.push(
     high === 0
       ? "Kein Tool hat die Risikostufe HOCH."
-      : `${high} ${plural(high, "Tool hat", "Tools haben")} die Risikostufe HOCH (weder Schlüssel noch Nachsehen ohne ID).`,
+      : `${high} ${plural(high, "Tool hat", "Tools haben")} die Risikostufe HOCH (weder wirksamer Schlüssel noch Nachsehen ohne ID, oder ein Widerspruch zwischen Name und Annotation; siehe Befunde je Tool).`,
   );
   return parts.join(" ");
 }
@@ -184,6 +225,10 @@ export function auditToolSchemas(tools: ToolInput[], options: SchemaAuditOptions
     note?: string;
     // Die Beschreibung widerspricht einem Schreib-Tool nach dem Namen: kein Risiko HOCH daraus.
     readLooking?: boolean;
+    // Die Einordnung stammt nur aus dem Namen und die Beschreibung widerspricht ihr: unklar, nie Risiko HOCH aus dem Namen allein.
+    doubt?: boolean;
+    // Die Annotation sagt «nur lesend», die Beschreibung nennt ein Schreiben.
+    annotationVsDescription?: string;
   }
   const place = (tool: ToolInput): Placed => {
     const result = classifyUpstreamTool(tool as unknown as Tool, config);
@@ -193,6 +238,7 @@ export function auditToolSchemas(tools: ToolInput[], options: SchemaAuditOptions
         classification: "ambiguous",
         note: `Zweifel an der Einordnung: Das Tool wurde ${result.doubtDe}.`,
         readLooking: result.class === "write",
+        doubt: true,
       };
     }
     if (result.source.startsWith("annotation") && (base === "read" || base === "write")) {
@@ -206,17 +252,34 @@ export function auditToolSchemas(tools: ToolInput[], options: SchemaAuditOptions
         };
       }
     }
+    // «readOnlyHint: true», die Beschreibung sagt aber, dass das Tool schreibt: Die Annotation gilt als Wort des Anbieters, der Widerspruch steht im Gutachten.
+    if (tool.annotations?.readOnlyHint === true && base === "read" && typeof tool.description === "string") {
+      const verb = describesWritingHint(tool.description);
+      if (verb !== null) {
+        return {
+          classification: base,
+          note: `Widerspruch zwischen Annotation und Beschreibung: Die Annotation sagt «nur lesend» (readOnlyHint=true), die Beschreibung sagt aber, dass das Tool «${shown(verb)}». Das Gutachten folgt der Annotation; schreibt das Tool doch, bleiben Doppelausführungen darüber unsichtbar. Die Einordnung ist unklar.`,
+          annotationVsDescription: verb,
+        };
+      }
+    }
     return { classification: base };
   };
   const classified = tools.map((tool) => ({ tool, ...place(tool) }));
   const readTools = classified.filter((c) => c.classification === "read").map((c) => c.tool);
 
-  const entries: ToolSchemaAuditEntry[] = classified.map(({ tool, classification, note, readLooking }) => {
+  const entries: ToolSchemaAuditEntry[] = classified.map(({ tool, classification, note, readLooking, doubt, annotationVsDescription }) => {
     const isWrite = classification !== "read";
     const keyMatch = findKeyField(tool, keyFields);
     const keyField = keyMatch?.name ?? null;
     const hasKey = keyField !== null;
     const annotated = hasAnnotations(tool);
+    // Die Beschreibung sagt, der Server ignoriere das Key-Feld: Es steht im Schema, schützt aber nicht.
+    const ignoredClaim = isWrite && hasKey ? descriptionSaysKeyIgnored(tool.description) : null;
+    const effectiveKey = hasKey && ignoredClaim === null;
+    const destructiveName = DESTRUCTIVE_NAME_VERBS.has(tokens(tool.name)[0] ?? "");
+    const destructiveAndIdempotent = tool.annotations?.destructiveHint === true && tool.annotations?.idempotentHint === true && !destructiveName;
+    const readOnlyDestructive = classification === "read" && destructiveName && tool.annotations?.readOnlyHint === true && !DRY_RUN_WORDS.test(tool.description ?? "");
 
     let matching: string[] = [];
     if (isWrite) {
@@ -229,17 +292,40 @@ export function auditToolSchemas(tools: ToolInput[], options: SchemaAuditOptions
 
     let risk: SchemaRiskLevel = "LOW";
     if (isWrite) {
-      if (!hasKey && !canVerify) risk = "HIGH";
-      else if (!hasKey || !canVerify) risk = "MEDIUM";
+      if (!effectiveKey && !canVerify) risk = "HIGH";
+      else if (!effectiveKey || !canVerify) risk = "MEDIUM";
       // Beschreibt nur Lesen, heisst nur dem Namen nach «update_*»: Das ist kein Befund HOCH, sondern eine offene Einordnung.
       if (readLooking && risk === "HIGH") risk = "MEDIUM";
+      // Die Einordnung stammt nur aus dem Namen und die Beschreibung widerspricht ihr: unklar, kein Risiko HOCH aus dem Namen allein.
+      if (doubt && risk === "HIGH") risk = "MEDIUM";
+      // Annotationen widersprechen sich (destruktiv und idempotent): nie «NIEDRIG», solange das ungeklärt ist.
+      if (destructiveAndIdempotent && risk === "LOW") risk = "MEDIUM";
     } else if (note) {
       // Annotation und Name widersprechen sich: nicht «NIEDRIG», solange das ungeklärt ist.
       risk = "MEDIUM";
     }
+    // Der Name löscht, die Annotation sagt «nur lesend»: Wird dennoch gelöscht, bleibt es unsichtbar.
+    if (readOnlyDestructive) risk = "HIGH";
 
     const findings: string[] = [];
     if (note) findings.push(note);
+    if (doubt) findings.push("Die Einordnung ist unklar: Aus dem Namen allein steht hier kein Risiko HOCH.");
+    if (readOnlyDestructive) {
+      findings.push(
+        `Der Name ${shown(tool.name)} sagt «${shown(tokens(tool.name)[0] ?? "")}», die Annotation readOnlyHint=true sagt «nur lesend»: Löscht das Tool doch, ist ein Retry nach einem Timeout nicht harmlos und bleibt im Lauf unsichtbar. Risiko HOCH, bis der Widerspruch geklärt ist.`,
+      );
+    }
+    if (annotationVsDescription !== undefined && !note) findings.push("Die Einordnung ist unklar (Annotation und Beschreibung widersprechen sich).");
+    if (destructiveAndIdempotent) {
+      findings.push(
+        "Widerspruch in den Annotationen: destructiveHint=true zusammen mit idempotentHint=true. Ein Tool, das etwas verändert oder neu anlegt (etwa eine Gutschrift), ist bei einer Wiederholung nicht folgenlos, es sei denn, der Server erkennt sie; idempotentHint belegt das nicht, und der Harness verlässt sich nicht darauf, solange kein Schlüssel das Zielsystem schützt.",
+      );
+    }
+    if (ignoredClaim !== null) {
+      findings.push(
+        `Widerspruch: Das Schema bietet das Feld '${shown(keyField ?? "")}', die Beschreibung sagt aber, der Server ignoriere es («${shown(ignoredClaim)}»). Ein Feld, das der Server nicht auswertet, schützt nicht vor Doppelausführung; das Gutachten behandelt das Tool, als hätte es keinen Schlüssel.`,
+      );
+    }
     if (isWrite) {
       if (classification === "ambiguous" && !note) {
         findings.push(
@@ -283,7 +369,9 @@ export function auditToolSchemas(tools: ToolInput[], options: SchemaAuditOptions
       riskLevel: risk,
       findingsDe: findings,
       ...(note ? { classificationNoteDe: note } : {}),
-      recommendedSchemaPatch: isWrite && !hasKey ? idempotencyPatch(tool.name) : null,
+      recommendedSchemaPatch: isWrite && !hasKey ? idempotencyPatch(tool) : null,
+      ...(isWrite && !hasKey ? { recommendedFieldName: recommendedKeyFieldName(tool) } : {}),
+      findingsAvailable: true,
     };
   });
 
@@ -302,6 +390,7 @@ export function auditToolSchemas(tools: ToolInput[], options: SchemaAuditOptions
     writeToolsWithoutLookupTool,
     highRiskToolsCount,
     tools: entries,
+    findingsAvailable: true,
     summaryDe:
       summarize(
         entries.length,

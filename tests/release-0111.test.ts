@@ -423,7 +423,9 @@ describe("P1: die Prüfsumme deckt das Urteil, verify rechnet nach", () => {
     expect(help.code).toBe(0);
     expect(help.out).toContain("OK oder MISMATCH");
     const general = await cli(["--help"]);
-    expect(general.out).toContain("verify <dossier|report-file>");
+    // Stufe C8: die Hilfe nennt auch den Bench-Bericht.
+    expect(general.out).toContain("verify <dossier|report-file|bench-report.json>");
+    expect(help.out).toContain("bench-report.json");
   });
 
   it("die Report-Datei eines echten Proxy-Laufs trägt Format 2 und besteht die Prüfung", async () => {

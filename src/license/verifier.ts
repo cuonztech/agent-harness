@@ -122,4 +122,5 @@ export function resolveLicense(explicitKey?: string): LicenseVerdict {
 export const PURCHASE_HINT =
   "CuonzTech Agent Audit Pro (Prüf-Dossier, geführte Oberfläche, Schema-Gutachten, Härtungsvorschläge, Kampagnen-Runner)" + "\n" +
   "Lizenz: https://cuonztech.ch/agent-harness.html#audit" + "\n" +
-  "Aktivierung: --license <KEY> oder Umgebungsvariable AGENT_AUDIT_LICENSE=<KEY>";
+  "Aktivierung: --license <KEY> oder Umgebungsvariable AGENT_AUDIT_LICENSE=<KEY> (auch CUONZTECH_LICENSE_KEY)" + "\n" +
+  "Der Code gilt pro System laut AGB Teil D; technisch ist er nicht an ein System gebunden und nicht widerrufbar. Die Laufzeit wird mit der lokalen Uhr geprüft.";

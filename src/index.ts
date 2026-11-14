@@ -14,6 +14,7 @@ import { sealReportFile } from "./core/artifact-integrity.js";
 import { ProxyInterceptor } from "./proxy/interceptor.js";
 import { runDoctor } from "./doctor.js";
 import { runReportMode } from "./plain-report.js";
+import { upstreamIdentity } from "./core/upstream-identity.js";
 import { runVerifyMode } from "./verify.js";
 import { archivePreviousReportSync, isReplaceableReportFile, isReservedFileName, notReplaceableMessage, type ArchivedReportInfo } from "./report-file-guard.js";
 import { runUiMode } from "./ui/server.js";
@@ -38,7 +39,7 @@ function printHelp(): void {
       `Usage:\n` +
       `  cuonztech-agent-harness                   Start as an MCP server (stdio, demo/self-test sessions)\n` +
       `  cuonztech-agent-harness --version         Print the version (also: -v, version)\n` +
-      `  cuonztech-agent-harness verify <dossier|report-file> [--report <file>] [--bench <bench-report.json>] [--expect <sha256>]\n` +
+      `  cuonztech-agent-harness verify <dossier|report-file|bench-report.json> [--report <file>] [--bench <bench-report.json>] [--rerender] [--expect <sha256>]\n` +
       `                                             Recompute the checksum of a report file or dossier and\n` +
       `                                             print OK or MISMATCH with the reason (exit 0 / 1).\n` +
       `  cuonztech-agent-harness --help            Print this help (also: -h, help)\n` +
@@ -51,7 +52,7 @@ function printHelp(): void {
       `  cuonztech-agent-harness ui [--port <n>] [--no-open]    (Pro: needs a license)\n` +
       `                                             Guided web interface for people without a terminal\n` +
       `                                             (local only, 127.0.0.1): demo, setup check, result.\n` +
-      `  cuonztech-agent-harness report <report-file> [--format md|html] [--out <file>] [--dossier [--bench <bench-report.json>]]\n` +
+      `  cuonztech-agent-harness report <report-file> [--format md|html] [--out <file>] [--dossier [--bench <bench-report.json>] [--hide-license-id]]\n` +
       `                                             Turn the proxy's --report-file into a plain-language\n` +
       `                                             page (German): result, what the agent did, limits.\n` +
       `  cuonztech-agent-harness campaign [--runs <n>] [--format md|html] [--out <file>]    (Pro)\n` +
@@ -137,7 +138,11 @@ function printHelp(): void {
       `  Frei: ${FREE_SCOPE_DE}.\n` +
       `  Pro: report --dossier (ohne Lizenz nur Kopf, Score, Urteil), ui, campaign, bench, Schema-Befunde\n` +
       `  und Textbausteine (Härtungsvorschläge) im Report.\n` +
-      `  Angabe per --license <key> (proxy, report, ui, campaign, bench) oder Umgebungsvariable AGENT_AUDIT_LICENSE.\n` +
+      `  Angabe per --license <key> (proxy, report, ui, campaign, bench) oder Umgebungsvariable AGENT_AUDIT_LICENSE\n` +
+      `  (zusätzlich CUONZTECH_LICENSE_KEY; die Option gewinnt).\n` +
+      `  Der Code gilt «pro System» vertraglich (AGB Teil D); er ist technisch nicht an ein System gebunden und nicht\n` +
+      `  widerrufbar. Die Laufzeit wird mit der lokalen Uhr geprüft. Die Lizenz gilt auch beim Rendern eines Dossiers\n` +
+      `  (abgelaufen: gekürzte Fassung); verify braucht keine Lizenz.\n` +
       `  Lizenz erwerben: ${PURCHASE_URL}\n\n` +
       `The proxy is a long-running server: its exit code says nothing about the verdict.\n` +
       `Read the verdict from --report-file. Exit code 1 means the run itself broke\n` +
@@ -802,6 +807,7 @@ async function runProxyMode(argv: string[]): Promise<void> {
   }
 
   const upstreamTools = interceptor.getUpstreamTools();
+  const upstreamInfo = upstreamIdentity(upstreamCommand, upstreamArgs, upstreamTools);
   // Static view of the tool schemas, once: it does not change during the run.
   const schemaAudit = auditToolSchemas(upstreamTools, { writeToolPatterns, readToolPatterns, keyFields });
 
@@ -965,6 +971,8 @@ async function runProxyMode(argv: string[]): Promise<void> {
                 ),
               }
             : {}),
+          // Welcher Upstream (Dateiname von Programm und Skript, keine Pfade oder Argumente) und SHA-256 seiner Tool-Liste (ab 0.12.0).
+          ...upstreamInfo,
           schema_audit: reportedSchemaAudit,
           call_forensics: callForensics,
           toolClassification: classification,
