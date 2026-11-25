@@ -4,10 +4,18 @@ Copyright (c) 2026 CuonzTech · Carlo Cuonz. Alle Rechte vorbehalten. / All righ
 
 Proprietär, nicht Open Source. Der Quelltext ist einsehbar (GitHub und Paket); die Einsicht
 begründet keine Rechte ausser den hier eingeräumten. Gilt ab Version 0.8.0.
-Fassung vom 14. November 2026 (Revision 3). Revision 3 bereinigt gegenüber Revision 2 den Wortlaut
-und stellt klar (Ziffer 1.2 d) und f), 2.2, 2.5, 3.3 und die englische Zusammenfassung): Ziffer 1.2
-f) nennt ausdrücklich, was schon bisher ohne Lizenzcode frei war; Ziffer 2.2 verweist auf die AGB
-Teil D. Neue Pflichten oder Einschränkungen entstehen dadurch nicht.
+Fassung vom 25. November 2026 (Revision 4). Revision 4 klärt gegenüber Revision 3: Ziffer 2.3
+(was als ein System zählt: mehrere Umgebungen desselben Servers sind ein System, ein anderer Server
+ist ein weiteres System), Ziffer 2.6 (Berichte dürfen mit dem Abschnitt zu ihren Grenzen
+weitergegeben werden, der im Dossier und im Klartext-Bericht verschieden heisst), die neue Ziffer 8a
+(Datenschutz: keine Verbindung zu CuonzTech) und Ziffer 9 (Änderungen laufender Abonnements,
+Begriff «Textform»); dazu kommen ein Zeilenumbruch in Ziffer 2.5 und die englische Zusammenfassung.
+Ziffer 2.3 ist mehr als Wortlaut: Sie legt fest, was als ein System zählt. Eine Ausweitung der
+Pflichten ist damit nicht beabsichtigt.
+Revision 3 (14. November 2026) bereinigte gegenüber Revision 2 den Wortlaut und stellte klar
+(Ziffer 1.2 d) und f), 2.2, 2.5, 3.3 und die englische Zusammenfassung): Ziffer 1.2 f) nennt
+ausdrücklich, was schon bisher ohne Lizenzcode frei war; Ziffer 2.2 verweist auf die AGB Teil D.
+Neue Pflichten oder Einschränkungen entstanden dadurch nicht.
 Revision 2 änderte gegenüber Revision 1 nur Ziffer 1.3,
 Ziffer 2.1 d) und f), Ziffer 2.5, Ziffer 2.6 und die englische Zusammenfassung (Mehrlauf-Messung
 bench ausdrücklich im Pro-Umfang; Regel für beauftragte Dienstleister). Die Version 0.12.1 wurde mit
@@ -77,12 +85,16 @@ DEUTSCH
     der bei Kaufabschluss geltenden Fassung; bei Widerspruch über Nutzungsrechte und Haftung geht
     diese Lizenz vor (AGB Teil D, D.10 Abs. 13).
 2.3 System. Ein System ist ein MCP-Server (Upstream), den Sie mit der Software prüfen, samt der
-    dafür eingesetzten Konfiguration. Die Lizenz berechtigt zur Nutzung des Pro-Umfangs für
-    Läufe gegen ein System. Sie verpflichten sich, diese Zahl einzuhalten und weitere Systeme
-    rechtzeitig nachzulizenzieren. CuonzTech darf in Textform Auskunft verlangen; Sie antworten
-    innert 10 Tagen. Wird die Zahl überschritten, schulden Sie die Lizenzgebühr für jedes nicht
-    lizenzierte System ab Beginn der Überschreitung; weitere Ansprüche bleiben vorbehalten. Die
-    Software zählt Systeme technisch nicht; das ist keine Erlaubnis zur Überschreitung.
+    dafür eingesetzten Konfiguration. Mehrere Umgebungen desselben Servers mit demselben
+    Werkzeugsatz (Entwicklung, Test, Staging, CI) gelten als ein System, solange Sie sie für
+    dieselbe Anwendung und für eigene Zwecke prüfen. Ein anderer MCP-Server ist auch dann ein
+    weiteres System, wenn er vom selben Hersteller stammt oder ähnliche Werkzeuge anbietet.
+    Die Lizenz berechtigt zur Nutzung des Pro-Umfangs für Läufe gegen ein System. Sie
+    verpflichten sich, diese Zahl einzuhalten und weitere Systeme rechtzeitig nachzulizenzieren.
+    CuonzTech darf in Textform Auskunft verlangen; Sie antworten innert 10 Tagen. Wird die Zahl
+    überschritten, schulden Sie die Lizenzgebühr für jedes nicht lizenzierte System ab Beginn der
+    Überschreitung; weitere Ansprüche bleiben vorbehalten. Die Software zählt Systeme technisch
+    nicht; das ist keine Erlaubnis zur Überschreitung.
 2.4 Offline-Prüfung. Der Lizenzcode wird ohne Verbindung zu CuonzTech geprüft und kann
     technisch nicht zurückgerufen werden. Das ändert nichts daran, dass Ihre Berechtigung mit
     Ablauf, Kündigung, Erstattung, Rückbuchung oder Beendigung nach Ziffer 6 endet; danach
@@ -91,16 +103,18 @@ DEUTSCH
     Lizenz berechtigt Sie als Lizenznehmer für ein System nach Ziffer 2.3. Ihre Mitarbeitenden und
     die Dienstleister, die Sie für dieses System beauftragt haben (zum Beispiel eine Beratungsfirma,
     die in Ihrem Auftrag den Harness gegen Ihr System ausführt), dürfen die Software und den
-    Lizenzcode dafür einsetzen. Sie bleiben für die Einhaltung dieser Lizenz
-    verantwortlich; der Dienstleister darf den Lizenzcode nicht für andere Systeme oder Auftraggeber
-    verwenden und nach Ende des Auftrags nicht behalten. Wer die Software für Systeme Dritter als
-    eigene Dienstleistung einsetzt (zum Beispiel Prüfungen für mehrere Kunden unter einer eigenen
-    Lizenz), braucht dafür die Zustimmung von CuonzTech in Textform; jedes geprüfte System braucht
-    eine eigene Lizenz nach Ziffer 2.3. Ziffer 3.3 gilt nicht für die Weitergabe nach diesem Absatz.
+    Lizenzcode dafür einsetzen. Sie bleiben für die Einhaltung dieser Lizenz verantwortlich; der
+    Dienstleister darf den Lizenzcode nicht für andere Systeme oder Auftraggeber verwenden und nach
+    Ende des Auftrags nicht behalten. Wer die Software für Systeme Dritter als eigene Dienstleistung
+    einsetzt (zum Beispiel Prüfungen für mehrere Kunden unter einer eigenen Lizenz), braucht dafür
+    die Zustimmung von CuonzTech in Textform; jedes geprüfte System braucht eine eigene Lizenz nach
+    Ziffer 2.3. Ziffer 3.3 gilt nicht für die Weitergabe nach diesem Absatz.
 2.6 Ergebnisse. Berichte, Dossiers und Exporte, die Sie mit dem freien Umfang oder während einer
     gültigen Lizenz erzeugt haben, dürfen Sie dauerhaft behalten, intern verwenden und in
-    unveränderter Form (mit dem Abschnitt «Methodische Grenzen») an Ihre Kunden, Prüfer und
-    Versicherer weitergeben (ohne dass dadurch ein Einsatz nach Ziffer 2.5 Satz 5 erlaubt wird).
+    unveränderter Form, einschliesslich ihres Abschnitts zu den Grenzen des Berichts («Methodische
+    Grenzen» im Dossier, «Was dieser Test nicht aussagt» im Klartext-Bericht), an Ihre Kunden,
+    Prüfer und Versicherer weitergeben (ohne dass dadurch ein Einsatz nach Ziffer 2.5 Satz 5
+    erlaubt wird).
 2.7 Lizenzschlüssel für CuonzTech Privacy Chaos Gate berechtigen nicht zum Pro-Umfang.
 
 3. Was nicht erlaubt ist
@@ -199,11 +213,22 @@ jeweiligen Lizenzen; sie werden bei der Installation von deren Quellen bezogen. 
 Cuonz Tech, Carlo Cuonz, Heinzenbergstrasse 11, 7430 Thusis · support@cuonztech.ch ·
 https://cuonztech.ch
 
+8a. Datenschutz
+Die Software prüft den Lizenzcode auf Ihrem Rechner und baut dabei keine Verbindung zu CuonzTech
+auf. CuonzTech erhält keine Prüfergebnisse, Berichte oder Daten Ihrer Systeme. Mit der
+Mehrlauf-Messung (bench) ruft die Software das von Ihnen gewählte Sprachmodell oder den von
+Ihnen gewählten Agenten auf; diese Verbindung richten Sie selbst ein und verantworten sie.
+Bestell- und Lizenzdaten bearbeitet CuonzTech nach der Datenschutzerklärung
+(https://cuonztech.ch/datenschutz.html, Ziffer 3.5a).
+
 9. Änderungen
 CuonzTech darf diese Lizenz für künftige Versionen ändern. Für eine bereits bezogene Version
 gilt die mit ihr gelieferte Fassung. Änderungen der Bedingungen eines laufenden Abonnements
-werden 30 Tage nach Mitteilung per E-Mail wirksam; widersprechen Sie, können Sie auf das Ende der
-bezahlten Periode kündigen.
+werden 30 Tage nach Mitteilung per E-Mail wirksam, bei «Harness Pro · Monat» frühestens nach Ablauf
+der Mindestlaufzeit nach Ziffer 6.2; Änderungen, die zwingendes Recht oder Rechte Dritter
+verlangen, wirken sofort. Widersprechen Sie, können Sie auf das Ende der bezahlten Periode
+kündigen. Preise ändern sich nur nach AGB Teil D, D.10 (7). «Textform» bedeutet Brief, E-Mail oder
+eine gleichwertige Form, die den Nachweis durch Text ermöglicht.
 
 
 ================================================================================
@@ -226,15 +251,19 @@ dossiers, and the honesty check of an agent's answer in the plain-language repor
 same with and without a code. Without a valid code the output of the Pro scope is shortened or
 the command is not run.
 
-A valid license code is required for the Pro scope: the full audit dossier, the guided web
-interface (ui), the schema assessment with findings and suggestions, the prompt text blocks tailored to
-your run (the general wording in the README and in the output of benchmark stays free), the
-campaign runner and the multi-run measurement (bench). Licenses ("Harness Pro 90 days", "Harness Pro monthly") cover one system
-(an MCP server you test). The code is verified offline and cannot be revoked technically; your
-right ends on expiry, termination, refund or chargeback, and you stop using the code. Reports
-you created may be kept and passed on unchanged. The licensee's staff and contractors may use the
-code for the licensee's own system; use for third-party systems as your own service requires
-CuonzTech's written consent.
+A valid license code is required for the Pro scope: the full audit dossier, the guided web interface
+(ui), the schema assessment with findings and suggestions, the prompt text blocks tailored to your
+run (the general wording in the README and in the output of benchmark stays free), the campaign
+runner and the multi-run measurement (bench). Licenses ("Harness Pro 90 days", "Harness Pro
+monthly") cover one system (an MCP server you test; several environments of the same server for the
+same application count as one). The code is verified offline, the software makes no connection to
+CuonzTech (bench calls the model or agent you configure; order and license data: privacy notice,
+section 3.5a), and the code cannot be revoked technically; your right ends on expiry, termination,
+refund or chargeback, and you stop using the code. Reports you created may be kept and passed on
+unchanged (with their section on the limits of the report). The licensee's staff and contractors may
+use the code for the licensee's own system; use for third-party systems as your own service requires
+CuonzTech's written consent. Changes to a running subscription take effect 30 days after notice (for
+the monthly plan not before the minimum term ends); "text form" includes e-mail.
 
 The software executes your agent's write operations for real against the connected upstream.
 Use it only against a test system with synthetic data that is isolated from third parties and
