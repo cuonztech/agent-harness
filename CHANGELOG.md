@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.3 — 2026-11-25
+
+Nur Lizenz und Doku, der Code ist gegenüber 0.12.2 unverändert. Die `LICENSE` im Paket trägt jetzt die Fassung **Revision 4** (25. November 2026, nach Prüfung durch den Hausanwalt): Ziffer 2.3 legt fest, was als ein System zählt (mehrere Umgebungen desselben Servers sind ein System, ein anderer Server ist ein weiteres System), Ziffer 2.6 erlaubt die Weitergabe von Berichten mit dem Abschnitt zu ihren Grenzen, die neue Ziffer 8a hält fest, dass die Lizenzprüfung keine Verbindung zu CuonzTech aufbaut, und Ziffer 9 regelt Änderungen laufender Abonnements und definiert «Textform». Neue Pflichten sind damit nicht beabsichtigt. Das Paket 0.12.2 trägt weiter Revision 2; für jede Version gilt die ihr beiliegende Fassung.
+
 ## 0.12.2 — 2026-11-14
 
 Nur Lizenz und Doku, der Code ist gegenüber 0.12.1 unverändert. Die `LICENSE` im Paket trägt jetzt die Fassung **Revision 2** (14. November 2026, nach Prüfung durch den Hausanwalt): Ziffer 1.3 und 2.1 f) nennen die Mehrlauf-Messung `bench` ausdrücklich im Pro-Umfang (0.12.1 wurde mit dem Wortlaut von Revision 1 ausgeliefert, der `bench` nicht nannte; `bench` war auch dort nur mit Lizenzcode ausführbar), Ziffer 2.1 d) grenzt die auf den Lauf zugeschnittenen Textbausteine (Pro) vom allgemeinen Wortlaut in README und `benchmark` (frei) ab, Ziffer 2.5 regelt beauftragte Dienstleister für das eigene System und den Einsatz für Systeme Dritter als eigene Dienstleistung, Ziffer 2.6 und die englische Zusammenfassung sind angepasst.
